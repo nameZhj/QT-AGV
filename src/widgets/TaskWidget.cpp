@@ -1,0 +1,1432 @@
+#include "TaskWidget.h"
+#include "MapViewWidget.h"
+#include "core/ApiService.h"
+#include "core/AppConfig.h"
+#include "core/MqttService.h"
+#include "core/LoadingDialog.h"
+#include "core/Toast.h"
+#include "core/MapPgmUtil.h"
+#include <QFile>
+#include <QTextStream>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QGridLayout>
+#include <QSplitter>
+#include <QHeaderView>
+#include <QMessageBox>
+#include <QDateTime>
+#include <QJsonDocument>
+#include <QGraphicsPixmapItem>
+#include <QGraphicsEllipseItem>
+#include <QGraphicsPolygonItem>
+#include <QGraphicsTextItem>
+#include <QPainterPath>
+#include <QInputDialog>
+#include <QDialog>
+#include <QFormLayout>
+#include <QDialogButtonBox>
+#include <QComboBox>
+#include <QFrame>
+#include <QSvgRenderer>
+#include <QToolButton>
+#include <QPainter>
+#include <QWheelEvent>
+#include <QMouseEvent>
+#include <cmath>
+
+// ── 地图上方导航栏图标 ────────────────────────────────────────────────────────
+namespace {
+
+QPixmap drawNavToolIcon(const QString &name, const QColor &col, int sz = 20)
+{
+    QPixmap pm(sz, sz);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    double c = sz * 0.5;
+
+    if (name == "load") {
+        p.setPen(QPen(col, 1.4)); p.setBrush(Qt::NoBrush);
+        QPolygonF folder;
+        folder << QPointF(sz*0.10,sz*0.30) << QPointF(sz*0.38,sz*0.30) << QPointF(sz*0.46,sz*0.40)
+               << QPointF(sz*0.90,sz*0.40) << QPointF(sz*0.90,sz*0.78) << QPointF(sz*0.10,sz*0.78);
+        p.drawPolygon(folder);
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow; arrow << QPointF(sz*0.40,sz*0.50) << QPointF(sz*0.64,sz*0.50) << QPointF(c,sz*0.70);
+        p.drawPolygon(arrow);
+    } else if (name == "play") {
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF tri; tri << QPointF(sz*0.28,sz*0.18) << QPointF(sz*0.28,sz*0.82) << QPointF(sz*0.84,c);
+        p.drawPolygon(tri);
+    } else if (name == "pause") {
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        p.drawRect(QRectF(sz*0.26, sz*0.18, sz*0.18, sz*0.64));
+        p.drawRect(QRectF(sz*0.56, sz*0.18, sz*0.18, sz*0.64));
+    } else if (name == "resume") {
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap)); p.setBrush(Qt::NoBrush);
+        QPainterPath arc;
+        arc.arcMoveTo(QRectF(sz*0.12, sz*0.12, sz*0.76, sz*0.76), 30);
+        arc.arcTo(QRectF(sz*0.12, sz*0.12, sz*0.76, sz*0.76), 30, 280);
+        p.drawPath(arc);
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow; arrow << QPointF(sz*0.78,sz*0.06) << QPointF(sz*0.94,sz*0.20) << QPointF(sz*0.74,sz*0.28);
+        p.drawPolygon(arrow);
+    } else if (name == "stop") {
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        p.drawRect(QRectF(sz*0.24, sz*0.24, sz*0.52, sz*0.52));
+    } else if (name == "remove") {
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap));
+        p.drawEllipse(QRectF(sz*0.10, sz*0.10, sz*0.80, sz*0.80));
+        p.drawLine(QPointF(sz*0.33, c), QPointF(sz*0.67, c));
+    } else if (name == "grid") {
+        p.setPen(QPen(col, 1.4));
+        double m1 = sz*0.18, m2 = sz*0.82, t1 = sz*0.40, t2 = sz*0.60;
+        p.drawRect(QRectF(m1, m1, m2-m1, m2-m1));
+        p.drawLine(QPointF(t1,m1), QPointF(t1,m2)); p.drawLine(QPointF(t2,m1), QPointF(t2,m2));
+        p.drawLine(QPointF(m1,t1), QPointF(m2,t1)); p.drawLine(QPointF(m1,t2), QPointF(m2,t2));
+    }
+
+    p.end();
+    return pm;
+}
+
+QIcon makeNavToolIcon(const QString &name, const QColor &col)
+{
+    return QIcon(drawNavToolIcon(name, col));
+}
+
+} // namespace
+
+// 临时诊断日志：console 已禁用(WIN32 子系统)，直接写文件方便排查定位问题
+static void debugLog(const QString &msg)
+{
+    QFile f("C:/Temp/agv_map_debug.log");
+    if (f.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream ts(&f);
+        ts << QDateTime::currentDateTime().toString("hh:mm:ss.zzz") << "  [Task]  " << msg << "\n";
+    }
+}
+
+TaskWidget::TaskWidget(QWidget *parent)
+    : QWidget(parent)
+{
+    // Load SVG robot icon at 256×256, matching MapViewWidget's rendering
+    QSvgRenderer renderer(QString(":/ic-robot1.svg"));
+    if (renderer.isValid()) {
+        m_robotPixmap = QPixmap(256, 256);
+        m_robotPixmap.fill(Qt::transparent);
+        QPainter rp(&m_robotPixmap);
+        rp.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+        renderer.render(&rp);
+    }
+
+    setupUI();
+    getList();
+
+    connect(&MqttService::instance(), &MqttService::connected, this, [this]() {
+        initMqtt();
+    });
+    connect(&MqttService::instance(), &MqttService::disconnected, this, [this]() {
+        m_onlineCarIds.clear();
+    });
+
+    // 如果 MQTT 已连接，立即初始化
+    if (MqttService::instance().isConnected()) {
+        initMqtt();
+    }
+}
+
+void TaskWidget::setupUI()
+{
+    // ── style constants (与 MapViewWidget 一致的暗色主题) ───────────────────────
+    static const char *S_MAIN   = "background:#1a1d23;";
+    static const char *S_LEFT   = "background:#1a1d23;";
+    static const char *S_MAPVIEW= "background:#1a1d23;border:none;";
+    static const char *S_NAVBAR =
+        "background:#12151a;"
+        "border-bottom:1px solid #2d3340;";
+    static const char *S_BTN =
+        "QPushButton{"
+        "  background:#252a35; color:#c8d0d8; border:1px solid #3a3f4a;"
+        "  border-radius:4px; padding:5px 14px; font-size:12px; font-weight:600;"
+        "}"
+        "QPushButton:hover{background:#2d3340; border-color:#4a9eff;}"
+        "QPushButton:pressed{background:#1e4080;}"
+        "QPushButton:disabled{color:#445566; border-color:#2d3340;}";
+    static const char *S_BTN_PRIMARY =
+        "QPushButton{"
+        "  background:#1e6fd4; color:#fff; border:none;"
+        "  border-radius:4px; padding:5px 14px; font-size:12px; font-weight:600;"
+        "}"
+        "QPushButton:hover{background:#2980e8;}"
+        "QPushButton:pressed{background:#155db8;}"
+        "QPushButton:disabled{color:#7a98c0; background:#16335a;}";
+    static const char *S_BTN_START =
+        "QPushButton{background:#252a35;color:#4caf7a;border:1px solid #1a5c34;"
+        "border-radius:4px;padding:5px 14px;font-size:12px;font-weight:600;}"
+        "QPushButton:hover{background:#163322;border-color:#27ae60;}"
+        "QPushButton:disabled{color:#445566;border-color:#2d3340;}";
+    static const char *S_BTN_PAUSE =
+        "QPushButton{background:#252a35;color:#c8a430;border:1px solid #5c4a10;"
+        "border-radius:4px;padding:5px 14px;font-size:12px;font-weight:600;}"
+        "QPushButton:hover{background:#342a0c;border-color:#d4a010;}"
+        "QPushButton:disabled{color:#445566;border-color:#2d3340;}";
+    static const char *S_BTN_CONT =
+        "QPushButton{background:#252a35;color:#3ab8cc;border:1px solid #0e4a5a;"
+        "border-radius:4px;padding:5px 14px;font-size:12px;font-weight:600;}"
+        "QPushButton:hover{background:#0e2c38;border-color:#1198b0;}"
+        "QPushButton:disabled{color:#445566;border-color:#2d3340;}";
+    static const char *S_BTN_STOP =
+        "QPushButton{background:#252a35;color:#c85050;border:1px solid #5a1a1a;"
+        "border-radius:4px;padding:5px 14px;font-size:12px;font-weight:600;}"
+        "QPushButton:hover{background:#3a1414;border-color:#a02828;}"
+        "QPushButton:disabled{color:#445566;border-color:#2d3340;}";
+    // 地图上方导航栏：图标在上、文字在下 (Qt::ToolButtonTextUnderIcon)
+    static const char *S_TOOLBTN =
+        "QToolButton{background:#252a35;color:#c8d0d8;border:1px solid #3a3f4a;"
+        "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+        "QToolButton:hover{background:#2d3340;border-color:#4a9eff;}"
+        "QToolButton:pressed{background:#1e4080;}"
+        "QToolButton:disabled{color:#445566;border-color:#2d3340;}"
+        "QToolButton:checked{background:#1e4080;border-color:#4a9eff;}";
+    static const char *S_TOOLBTN_PRIMARY =
+        "QToolButton{background:#1e6fd4;color:#fff;border:none;"
+        "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+        "QToolButton:hover{background:#2980e8;}"
+        "QToolButton:pressed{background:#155db8;}"
+        "QToolButton:disabled{color:#7a98c0;background:#16335a;}";
+    static const char *S_TOOLBTN_START =
+        "QToolButton{background:#252a35;color:#4caf7a;border:1px solid #1a5c34;"
+        "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+        "QToolButton:hover{background:#163322;border-color:#27ae60;}"
+        "QToolButton:disabled{color:#445566;border-color:#2d3340;}";
+    static const char *S_TOOLBTN_PAUSE =
+        "QToolButton{background:#252a35;color:#c8a430;border:1px solid #5c4a10;"
+        "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+        "QToolButton:hover{background:#342a0c;border-color:#d4a010;}"
+        "QToolButton:disabled{color:#445566;border-color:#2d3340;}";
+    static const char *S_TOOLBTN_CONT =
+        "QToolButton{background:#252a35;color:#3ab8cc;border:1px solid #0e4a5a;"
+        "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+        "QToolButton:hover{background:#0e2c38;border-color:#1198b0;}"
+        "QToolButton:disabled{color:#445566;border-color:#2d3340;}";
+    static const char *S_TOOLBTN_STOP =
+        "QToolButton{background:#252a35;color:#c85050;border:1px solid #5a1a1a;"
+        "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+        "QToolButton:hover{background:#3a1414;border-color:#a02828;}"
+        "QToolButton:disabled{color:#445566;border-color:#2d3340;}";
+    static const char *S_RIGHT =
+        "background:#1a1d23;border-left:1px solid #2d3340;";
+    static const char *S_TOOLBAR =
+        "background:#12151a;border-bottom:1px solid #2d3340;padding:4px 8px;";
+    static const char *S_TABLE =
+        "QTableWidget{background:#1e2228;alternate-background-color:#22262e;"
+        "  gridline-color:#2d3340;border:1px solid #2d3340;border-radius:4px;"
+        "  color:#c8d0d8;outline:none;font-size:12px;}"
+        "QHeaderView::section{background:#22262e;color:#8898a8;border:none;"
+        "  border-bottom:1px solid #2d3340;border-right:1px solid #2d3340;"
+        "  padding:6px 10px;font-weight:600;font-size:11px;}"
+        "QTableWidget::item{padding:5px 8px;border:none;}"
+        "QTableWidget::item:selected{background:#1e4080;color:white;}"
+        "QTableWidget::item:hover{background:#252a35;}"
+        "QScrollBar:vertical{background:#1a1d23;width:8px;border:none;}"
+        "QScrollBar::handle:vertical{background:#3a3f4a;border-radius:4px;min-height:20px;}"
+        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}";
+
+    QHBoxLayout *mainLayout = new QHBoxLayout(this);
+    mainLayout->setContentsMargins(0,0,0,0);
+    mainLayout->setSpacing(0);
+    setStyleSheet(S_MAIN);
+
+    // ========== 左侧：地图 + 导航功能按钮 ==========
+    QWidget *leftPanel = new QWidget;
+    leftPanel->setStyleSheet(S_LEFT);
+    QVBoxLayout *leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0,0,0,0);
+    leftLayout->setSpacing(0);
+
+    // 地图上方横向导航功能按钮
+    QWidget *navWidget = new QWidget; navWidget->setStyleSheet(S_NAVBAR);
+    QHBoxLayout *navBar = new QHBoxLayout(navWidget);
+    navBar->setContentsMargins(8,6,8,6); navBar->setSpacing(6);
+
+    auto mkNavBtn = [&](const QString &iconName, const QString &text, const QColor &iconCol) {
+        auto *b = new QToolButton;
+        b->setText(text);
+        b->setIcon(makeNavToolIcon(iconName, iconCol));
+        b->setIconSize(QSize(18, 18));
+        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        b->setCursor(Qt::PointingHandCursor);
+        return b;
+    };
+
+    m_loadTaskBtn     = mkNavBtn("load",   "加载任务", QColor("#bcd4f0"));
+    m_startTaskBtn    = mkNavBtn("play",   "执行",     QColor("#4caf7a"));
+    m_pauseTaskBtn    = mkNavBtn("pause",  "暂停",     QColor("#c8a430"));
+    m_continueTaskBtn = mkNavBtn("resume", "继续",     QColor("#3ab8cc"));
+    m_stopTaskBtn     = mkNavBtn("stop",   "结束",     QColor("#c85050"));
+    m_removeTaskBtn   = mkNavBtn("remove", "移除",     QColor("#c8d0d8"));
+
+    m_loadTaskBtn->setStyleSheet(S_TOOLBTN_PRIMARY);
+    m_startTaskBtn->setStyleSheet(S_TOOLBTN_START);
+    m_pauseTaskBtn->setStyleSheet(S_TOOLBTN_PAUSE);
+    m_continueTaskBtn->setStyleSheet(S_TOOLBTN_CONT);
+    m_stopTaskBtn->setStyleSheet(S_TOOLBTN_STOP);
+    m_removeTaskBtn->setStyleSheet(S_TOOLBTN);
+
+    m_loadTaskBtn->setEnabled(false);
+    m_startTaskBtn->setEnabled(false);
+    m_pauseTaskBtn->setEnabled(false);
+    m_continueTaskBtn->setEnabled(false);
+    m_stopTaskBtn->setEnabled(false);
+    m_removeTaskBtn->setEnabled(false);
+
+    connect(m_loadTaskBtn,     &QToolButton::clicked, this, &TaskWidget::onLoadTask);
+    connect(m_startTaskBtn,    &QToolButton::clicked, this, &TaskWidget::onStartTask);
+    connect(m_pauseTaskBtn,    &QToolButton::clicked, this, &TaskWidget::onPauseTask);
+    connect(m_continueTaskBtn, &QToolButton::clicked, this, &TaskWidget::onContinueTask);
+    connect(m_stopTaskBtn,     &QToolButton::clicked, this, &TaskWidget::onStopTask);
+    connect(m_removeTaskBtn,   &QToolButton::clicked, this, &TaskWidget::onRemoveTask);
+
+    navBar->addWidget(m_loadTaskBtn);
+    navBar->addWidget(m_startTaskBtn);
+    navBar->addWidget(m_pauseTaskBtn);
+    navBar->addWidget(m_continueTaskBtn);
+    navBar->addWidget(m_stopTaskBtn);
+    navBar->addWidget(m_removeTaskBtn);
+
+    auto *sepGrid = new QFrame; sepGrid->setFrameShape(QFrame::VLine);
+    sepGrid->setStyleSheet("color:#2d3340;"); navBar->addWidget(sepGrid);
+
+    m_gridBtn = mkNavBtn("grid", "网格", QColor("#c8d0d8"));
+    m_gridBtn->setCheckable(true);
+    m_gridBtn->setStyleSheet(S_TOOLBTN);
+    connect(m_gridBtn, &QToolButton::toggled, this, [this](bool on) {
+        m_showGrid = on;
+        renderAxesAndGrid();
+    });
+    navBar->addWidget(m_gridBtn);
+
+    navBar->addStretch();
+
+    m_currentTaskLabel = new QLabel("无任务");
+    m_currentTaskLabel->setStyleSheet("color:#8898a8;font-size:11px;");
+    navBar->addWidget(m_currentTaskLabel);
+
+    leftLayout->addWidget(navWidget);
+
+    // 地图信息标签 (与 MapViewWidget 的状态栏一致)
+    m_mapInfoLabel = new QLabel("请选择任务以加载地图");
+    m_mapInfoLabel->setFixedHeight(24);
+    m_mapInfoLabel->setStyleSheet(
+        "background:#0d1117; color:#8898a8; font-size:11px; padding:0 10px;"
+        "border-bottom:1px solid #2d3340;");
+    leftLayout->addWidget(m_mapInfoLabel);
+
+    // 地图视图：corner + 顶部标尺 + [左侧标尺 + 画布]，与 MapViewWidget 一致
+    QWidget *mapArea = new QWidget;
+    QGridLayout *mapAreaLayout = new QGridLayout(mapArea);
+    mapAreaLayout->setContentsMargins(0,0,0,0);
+    mapAreaLayout->setSpacing(0);
+
+    QLabel *corner = new QLabel;
+    corner->setFixedSize(44, 22);
+    corner->setStyleSheet("background:#1a1d23;");
+    mapAreaLayout->addWidget(corner, 0, 0);
+
+    m_topRuler = new RulerWidget(RulerWidget::Horizontal);
+    mapAreaLayout->addWidget(m_topRuler, 0, 1);
+
+    m_leftRuler = new RulerWidget(RulerWidget::Vertical);
+    mapAreaLayout->addWidget(m_leftRuler, 1, 0);
+
+    m_scene = new QGraphicsScene(this);
+    m_mapView = new QGraphicsView(m_scene);
+    m_mapView->setStyleSheet(S_MAPVIEW);
+    m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
+    m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+    m_mapView->setMinimumWidth(400);
+    m_mapView->setFrameShape(QFrame::NoFrame);
+    m_mapView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_mapView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_mapView->viewport()->setMouseTracking(true);
+    m_mapView->viewport()->installEventFilter(this);
+    mapAreaLayout->addWidget(m_mapView, 1, 1);
+    mapAreaLayout->setRowStretch(1, 1);
+    mapAreaLayout->setColumnStretch(1, 1);
+
+    leftLayout->addWidget(mapArea, 1);
+
+    m_coordLabel = new QLabel("X: --  Y: --");
+    m_coordLabel->setStyleSheet(
+        "background:rgba(18,21,26,200); color:#7ab0f0; font-size:11px;"
+        "padding:3px 8px; border-radius:3px; font-family:Consolas,monospace;");
+    m_coordLabel->setMinimumWidth(240);
+    m_coordLabel->setParent(m_mapView);
+    m_coordLabel->move(8, 8);
+    m_coordLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_coordLabel->adjustSize();
+    m_coordLabel->raise();
+
+    mainLayout->addWidget(leftPanel, 7);
+
+    // ========== 右侧：任务列表 ==========
+    QWidget *rightPanel = new QWidget;
+    rightPanel->setStyleSheet(S_RIGHT);
+    QVBoxLayout *rightLayout = new QVBoxLayout(rightPanel);
+    rightLayout->setContentsMargins(0,0,0,0);
+    rightLayout->setSpacing(0);
+
+    // 右侧标题栏
+    QWidget *hdrWidget = new QWidget;
+    hdrWidget->setStyleSheet("background:#1e2d3d;border-bottom:1px solid rgba(255,255,255,0.08);");
+    QHBoxLayout *hdrLay = new QHBoxLayout(hdrWidget);
+    hdrLay->setContentsMargins(12,8,8,8);
+    QLabel *hdrLbl = new QLabel("任务列表");
+    hdrLbl->setStyleSheet("color:#6a9cbf;font-size:12px;font-weight:600;letter-spacing:1px;");
+    hdrLay->addWidget(hdrLbl);
+    hdrLay->addStretch();
+    rightLayout->addWidget(hdrWidget);
+
+    // 任务列表工具栏
+    QWidget *tbWidget = new QWidget; tbWidget->setStyleSheet(S_TOOLBAR);
+    QHBoxLayout *toolbar = new QHBoxLayout(tbWidget);
+    toolbar->setContentsMargins(0,0,0,0); toolbar->setSpacing(6);
+
+    m_addBtn     = new QPushButton("新增");
+    m_editBtn    = new QPushButton("修改");
+    m_deleteBtn  = new QPushButton("删除");
+    m_refreshBtn = new QPushButton("刷新");
+
+    m_editBtn->setEnabled(false);
+    m_deleteBtn->setEnabled(false);
+
+    m_addBtn->setStyleSheet(S_BTN_PRIMARY);
+    m_editBtn->setStyleSheet(S_BTN);
+    m_deleteBtn->setStyleSheet(S_BTN_STOP);
+    m_refreshBtn->setStyleSheet(S_BTN);
+
+    connect(m_addBtn,     &QPushButton::clicked, this, &TaskWidget::onAdd);
+    connect(m_editBtn,    &QPushButton::clicked, this, &TaskWidget::onEdit);
+    connect(m_deleteBtn,  &QPushButton::clicked, this, &TaskWidget::onDelete);
+    connect(m_refreshBtn, &QPushButton::clicked, this, &TaskWidget::onRefresh);
+
+    toolbar->addWidget(m_addBtn);
+    toolbar->addWidget(m_editBtn);
+    toolbar->addWidget(m_deleteBtn);
+    toolbar->addStretch();
+    toolbar->addWidget(m_refreshBtn);
+    rightLayout->addWidget(tbWidget);
+
+    // 任务表格
+    m_table = new QTableWidget;
+    m_table->setStyleSheet(S_TABLE);
+    m_table->setColumnCount(6);
+    m_table->setHorizontalHeaderLabels({"任务编号","执行设备","任务名称","状态","描述","创建时间"});
+    m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_table->horizontalHeader()->setStretchLastSection(true);
+    m_table->horizontalHeader()->setMinimumSectionSize(50);
+    m_table->verticalHeader()->setVisible(false);
+    m_table->setShowGrid(false);
+    m_table->setFrameShape(QFrame::NoFrame);
+    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_table->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_table->setAlternatingRowColors(false);
+    connect(m_table, &QTableWidget::itemSelectionChanged, this, &TaskWidget::onTableSelectionChanged);
+    connect(m_table, &QTableWidget::itemSelectionChanged, this, &TaskWidget::onTaskSelectionChanged);
+    rightLayout->addWidget(m_table);
+
+    mainLayout->addWidget(rightPanel, 3);
+}
+
+void TaskWidget::refreshList()
+{
+    getList();
+}
+
+void TaskWidget::getList()
+{
+    QJsonObject query;
+    query["pageNum"] = m_pageNum;
+    query["pageSize"] = m_pageSize;
+    query["carId"] = AppConfig::instance().agvId();
+
+    ApiService::instance().listTask(query, [this](int code, const QJsonObject &data) {
+        if (code != 200) return;
+        m_taskList = data.value("rows").toArray();
+        m_total = data.value("total").toInt();
+
+        m_table->setRowCount(m_taskList.size());
+        for (int i = 0; i < m_taskList.size(); ++i) {
+            QJsonObject task = m_taskList[i].toObject();
+
+            m_table->setItem(i, 0, new QTableWidgetItem(jsonIdStr(task.value("taskNumber"))));
+            m_table->setItem(i, 1, new QTableWidgetItem(task.value("carName").toString()));
+            m_table->setItem(i, 2, new QTableWidgetItem(task.value("taskName").toString()));
+
+            // 这里的 status 是任务实体本身的有效性状态(字典 sys_task_status：
+            // 0正常 1路网失效 2地图失效)，跟 m_currentTask/loadCurrentTask() 里
+            // 设备实时执行状态(0执行中/1已完成/2失败/3暂停/4未开始)是完全不同的
+            // 两个字段，之前误用了执行状态的文案，与任务列表页要展示的内容不符。
+            QString status = jsonIdStr(task.value("status"));
+            QString statusText;
+            QColor  statusColor;
+            if      (status == "0") { statusText = "正常";   statusColor = QColor("#4caf7a"); }
+            else if (status == "1") { statusText = "路网失效"; statusColor = QColor("#c0392b"); }
+            else if (status == "2") { statusText = "地图失效"; statusColor = QColor("#c0392b"); }
+            else                    { statusText = status;   statusColor = QColor("#a8c0d8"); }
+            auto *statusItem = new QTableWidgetItem(statusText);
+            statusItem->setForeground(statusColor);
+            m_table->setItem(i, 3, statusItem);
+
+            m_table->setItem(i, 4, new QTableWidgetItem(task.value("remark").toString()));
+            m_table->setItem(i, 5, new QTableWidgetItem(task.value("createTime").toString()));
+        }
+
+        applyTaskValidityStyle();
+
+        // 默认选中第一个任务
+        if (m_taskList.size() > 0) {
+            m_table->selectRow(0);
+        } else {
+            // 没有任务时也应该看到设备当前所在地图与实时位置，而不是空白页面
+            loadCurrentCarMap();
+        }
+    });
+
+    loadTaskValidity();
+}
+
+// 没有任务被选中时，直接按配置的设备 ID 加载它当前所在的地图，
+// 这样设备图标仍然可以正常显示，而不必依赖于"已选中一个任务"。
+void TaskWidget::loadCurrentCarMap()
+{
+    QString agvId = AppConfig::instance().agvId();
+    if (agvId.isEmpty()) return;
+    m_currentCarId = agvId;
+    ApiService::instance().getCar(agvId, [this](int code, const QJsonObject &data) {
+        if (code != 200) return;
+        QJsonObject carData = data.value("data").toObject(data);
+        QString carMapId = jsonIdStr(carData.value("mapId"));
+        if (!carMapId.isEmpty()) loadMapForTask(carMapId);
+    });
+}
+
+void TaskWidget::loadTaskValidity()
+{
+    QString agvId = AppConfig::instance().agvId();
+    if (agvId.isEmpty()) return;
+    // 与 Vue show.vue 的 onloadTask() 一致: 服务器把任务分为 rows_normal/rows_invalid，
+    // 已失效的任务无法加载，需要在 UI 上标注出来，避免用户点击"加载任务"必然失败。
+    ApiService::instance().listTaskAllStatus(agvId, [this](int code, const QJsonObject &data) {
+        if (code != 200) return;
+        m_invalidTaskIds.clear();
+        for (const auto &v : data.value("rows_invalid").toArray())
+            m_invalidTaskIds.insert(jsonIdStr(v.toObject().value("taskId")));
+        applyTaskValidityStyle();
+        onTaskSelectionChanged();
+    });
+}
+
+void TaskWidget::applyTaskValidityStyle()
+{
+    for (int i = 0; i < m_taskList.size(); ++i) {
+        QJsonObject task = m_taskList[i].toObject();
+        QString taskId = jsonIdStr(task.value("taskId"));
+        QString taskName = task.value("taskName").toString();
+        bool invalid = m_invalidTaskIds.contains(taskId);
+
+        auto *item = m_table->item(i, 2);
+        if (!item) continue;
+        item->setText(invalid ? taskName + " (待切换地图)" : taskName);
+        item->setForeground(invalid ? QColor("#c8a430") : QColor("#c8d0d8"));
+        item->setToolTip(invalid ? "该任务地图与设备当前地图不一致，加载时将自动切换地图" : QString());
+    }
+}
+
+void TaskWidget::selectFirstTask()
+{
+    if (m_taskList.size() > 0) {
+        m_table->selectRow(0);
+    }
+}
+
+void TaskWidget::onTaskSelectionChanged()
+{
+    int row = m_table->currentRow();
+    if (row < 0 || row >= m_taskList.size()) {
+        m_currentTaskId.clear();
+        m_currentCarId.clear();
+        m_loadTaskBtn->setEnabled(false);
+        return;
+    }
+
+    QJsonObject task = m_taskList[row].toObject();
+    m_currentTaskId = jsonIdStr(task.value("taskId"));
+    m_currentCarId = jsonIdStr(task.value("carId"));
+
+    // 服务器标记为"已失效"的任务通常是因为设备当前地图与任务地图不一致，
+    // "加载任务"会先自动切换地图再加载，因此这里不禁用按钮，仅提示原因。
+    bool invalid = m_invalidTaskIds.contains(m_currentTaskId);
+    m_loadTaskBtn->setEnabled(true);
+    m_loadTaskBtn->setToolTip(invalid ? "该任务地图与设备当前地图不一致，加载时将自动切换地图" : QString());
+
+    // 加载任务点 (taskInfo.features)
+    loadTaskTargets(m_currentTaskId);
+
+    // 加载任务关联的地图
+    QString mapId = jsonIdStr(task.value("mapId"));
+    if (mapId.isEmpty()) {
+        // 如果任务没有 mapId，尝试从设备信息获取
+        if (!m_currentCarId.isEmpty()) {
+            ApiService::instance().getCar(m_currentCarId, [this](int code, const QJsonObject &data) {
+                if (code != 200) return;
+                QJsonObject carData = data.value("data").toObject(data);
+                QString carMapId = jsonIdStr(carData.value("mapId"));
+                if (!carMapId.isEmpty()) {
+                    loadMapForTask(carMapId);
+                }
+            });
+        }
+    } else {
+        loadMapForTask(mapId);
+    }
+
+    // 加载当前任务状态
+    loadCurrentTask();
+}
+
+void TaskWidget::loadMapForTask(const QString &mapId)
+{
+    if (mapId.isEmpty() || mapId == m_currentMapId) return;
+
+    m_currentMapId = mapId;
+    m_mapImage = QImage();
+    m_points = QJsonArray();
+    m_lines = QJsonArray();
+    m_curves = QJsonArray();
+    m_hasInitialFit = false;
+
+    ApiService::instance().getMap(mapId, [this](int code, const QJsonObject &data) {
+        if (code != 200) return;
+        QJsonObject mapInfo = data.value("data").toObject(data);
+        m_currentMapName = mapInfo.value("mapName").toString();
+        m_mapInfoLabel->setText(QString("地图: %1 [%2]").arg(m_currentMapName, m_currentMapId));
+
+        // 提取坐标转换参数（仅作为 pgm/yaml 拉取失败时的兜底）
+        auto tryDbl = [&](const QStringList &keys, double def) -> double {
+            for (const QString &k : keys) {
+                QJsonValue v = mapInfo.value(k);
+                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+            }
+            return def;
+        };
+        double apiPhysW = tryDbl({"mapWidth","map_width","width"}, 0.0);
+        double apiPhysH = tryDbl({"mapHeight","map_height","height"}, 0.0);
+
+        // 与 Vue edit.vue 完全一致：永远用 -offsetX/-offsetY 计算零点，不优先采用
+        // originX 字段（Vue 的 getMap 流程从不读取该字段）。
+        auto getOrigin = [&](const QStringList &negate) -> double {
+            for (const QString &k : negate) {
+                QJsonValue v = mapInfo.value(k);
+                if (!v.isUndefined() && !v.isNull()) return -v.toDouble();
+            }
+            return 0.0;
+        };
+        double apiOriginX = getOrigin({"offsetX","mapOffsetX","offset_x"});
+        double apiOriginY = getOrigin({"offsetY","mapOffsetY","offset_y"});
+
+        QString mapHost     = AppConfig::instance().mapHost();
+        QString tilemapPath = mapInfo.value("tilemapPath").toString();
+        QString thumbUrl;
+        if (!tilemapPath.isEmpty())
+            thumbUrl = QString("%1%2_%3/%4/thumbnail.png").arg(mapHost, m_currentMapName, m_currentMapId, tilemapPath);
+
+        // 兜底方案：thumbnail.png + getMap() 返回的 mapWidth/mapHeight/offsetX/offsetY。
+        // 这些字段是后端为生成瓦片金字塔对图片 padding 后派生的，并不是地图的真实物理
+        // 尺寸与零点，只在 pgm/yaml 拉取失败时使用。
+        auto useThumbnailFallback = [this, thumbUrl, apiOriginX, apiOriginY, apiPhysW, apiPhysH]() {
+            debugLog(QString("[loadMapForTask] FALLBACK to thumbnail.png url=%1").arg(thumbUrl));
+            if (thumbUrl.isEmpty()) return;
+            m_worldL = apiOriginX;
+            m_worldB = apiOriginY;
+            m_worldR = apiOriginX + apiPhysW;
+            m_worldT = apiOriginY + apiPhysH;
+            ApiService::instance().downloadFile(thumbUrl, [this](bool ok, const QByteArray &imgData) {
+                if (!ok) return;
+                m_mapImage.loadFromData(imgData);
+                m_imgW = m_mapImage.width();
+                m_imgH = m_mapImage.height();
+                renderMap();
+                QTimer::singleShot(0, this, [this]{ fitView(); });
+            });
+        };
+
+        // 主路径：直接拉取并解析原始 carto_map.pgm + carto_map.yaml（与 MapEditWidget/
+        // MapViewWidget 一致）。yaml 的 origin 本身就是 pgm 左下角像素对应的世界坐标，
+        // 不需要取负，也不依赖 padding 后的 mapWidth/mapHeight/offsetX/offsetY。
+        QString resBase = AppConfig::instance().agvMapResourceHost() + m_currentMapName + "_" + m_currentMapId + "/";
+        QString yamlUrl = resBase + "carto_map.yaml";
+        QString pgmUrl  = resBase + "carto_map.pgm";
+
+        ApiService::instance().downloadFile(yamlUrl,
+            [this, pgmUrl, useThumbnailFallback](bool yamlOk, const QByteArray &yamlRaw) {
+                if (!yamlOk) { useThumbnailFallback(); return; }
+                double resolution = 0, originX = 0, originY = 0; bool negate = false;
+                if (!MapPgmUtil::parseMapYaml(QString::fromUtf8(yamlRaw), resolution, originX, originY, negate)
+                    || resolution <= 0) {
+                    useThumbnailFallback(); return;
+                }
+                ApiService::instance().downloadFile(pgmUrl,
+                    [this, resolution, originX, originY, negate, useThumbnailFallback]
+                    (bool pgmOk, const QByteArray &pgmRaw) {
+                        if (!pgmOk) { useThumbnailFallback(); return; }
+                        QImage img = MapPgmUtil::pgmToImage(pgmRaw, negate);
+                        if (img.isNull()) { useThumbnailFallback(); return; }
+
+                        m_mapImage = img;
+                        m_imgW = img.width();
+                        m_imgH = img.height();
+                        m_worldL = originX;
+                        m_worldB = originY;
+                        m_worldR = m_worldL + img.width()  * resolution;
+                        m_worldT = m_worldB + img.height() * resolution;
+                        debugLog(QString("[loadMapForTask] FINAL(pgm) imgW=%1 imgH=%2 worldL=%3 worldB=%4 worldR=%5 worldT=%6")
+                            .arg(m_imgW).arg(m_imgH).arg(m_worldL).arg(m_worldB).arg(m_worldR).arg(m_worldT));
+                        renderMap();
+                        QTimer::singleShot(0, this, [this]{ fitView(); });
+                    });
+            });
+
+        // 加载路网数据
+        loadRouteData(m_currentMapId);
+    });
+}
+
+void TaskWidget::loadRouteData(const QString &mapId)
+{
+    QJsonObject query;
+    query["mapId"] = mapId;
+    ApiService::instance().loadEditedMap(query, [this](int code, const QJsonObject &data) {
+        if (code != 200) return;
+        m_points = QJsonArray();
+        m_lines  = QJsonArray();
+        m_curves = QJsonArray();
+
+        QString jsonStr = data.value("json").toString();
+        if (jsonStr.isEmpty()) {
+            renderMap();
+            return;
+        }
+        QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
+        if (!doc.isObject()) return;
+        QJsonObject root = doc.object();
+
+        // 兼容旧版（修复前）保存的扁平格式: {points:[...], lines:[...], curves:[...]}
+        if (!root.contains("features") && (root.contains("points") || root.contains("lines") || root.contains("curves"))) {
+            m_points = root.value("points").toArray();
+            m_lines  = root.value("lines").toArray();
+            m_curves = root.value("curves").toArray();
+            renderMap();
+            return;
+        }
+
+        QJsonArray features = root.value("features").toArray();
+
+        for (const auto &fv : features) {
+            QJsonObject f      = fv.toObject();
+            QJsonObject props  = f.value("properties").toObject();
+            QJsonObject geom   = f.value("geometry").toObject();
+            QString     gtype  = geom.value("type").toString();
+            QJsonArray  coords = geom.value("coordinates").toArray();
+            QString     id     = props.value("id").toString();
+
+            if (gtype == "Point") {
+                if (id.startsWith("c_") || id.startsWith("hp_")) continue;
+                QJsonObject pt;
+                pt["id"]   = id;
+                pt["x"]    = coords[0].toDouble();
+                pt["y"]    = coords[1].toDouble();
+                pt["name"] = props.value("name").toString();
+                m_points.append(pt);
+            } else if (gtype == "LineString") {
+                if (coords.size() < 2) continue;
+                QJsonObject ln;
+                ln["id"]   = id;
+                ln["x1"]   = coords.first().toArray()[0].toDouble();
+                ln["y1"]   = coords.first().toArray()[1].toDouble();
+                ln["x2"]   = coords.last().toArray()[0].toDouble();
+                ln["y2"]   = coords.last().toArray()[1].toDouble();
+                ln["name"] = props.value("name").toString();
+                m_lines.append(ln);
+            } else if (gtype == "MultiPoint") {
+                if (coords.size() < 3) continue;
+                QJsonObject cv;
+                cv["id"]   = id;
+                cv["x1"]   = coords[0].toArray()[0].toDouble();
+                cv["y1"]   = coords[0].toArray()[1].toDouble();
+                cv["cx"]   = coords[1].toArray()[0].toDouble();
+                cv["cy"]   = coords[1].toArray()[1].toDouble();
+                cv["x2"]   = coords[2].toArray()[0].toDouble();
+                cv["y2"]   = coords[2].toArray()[1].toDouble();
+                cv["name"] = props.value("name").toString();
+                m_curves.append(cv);
+            }
+        }
+        renderMap();
+    });
+}
+
+void TaskWidget::loadTaskTargets(const QString &taskId)
+{
+    if (taskId.isEmpty()) {
+        m_targets = QJsonArray();
+        renderMap();
+        return;
+    }
+    // task_json = {"taskInfo": {type:FeatureCollection, features:[...point features...], ...}}
+    ApiService::instance().getTaskInfo(taskId, [this](int code, const QJsonObject &data) {
+        if (code != 200) return;
+        QJsonObject info = data.value("data").toObject(data);
+        QString taskJson = info.value("task_json").toString();
+        m_targets = QJsonArray();
+        if (!taskJson.isEmpty()) {
+            QJsonDocument doc = QJsonDocument::fromJson(taskJson.toUtf8());
+            QJsonObject form = doc.object();
+            QJsonObject taskInfo = form.value("taskInfo").toObject();
+            for (const auto &fv : taskInfo.value("features").toArray()) {
+                QJsonObject f      = fv.toObject();
+                QJsonObject props  = f.value("properties").toObject();
+                QJsonArray  coords = f.value("geometry").toObject().value("coordinates").toArray();
+                QJsonObject t = props;
+                if (coords.size() >= 2) {
+                    t["x"] = coords[0].toDouble();
+                    t["y"] = coords[1].toDouble();
+                }
+                m_targets.append(t);
+            }
+        }
+        renderMap();
+    });
+}
+
+QPointF TaskWidget::worldToScene(double wx, double wy) const
+{
+    double mapW = m_worldR - m_worldL, mapH = m_worldT - m_worldB;
+    if (m_imgW <= 0 || m_imgH <= 0 || mapW <= 0 || mapH <= 0) return {wx, wy};
+    return { (wx - m_worldL) / mapW * m_imgW,
+             (m_worldT - wy) / mapH * m_imgH };
+}
+
+QPointF TaskWidget::sceneToWorld(double sx, double sy) const
+{
+    double mapW = m_worldR - m_worldL, mapH = m_worldT - m_worldB;
+    if (m_imgW <= 0 || m_imgH <= 0 || mapW <= 0 || mapH <= 0) return {sx, sy};
+    return { sx / m_imgW * mapW + m_worldL,
+             m_worldT - sy / m_imgH * mapH };
+}
+
+void TaskWidget::fitView()
+{
+    if (m_scene->sceneRect().isEmpty()) return;
+    // 最短边铺满、长边居中裁切 ("cover" 而非 "contain")，与地图管理预览一致
+    m_mapView->fitInView(m_scene->sceneRect(), Qt::KeepAspectRatioByExpanding);
+    m_hasInitialFit = true;
+    updateRulers();
+}
+
+void TaskWidget::updateCoordinateDisplay(const QPointF &scenePos)
+{
+    QPointF w = sceneToWorld(scenePos.x(), scenePos.y());
+    m_coordLabel->setText(QString("X: %1  Y: %2")
+        .arg(w.x(), 0, 'f', 2).arg(w.y(), 0, 'f', 2));
+}
+
+bool TaskWidget::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj != m_mapView->viewport())
+        return QWidget::eventFilter(obj, event);
+
+    if (event->type() == QEvent::Wheel) {
+        QWheelEvent *we = static_cast<QWheelEvent *>(event);
+        double factor = we->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
+        m_mapView->scale(factor, factor);
+        updateRulers();
+        return true;
+    }
+
+    if (event->type() == QEvent::MouseMove) {
+        QMouseEvent *me = static_cast<QMouseEvent *>(event);
+        updateCoordinateDisplay(m_mapView->mapToScene(me->pos()));
+    }
+
+    return QWidget::eventFilter(obj, event);
+}
+
+void TaskWidget::resizeEvent(QResizeEvent *e)
+{
+    QWidget::resizeEvent(e);
+    if (!m_hasInitialFit)
+        QTimer::singleShot(0, this, [this]{ fitView(); });
+}
+
+void TaskWidget::showEvent(QShowEvent *e)
+{
+    QWidget::showEvent(e);
+    // 该页面在 QStackedWidget 中处于隐藏状态时就已经异步加载了地图/任务数据，
+    // 此时视图尚未获得真实尺寸，fitInView 会按错误的视口大小计算，导致地图
+    // 没有居中铺满。每次页面真正显示出来时都重新 fit 一次，确保按正确尺寸缩放。
+    QTimer::singleShot(0, this, [this]{ fitView(); });
+
+    // 路网可能在"地图编辑"页被修改后才切回本页，本页是常驻的 QStackedWidget
+    // 页面、不会重新构造，因此每次显示时都要重新拉取一次路网数据，否则地图
+    // 预览里的路网会停留在第一次加载时的旧版本，不会动态更新。
+    if (!m_currentMapId.isEmpty()) loadRouteData(m_currentMapId);
+}
+
+void TaskWidget::renderAxesAndGrid()
+{
+    if (m_imgW <= 0 || m_imgH <= 0) return;
+
+    QList<QGraphicsItem *> toRemove;
+    for (auto *item : m_scene->items())
+        if (item->data(0).toInt() == 1) toRemove.append(item);
+    for (auto *item : toRemove) { m_scene->removeItem(item); delete item; }
+
+    auto tag = [](QGraphicsItem *item, int z) {
+        item->setData(0, 1); item->setZValue(z); return item;
+    };
+
+    double wLeft = m_worldL, wRight = m_worldR, wBottom = m_worldB, wTop = m_worldT;
+    const QColor xCol(210, 45, 45, 230);
+    const QColor yCol(30, 185, 60, 230);
+
+    QPointF O = worldToScene(0.0, 0.0);
+    bool inView = (O.x() > -60 && O.x() < m_imgW + 60 && O.y() > -60 && O.y() < m_imgH + 60);
+    if (inView) {
+        const double arm = 52.0, aL = 11.0, aW = 4.5, lw = 1.8;
+        auto mkArrow = [&](QPointF tip, double dx, double dy, QColor col) {
+            double px = -dy, py = dx;
+            QPolygonF tri;
+            tri << tip
+                << QPointF(tip.x() - dx*aL + px*aW, tip.y() - dy*aL + py*aW)
+                << QPointF(tip.x() - dx*aL - px*aW, tip.y() - dy*aL - py*aW);
+            tag(m_scene->addPolygon(tri, QPen(Qt::NoPen), QBrush(col)), 12);
+        };
+        auto mkLabel = [&](QPointF pos, const QString &txt, QColor col) {
+            auto *t = m_scene->addText(txt);
+            t->setDefaultTextColor(col);
+            t->setFont(QFont("Arial", 9, QFont::Bold));
+            t->setPos(pos);
+            tag(t, 13);
+        };
+        QPointF xTip(O.x() + arm, O.y());
+        tag(m_scene->addLine(O.x(), O.y(), xTip.x() - aL, O.y(), QPen(xCol, lw)), 10);
+        mkArrow(xTip, 1.0, 0.0, xCol);
+        mkLabel(QPointF(xTip.x() + 2, xTip.y() - 9), "x", xCol);
+
+        QPointF yTip(O.x(), O.y() - arm);
+        tag(m_scene->addLine(O.x(), O.y(), O.x(), yTip.y() + aL, QPen(yCol, lw)), 10);
+        mkArrow(yTip, 0.0, -1.0, yCol);
+        mkLabel(QPointF(yTip.x() + 4, yTip.y() - 2), "y", yCol);
+    }
+
+    if (!m_showGrid) return;
+
+    const double gridStep = 1.0;
+    QPen gridPen (QColor(80, 110, 160,  80), 0.5);
+    QPen axisGPen(QColor(120, 160, 240, 130), 0.8);
+
+    for (double wx = std::ceil(wLeft / gridStep) * gridStep; wx <= wRight + 1e-9; wx += gridStep) {
+        QPointF a = worldToScene(wx, wBottom);
+        QPointF b = worldToScene(wx, wTop);
+        tag(m_scene->addLine(a.x(), a.y(), b.x(), b.y(), std::abs(wx) < 1e-6 ? axisGPen : gridPen), 9);
+    }
+    for (double wy = std::ceil(wBottom / gridStep) * gridStep; wy <= wTop + 1e-9; wy += gridStep) {
+        QPointF a = worldToScene(wLeft,  wy);
+        QPointF b = worldToScene(wRight, wy);
+        tag(m_scene->addLine(a.x(), a.y(), b.x(), b.y(), std::abs(wy) < 1e-6 ? axisGPen : gridPen), 9);
+    }
+}
+
+void TaskWidget::updateRulers()
+{
+    if (m_topRuler)
+        m_topRuler->syncWithView(m_mapView, m_worldL, m_worldB, m_worldR, m_worldT, m_imgW, m_imgH);
+    if (m_leftRuler)
+        m_leftRuler->syncWithView(m_mapView, m_worldL, m_worldB, m_worldR, m_worldT, m_imgW, m_imgH);
+}
+
+void TaskWidget::renderMap()
+{
+    m_scene->clear();
+
+    // 渲染底图
+    if (!m_mapImage.isNull()) {
+        QGraphicsPixmapItem *bgItem = m_scene->addPixmap(QPixmap::fromImage(m_mapImage));
+        bgItem->setZValue(-100);
+    }
+
+    renderAxesAndGrid();
+
+    for (const auto &item : m_points) {
+        QJsonObject pt = item.toObject();
+        QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
+        auto *e = m_scene->addEllipse(sp.x()-5, sp.y()-5, 10, 10,
+            QPen(QColor(60, 160, 255), 1), QBrush(QColor(60, 160, 255, 180)));
+        e->setZValue(20);
+    }
+
+    for (const auto &item : m_lines) {
+        QJsonObject ln = item.toObject();
+        QPointF a = worldToScene(ln.value("x1").toDouble(), ln.value("y1").toDouble());
+        QPointF b = worldToScene(ln.value("x2").toDouble(), ln.value("y2").toDouble());
+        auto *li = m_scene->addLine(a.x(),a.y(),b.x(),b.y(), QPen(QColor(60, 160, 255, 160), 1.5));
+        li->setZValue(15);
+    }
+
+    for (const auto &item : m_curves) {
+        QJsonObject cv = item.toObject();
+        QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
+        QPointF pc = worldToScene(cv.value("cx").toDouble(), cv.value("cy").toDouble());
+        QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+        QPainterPath path; path.moveTo(p1); path.quadTo(pc, p2);
+        auto *pi = m_scene->addPath(path, QPen(QColor(60, 160, 255, 160), 1.5));
+        pi->setZValue(15);
+    }
+
+    // 渲染任务目标点 (与 TaskEditWidget 一致的小圆点 + 序号)
+    for (int i = 0; i < m_targets.size(); ++i) {
+        QJsonObject t = m_targets[i].toObject();
+        QPointF sp = worldToScene(t.value("x").toDouble(), t.value("y").toDouble());
+        auto *e = m_scene->addEllipse(sp.x()-4, sp.y()-4, 8, 8,
+            QPen(Qt::red, 1.5), QBrush(QColor(255, 0, 0, 128)));
+        e->setZValue(25);
+
+        int targetNumber = t.value("targetNumber").toInt(i + 1);
+        auto *label = m_scene->addText(QString::number(targetNumber));
+        label->setDefaultTextColor(QColor(255, 170, 170));
+        label->setPos(sp.x() + 6, sp.y() - 6);
+        label->setZValue(26);
+    }
+
+    // 清除设备标记指针（scene->clear 已删除所有 item）
+    for (auto it = m_carInfos.begin(); it != m_carInfos.end(); ++it) {
+        it->marker = nullptr;
+        it->nameLabel = nullptr;
+    }
+
+    // 渲染设备位置
+    for (auto it = m_carInfos.begin(); it != m_carInfos.end(); ++it) {
+        CarInfo &info = it.value();
+        if (info.x != 0 || info.y != 0) {
+            updateCarPosition(info.carId, info.x, info.y, info.angle);
+        }
+    }
+
+    m_scene->setSceneRect(0, 0, m_imgW, m_imgH);
+}
+
+void TaskWidget::updateCarPosition(const QString &carId, double x, double y, double angle)
+{
+    if (!m_carInfos.contains(carId)) return;
+    CarInfo &info = m_carInfos[carId];
+
+    // 移除旧标记 (含名称标签，避免每次 MQTT 更新都叠加新的文字导致出现大量重复数字)
+    if (info.marker)    { m_scene->removeItem(info.marker);    delete info.marker;    info.marker = nullptr; }
+    if (info.nameLabel) { m_scene->removeItem(info.nameLabel); delete info.nameLabel; info.nameLabel = nullptr; }
+
+    // 世界坐标→场景像素坐标
+    QPointF sp = worldToScene(x, y);
+
+    // ENU: yaw=0→East, yaw=π/2→North, CCW+. Icon/triangle tip points North.
+    // Qt rotate(a) CW; tip (0,-10) → (sin a, -cos a). Match (cos yaw, -sin yaw) → a = 90 - yaw.
+    double yawRad = (qAbs(angle) > M_PI * 2) ? angle * M_PI / 180.0 : angle;
+    double screenAngle = 90.0 - yawRad * 180.0 / M_PI;
+
+    if (!m_robotPixmap.isNull()) {
+        const double iconSz = 15.0;
+        const double srcSz  = 256.0;
+        const double pivot  = srcSz / 2.0;
+        auto *robotItem = m_scene->addPixmap(m_robotPixmap);
+        robotItem->setScale(iconSz / srcSz);
+        robotItem->setTransformOriginPoint(pivot, pivot);
+        robotItem->setPos(sp.x() - pivot, sp.y() - pivot);
+        robotItem->setRotation(screenAngle);
+        robotItem->setZValue(100);
+        info.marker = robotItem;
+    } else {
+        QPolygonF triangle;
+        triangle << QPointF(0, -10) << QPointF(-7, 7) << QPointF(7, 7);
+        QTransform t;
+        t.translate(sp.x(), sp.y());
+        t.rotate(screenAngle);
+        QPolygonF mapped = t.map(triangle);
+
+        QGraphicsPolygonItem *robotItem = new QGraphicsPolygonItem(mapped);
+        robotItem->setPen(QPen(QColor("#1a6ca0"), 1.5));
+        robotItem->setBrush(QBrush(QColor(30, 140, 220, 210)));
+        robotItem->setZValue(100);
+        m_scene->addItem(robotItem);
+        info.marker = robotItem;
+    }
+
+    QGraphicsTextItem *nameLabel = m_scene->addText(info.carName);
+    nameLabel->setPos(sp.x() + 10, sp.y() - 20);
+    nameLabel->setZValue(101);
+    nameLabel->setDefaultTextColor(QColor("#7ec8e8"));
+    info.nameLabel = nameLabel;
+}
+
+void TaskWidget::initMqtt()
+{
+    auto &mqtt = MqttService::instance();
+    if (!mqtt.isConnected()) return;
+
+    QString agvId = AppConfig::instance().agvId();
+    if (agvId.isEmpty()) return;
+
+    // 订阅设备在线状态
+    mqtt.subscribeTopic("/rob/online", 0, [this](const QString &topic, const QByteArray &payload) {
+        Q_UNUSED(topic)
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+        if (err.error != QJsonParseError::NoError) return;
+        QJsonObject data = doc.object();
+        QString carId = jsonIdStr(data.value("carId"));
+        if (!carId.isEmpty()) {
+            if (data.value("online").toBool()) {
+                m_onlineCarIds.insert(carId);
+            } else {
+                m_onlineCarIds.remove(carId);
+            }
+        }
+    });
+
+    // 订阅设备信息
+    QString infoTopic = QString("/rob/%1/info").arg(agvId);
+    mqtt.subscribeTopic(infoTopic, 0, [this](const QString &topic, const QByteArray &payload) {
+        onMqttMessage(topic, payload);
+    });
+}
+
+void TaskWidget::disconnectMqtt()
+{
+    auto &mqtt = MqttService::instance();
+    QString agvId = AppConfig::instance().agvId();
+    if (!agvId.isEmpty()) {
+        mqtt.unsubscribeTopic("/rob/online");
+        mqtt.unsubscribeTopic(QString("/rob/%1/info").arg(agvId));
+    }
+}
+
+void TaskWidget::onMqttMessage(const QString &topic, const QByteArray &payload)
+{
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+    if (err.error != QJsonParseError::NoError) return;
+    QJsonObject data = doc.object();
+
+    // 处理设备位置信息
+    if (topic.contains("/info") || topic.contains("/status")) {
+        QString carId = jsonIdStr(data.value("carId"));
+        if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+
+        if (!m_carInfos.contains(carId)) {
+            CarInfo info;
+            info.carId = carId;
+            info.carName = data.value("carName").toString(carId);
+            m_carInfos[carId] = info;
+        }
+
+        CarInfo &info = m_carInfos[carId];
+        auto dv = [&](const QStringList &keys, double def) -> double {
+            for (const QString &k : keys) {
+                QJsonValue v = data.value(k);
+                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+            }
+            return def;
+        };
+        info.x     = dv({"car_x","carX","x"}, info.x);
+        info.y     = dv({"car_y","carY","y"}, info.y);
+        info.angle = dv({"car_yaw","carYaw","yaw","angle"}, info.angle);
+        info.speed   = dv({"speed","linear_x","linearX"}, info.speed);
+        info.battery = dv({"battery","power","bat"}, info.battery);
+        info.online  = true;
+
+        updateCarPosition(carId, info.x, info.y, info.angle);
+    }
+}
+
+void TaskWidget::loadCurrentTask()
+{
+    if (m_currentCarId.isEmpty()) {
+        m_currentTask = QJsonObject();
+        m_currentTaskLabel->setText("无任务");
+        updateTaskButtons();
+        return;
+    }
+
+    QJsonObject query;
+    query["carId"] = m_currentCarId;
+    if (!m_currentMapId.isEmpty()) query["mapId"] = m_currentMapId;
+
+    ApiService::instance().getCurrentTask(query, [this](int code, const QJsonObject &data) {
+        if (code != 200) return;
+        // 响应结构: {data:{taskId,taskName,...}, taskInfo_data:{status,current_count,execution_count}}
+        // 基础信息和状态信息分属两个不同的顶层字段，需要分别取出再合并。
+        QJsonValue dataVal = data.value("data");
+        if (dataVal.isUndefined() || dataVal.isNull() || !dataVal.isObject()) {
+            m_currentTask = QJsonObject();
+            m_currentTaskLabel->setText("无任务");
+        } else {
+            QJsonObject taskData   = dataVal.toObject();
+            QJsonObject statusData = data.value("taskInfo_data").toObject();
+            m_currentTask = taskData;
+            for (auto it = statusData.begin(); it != statusData.end(); ++it)
+                m_currentTask[it.key()] = it.value();
+
+            QString taskName = taskData.value("taskName").toString();
+            QString status = jsonIdStr(m_currentTask.value("status"));
+            QString statusText;
+            if (status == "0") statusText = "执行中";
+            else if (status == "1") statusText = "已完成";
+            else if (status == "2") statusText = "失败";
+            else if (status == "3") statusText = "暂停";
+            else if (status == "4") statusText = "未开始";
+            else statusText = status;
+            m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
+        }
+        updateTaskButtons();
+    });
+}
+
+void TaskWidget::updateTaskButtons()
+{
+    QString status = jsonIdStr(m_currentTask.value("status"));
+    bool hasTask = !m_currentTask.isEmpty();
+    m_startTaskBtn->setEnabled(hasTask && (status == "1" || status == "2" || status == "4"));
+    m_pauseTaskBtn->setEnabled(hasTask && status == "0");
+    m_continueTaskBtn->setEnabled(hasTask && status == "3");
+    m_stopTaskBtn->setEnabled(hasTask && (status == "0" || status == "3"));
+    m_removeTaskBtn->setEnabled(hasTask && (status == "1" || status == "2" || status == "4"));
+}
+
+void TaskWidget::onLoadTask()
+{
+    if (m_currentTaskId.isEmpty() || m_currentCarId.isEmpty()) return;
+
+    auto *loading = new LoadingDialog("正在检查设备地图...", this);
+    loading->show();
+
+    // 任务"已失效"的根本原因是设备当前地图与任务绑定地图不一致。
+    // 必须先确保设备已切换到任务所在地图、等待切换成功，才能加载任务。
+    ApiService::instance().getCar(m_currentCarId, [this, loading](int code, const QJsonObject &data) {
+        if (code != 200) {
+            loading->close();
+            loading->deleteLater();
+            QMessageBox::warning(this, "错误", "加载任务失败：无法获取设备信息");
+            return;
+        }
+        QJsonObject car = data.value("data").toObject(data);
+        QString carMapId = jsonIdStr(car.value("mapId"));
+
+        if (carMapId == m_currentMapId) {
+            // 设备已在任务所在地图，无需切换
+            doLoadTaskRequest(loading);
+            return;
+        }
+
+        loading->setMessage("正在切换地图...");
+        car["mapId"] = m_currentMapId;
+        // 必须刷新 updateTime 为当前时间，否则设备端据此计算消息时间差会报 "crud 消息超时"
+        car["updateTime"] = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
+        ApiService::instance().updateCar(car, [this, loading](int code2, const QJsonObject &) {
+            if (code2 != 200) {
+                loading->close();
+                loading->deleteLater();
+                QMessageBox::warning(this, "错误", "加载任务失败：切换地图未成功");
+                return;
+            }
+            // 设备切换地图是异步处理的，后台确认切换请求和设备真正完成切换之间有延迟，
+            // 留出缓冲时间再加载任务，避免设备还没切换完成就被判定为"任务已失效"。
+            loading->setMessage("正在等待设备完成地图切换...");
+            QTimer::singleShot(1500, this, [this, loading]() {
+                doLoadTaskRequest(loading, true);
+            });
+        });
+    });
+}
+
+void TaskWidget::doLoadTaskRequest(LoadingDialog *loading, bool allowRetry)
+{
+    loading->setMessage("正在加载任务...");
+    // 与 Vue show.vue 的 submitForm() 一致: carId + mapId + taskId 三者缺一不可
+    QJsonObject payload{
+        {"carId", m_currentCarId},
+        {"mapId", m_currentMapId},
+        {"taskId", m_currentTaskId}
+    };
+    ApiService::instance().loadTask(payload, [this, loading, allowRetry](int code, const QJsonObject &resp) {
+        QString msg = resp.value("msg").toString();
+        bool staleMapError = msg.contains("失效") || msg.contains("无法载入");
+
+        // 地图刚切换完成、设备状态还没完全同步时可能仍短暂报"已失效"，
+        // 这种情况下不打扰用户，安静地再重试一次。
+        if (code != 200 && staleMapError && allowRetry) {
+            QTimer::singleShot(1500, this, [this, loading]() {
+                doLoadTaskRequest(loading, false);
+            });
+            return;
+        }
+
+        loading->close();
+        loading->deleteLater();
+        if (code == 200) {
+            Toast::success(this, "任务加载成功");
+            loadCurrentTask();
+        } else {
+            // 不再把"任务已失效/无法载入"原文展示给用户，统一提示重试
+            QMessageBox::warning(this, "错误",
+                (staleMapError || msg.isEmpty()) ? "任务加载失败，请稍后重试" : msg);
+        }
+    });
+}
+
+void TaskWidget::onStartTask()
+{
+    if (m_currentTaskId.isEmpty() || m_currentCarId.isEmpty()) return;
+    auto *loading = new LoadingDialog("正在执行任务...", this);
+    loading->show();
+    // 与 Vue show.vue 的 onstartTask() 一致: carId + mapId + taskId
+    ApiService::instance().startTask(QJsonObject{
+        {"carId", m_currentCarId},
+        {"mapId", m_currentMapId},
+        {"taskId", m_currentTaskId}
+    }, [this, loading](int code, const QJsonObject &resp) {
+        loading->close();
+        loading->deleteLater();
+        if (code == 200) {
+            Toast::success(this, "任务已开始执行");
+            loadCurrentTask();
+        } else {
+            QString msg = resp.value("msg").toString();
+            QMessageBox::warning(this, "错误", msg.isEmpty() ? "执行任务失败" : msg);
+        }
+    });
+}
+
+void TaskWidget::sendNavCommand(const QString &command, const QString &loadingText,
+                                 const QString &successText, const QString &failText)
+{
+    if (m_currentTaskId.isEmpty() || m_currentCarId.isEmpty()) return;
+    auto *loading = new LoadingDialog(loadingText, this);
+    loading->show();
+    QJsonObject params;
+    params["command"] = command;
+    // 与 Vue show.vue 的 onCommandTask() 一致: carId + mapId + taskId + 嵌套的 params.command
+    ApiService::instance().commandTask(QJsonObject{
+        {"carId", m_currentCarId},
+        {"mapId", m_currentMapId},
+        {"taskId", m_currentTaskId},
+        {"params", params}
+    }, [this, loading, successText, failText](int code, const QJsonObject &resp) {
+        loading->close();
+        loading->deleteLater();
+        if (code == 200) {
+            Toast::success(this, successText);
+            // commandTask 只是确认指令已通过 MQTT 发给设备，设备真正把执行状态
+            // 更新到后台与此之间有延迟；立即刷新经常还读到旧状态(如暂停后仍是
+            // "0执行中")，导致继续/暂停按钮看起来卡在错误的可点击状态。与本文件
+            // 别处"等待设备完成地图切换"用的是同一类缓冲处理。
+            QTimer::singleShot(800, this, [this]{ loadCurrentTask(); });
+        } else {
+            QString msg = resp.value("msg").toString();
+            QMessageBox::warning(this, "错误", msg.isEmpty() ? failText : msg);
+        }
+    });
+}
+
+void TaskWidget::onPauseTask()
+{
+    sendNavCommand("pause navigation", "正在暂停任务...", "任务已暂停", "暂停任务失败");
+}
+
+void TaskWidget::onContinueTask()
+{
+    sendNavCommand("continue navigation", "正在继续任务...", "任务已继续", "继续任务失败");
+}
+
+void TaskWidget::onStopTask()
+{
+    sendNavCommand("stop navigation", "正在结束任务...", "任务已结束", "结束任务失败");
+}
+
+void TaskWidget::onRemoveTask()
+{
+    if (m_currentTaskId.isEmpty()) return;
+    auto *loading = new LoadingDialog("正在移除任务...", this);
+    loading->show();
+    // 与 Vue show.vue 的 onRemoveTask() 一致: 只需 taskId，不是 carId
+    ApiService::instance().removeTask(QJsonObject{{"taskId", m_currentTaskId}}, [this, loading](int code, const QJsonObject &resp) {
+        loading->close();
+        loading->deleteLater();
+        if (code == 200) {
+            Toast::success(this, "任务已移除");
+            loadCurrentTask();
+        } else {
+            QString msg = resp.value("msg").toString();
+            QMessageBox::warning(this, "错误", msg.isEmpty() ? "移除任务失败" : msg);
+        }
+    });
+}
+
+void TaskWidget::onAdd()
+{
+    emit navigateRequested("task_edit", "");
+}
+
+void TaskWidget::onEdit()
+{
+    int row = m_table->currentRow();
+    if (row < 0) return;
+    QJsonObject task = m_taskList[row].toObject();
+    emit navigateRequested("task_edit", jsonIdStr(task.value("taskId")));
+}
+
+void TaskWidget::onDelete()
+{
+    int row = m_table->currentRow();
+    if (row < 0) return;
+    QJsonObject task = m_taskList[row].toObject();
+    QString taskId = jsonIdStr(task.value("taskId"));
+
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("确认");
+    msgBox.setText(QString("是否确认删除任务编号为\"%1\"的数据项？").arg(taskId));
+    QPushButton *yesBtn = msgBox.addButton("确定", QMessageBox::YesRole);
+    msgBox.addButton("取消", QMessageBox::NoRole);
+    msgBox.exec();
+    if (msgBox.clickedButton() == yesBtn) {
+        ApiService::instance().delTask(taskId, [this](int code, const QJsonObject &data) {
+            if (code == 200) {
+                Toast::success(this, "删除成功");
+                getList();
+            }
+        });
+    }
+}
+
+void TaskWidget::onRefresh()
+{
+    getList();
+}
+
+void TaskWidget::onTableSelectionChanged()
+{
+    bool hasSelection = m_table->currentRow() >= 0;
+    m_editBtn->setEnabled(hasSelection);
+    m_deleteBtn->setEnabled(hasSelection);
+}

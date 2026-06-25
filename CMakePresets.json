@@ -1,0 +1,46 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 16, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "mingw-debug",
+            "displayName": "MinGW Debug (Qt6)",
+            "description": "Debug build with Qt6 MinGW 64-bit",
+            "generator": "MinGW Makefiles",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE":   "Debug",
+                "CMAKE_PREFIX_PATH":  "F:/Qt/6.11.0/mingw_64",
+                "CMAKE_C_COMPILER":   "F:/Qt/Tools/mingw1310_64/bin/gcc.exe",
+                "CMAKE_CXX_COMPILER": "F:/Qt/Tools/mingw1310_64/bin/c++.exe",
+                "CMAKE_MAKE_PROGRAM": "F:/Qt/Tools/mingw1310_64/bin/mingw32-make.exe"
+            }
+        },
+        {
+            "name": "mingw-release",
+            "displayName": "MinGW Release (Qt6)",
+            "description": "Release build with Qt6 MinGW 64-bit",
+            "generator": "MinGW Makefiles",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE":   "Release",
+                "CMAKE_PREFIX_PATH":  "F:/Qt/6.11.0/mingw_64",
+                "CMAKE_C_COMPILER":   "F:/Qt/Tools/mingw1310_64/bin/gcc.exe",
+                "CMAKE_CXX_COMPILER": "F:/Qt/Tools/mingw1310_64/bin/c++.exe",
+                "CMAKE_MAKE_PROGRAM": "F:/Qt/Tools/mingw1310_64/bin/mingw32-make.exe"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "debug",
+            "displayName": "Debug Build",
+            "configurePreset": "mingw-debug"
+        },
+        {
+            "name": "release",
+            "displayName": "Release Build",
+            "configurePreset": "mingw-release"
+        }
+    ]
+}

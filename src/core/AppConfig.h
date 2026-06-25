@@ -1,0 +1,77 @@
+#ifndef APPCONFIG_H
+#define APPCONFIG_H
+
+#include <QString>
+#include <QSettings>
+#include <QList>
+#include <QDateTime>
+
+// Device profile saved locally
+struct DeviceProfile {
+    QString name;           // display name, e.g. "AGV @ 192.168.1.100"
+    QString ip;             // server IP
+    QString carId;          // car ID returned from API
+    QString token;          // last auth token
+    QDateTime lastConnected;
+};
+
+// 全局应用配置
+// 端口映射关系 (远程服务器):
+//   SSH(22)→6011  HTTP后台(400)→6012  地图资源(4000)→6013
+//   PCD资源(4001)→6014  API(8048)→6015  MQTT(1883)→6016
+//   AGV控制1(8061)→6017  AGV控制2(8062)→6018
+class AppConfig
+{
+public:
+    static AppConfig &instance();
+
+    // ========== Multi-device profile management ==========
+    QList<DeviceProfile> deviceList() const;
+    void saveDevice(const DeviceProfile &dev);   // add or update by IP
+    void removeDevice(int index);
+    void clearDevices();
+
+    // Currently active device
+    int  currentDeviceIndex() const;
+    void setCurrentDeviceIndex(int idx);
+    DeviceProfile currentDevice() const;
+
+    // ========== Active connection settings (from current device) ==========
+    QString serverIp() const;
+    void setServerIp(const QString &ip);
+
+    QString mqttHost() const;
+    void setMqttHost(const QString &host);
+
+    QString mapHost() const;
+    QString pcdHost() const;
+    QString agvMapResourceHost() const;  // raw carto_map.pgm/.yaml resources
+
+    QString agvId() const;
+    void setAgvId(const QString &id);
+
+    QString token() const;
+    void setToken(const QString &token);
+
+    int deptId() const;
+    void setDeptId(int id);
+
+    // Build URLs
+    QString baseApiUrl() const;
+    QString robotApiUrl(int port) const;
+
+    // Port mapping: internal port → external mapped port
+    static int mapPort(int internalPort);
+
+private:
+    AppConfig();
+    ~AppConfig() = default;
+    AppConfig(const AppConfig &) = delete;
+    AppConfig &operator=(const AppConfig &) = delete;
+
+    void saveDeviceList(const QList<DeviceProfile> &list);
+
+    mutable QSettings m_settings;
+};
+
+#endif // APPCONFIG_H
