@@ -436,7 +436,7 @@ void MainWindow::setupHeaderBar()
             onSectionChanged(act->data().toInt());
         });
     }
-    highlightTabForPageIndex(0);   // 与 initPages() 里 m_stack->setCurrentIndex(0) 保持一致
+    highlightTabForPageIndex(1);   // 与 initPages() 的 m_stack->setCurrentIndex(1) 保持一致
 
     addToolBar(Qt::TopToolBarArea, m_sectionBar);
 
@@ -483,7 +483,7 @@ void MainWindow::initPages()
         highlightTabForPageIndex(1);
     });
 
-    m_stack->setCurrentIndex(0);
+    m_stack->setCurrentIndex(1);
 }
 
 void MainWindow::setupStatusBar()
@@ -519,7 +519,7 @@ void MainWindow::connectServices()
 
     MqttService::instance().connectToHost(ip, 1883);
 
-    QString wsUrl = QString("ws://%1:6015/websocket/message").arg(ip);
+    QString wsUrl = QString("ws://%1:8048/websocket/message").arg(ip);
     WebSocketService::instance().connectToServer(wsUrl);
 }
 
@@ -685,7 +685,10 @@ void MainWindow::onMqttStatusClicked()
         return;
     }
 
-    MqttService::instance().disconnectFromHost();
+    // 不再手动调用 disconnectFromHost() 再 connectToHost()。
+    // 在 Connecting 状态下 disconnectFromHost 会触发 aboutToClose ->
+    // transportConnectionClosed -> TransportInvalid 错误。
+    // MqttService::connectToHost 内部会处理非 Disconnected 状态。
     connectServices();
     updateStatusBar();
     Toast::info(this, "正在重新连接 MQTT...");

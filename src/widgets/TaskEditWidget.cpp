@@ -390,7 +390,7 @@ void TaskEditWidget::setupUI()
 
     // 地图视图 + 刻度尺
     m_scene = new QGraphicsScene(this);
-    m_mapView = new QGraphicsView(m_scene);
+    m_mapView = new MapCanvas(m_scene, this);
     m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
     m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
     m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);

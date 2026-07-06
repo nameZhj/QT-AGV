@@ -2,7 +2,7 @@
 #define MAPEDITWIDGET_H
 
 #include <QWidget>
-#include <QGraphicsView>
+#include "MapCanvas.h"
 #include <QGraphicsScene>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPolygonItem>
@@ -50,6 +50,9 @@ private:
                  const QString &startId = {}, const QString &endId = {});
     void addCurve(const QPointF &a, const QPointF &b,
                   const QString &startId = {}, const QString &endId = {});
+    void finalizeCurve();   // 完成多阶贝塞尔曲线绘制(基于 m_curveCtrlPts)
+    void addBezierCurve(const QList<QPointF> &scenePts,
+                        const QList<QString> &snapIds);  // 保存任意阶贝塞尔曲线
 
     void updateCurveShape(const QString &id);            // update path item in-place
     void rebuildCurveHandles(const QString &id);         // sync handle items to JSON
@@ -101,7 +104,7 @@ private:
     enum DrawStatus { Drag=0, Point=1, Line=2, Curve=3, Charge=4, HighPrecision=5 };
 
     // Map view
-    QGraphicsView  *m_mapView      = nullptr;
+    MapCanvas      *m_mapView      = nullptr;
     QGraphicsScene *m_scene        = nullptr;
     QLabel         *m_coordLabel   = nullptr;
     QLabel         *m_mapInfoLabel = nullptr;
@@ -111,6 +114,7 @@ private:
     QPushButton *m_saveBtn      = nullptr;
     QPushButton *m_editMapBtn   = nullptr;
     QPushButton *m_tableModeBtn = nullptr;
+    QPushButton *m_resetViewBtn = nullptr;
     QPushButton  *m_gridBtn     = nullptr;
     ToggleSwitch *m_robotBtn    = nullptr;
     ToggleSwitch *m_reflectorBtn = nullptr;
@@ -149,8 +153,14 @@ private:
     QString    m_drawP1Id;               // snap ID of first draw point
     bool       m_drawHasP1     = false;
 
+    // Multi-control-point Bezier drawing state
+    QList<QPointF> m_curveCtrlPts;        // 当前正在绘制的曲线控制点(场景坐标)
+    QList<QString> m_curveCtrlIds;        // 控制点对应的吸附ID(首尾有效)
+    int            m_curveHoverHandleIdx = -1;  // 鼠标悬停的控制点序号
+
     // Preview rubber-band
     QGraphicsItem        *m_previewItem    = nullptr;
+    QList<QGraphicsLineItem*> m_previewAids;  // 多阶贝塞尔预览的辅助参考线
     QGraphicsEllipseItem *m_snapIndicator  = nullptr;
 
     // Map overlays

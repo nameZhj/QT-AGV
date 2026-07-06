@@ -92,7 +92,13 @@ void ApiService::handleFileReply(QNetworkReply *reply, const FileCallback &cb)
 // ========== 通用请求 ==========
 void ApiService::get(const QString &url, const Callback &cb, int port, bool withToken)
 {
-    QNetworkRequest req = buildRequest(buildUrl(url, port), withToken);
+    QString finalUrl = url;
+    if (finalUrl.contains("?")) {
+        finalUrl += "&t=" + QString::number(QDateTime::currentMSecsSinceEpoch());
+    } else {
+        finalUrl += "?t=" + QString::number(QDateTime::currentMSecsSinceEpoch());
+    }
+    QNetworkRequest req = buildRequest(buildUrl(finalUrl, port), withToken);
     QNetworkReply *reply = m_manager->get(req);
     handleReply(reply, cb);
 }
@@ -149,6 +155,7 @@ void ApiService::uploadMapPgm(const QString &mapId, const QByteArray &pgmData, c
     QHttpPart filePart;
     filePart.setHeader(QNetworkRequest::ContentDispositionHeader,
         QVariant(QString("form-data; name=\"pgmFile\"; filename=\"map_%1.pgm\"").arg(mapId)));
+    filePart.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("application/octet-stream"));
     filePart.setBody(pgmData);
     multiPart->append(filePart);
 
@@ -158,6 +165,7 @@ void ApiService::uploadMapPgm(const QString &mapId, const QByteArray &pgmData, c
     multiPart->append(mapIdPart);
 
     QNetworkRequest req = buildRequest(buildUrl("/robot/indoor/map/pgm/update", 8048));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QVariant()); // let QNetworkAccessManager set multipart boundary
     QNetworkReply *reply = m_manager->post(req, multiPart);
     multiPart->setParent(reply);
     handleReply(reply, cb);
@@ -304,6 +312,13 @@ void ApiService::getCar(const QString &carId, const Callback &cb)
 void ApiService::addCar(const QJsonObject &data, const Callback &cb)
 {
     post("/robot/car", data, cb);
+}
+
+void ApiService::addCarWithoutKey(const QJsonObject &data, const Callback &cb)
+{
+    // 对应 Vue addCarWithoutKey: POST /robot/car/withoutCertificationKey
+    // 无需设备认证码即可创建设备，需传入 carName 等基本信息
+    post("/robot/car/withoutCertificationKey", data, cb);
 }
 
 void ApiService::linkCar(const QJsonObject &data, const Callback &cb)

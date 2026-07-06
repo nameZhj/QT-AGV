@@ -16,7 +16,7 @@ public:
     static MqttService &instance();
 
     // 连接到 MQTT 服务器
-    void connectToHost(const QString &host, int port = 8083);
+    void connectToHost(const QString &host, int port = 1883);
     void disconnectFromHost();
 
     bool isConnected() const;

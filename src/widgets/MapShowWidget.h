@@ -13,6 +13,7 @@
 #include <QPixmap>
 
 #include <QSet>
+#include "MapCanvas.h"
 
 // 对应 map/show.vue - 地图导航页面
 // 包含地图显示、设备位置实时更新(MQTT)、任务加载、初始化位姿
@@ -57,7 +58,7 @@ private:
     enum DrawStatus { Drag = 0, Pose = 1 };
 
     // UI
-    QGraphicsView *m_mapView = nullptr;
+    MapCanvas *m_mapView = nullptr;
     QGraphicsScene *m_scene = nullptr;
     QComboBox *m_drawStatusCombo = nullptr;
     QPushButton *m_loadTaskBtn = nullptr;

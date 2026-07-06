@@ -76,12 +76,38 @@ void MapShowWidget::setupUI()
     mapLayout->setContentsMargins(0, 0, 0, 0);
 
     m_scene = new QGraphicsScene(this);
-    m_mapView = new QGraphicsView(m_scene);
-    m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
+    m_mapView = new MapCanvas(m_scene, this);
+    m_mapView->setPanWithLeftButton(true);
     m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
     m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     m_mapView->viewport()->installEventFilter(this);
     mapLayout->addWidget(m_mapView);
+
+    // 使用 MapCanvas 统一的信号处理鼠标移动/点击(与其它页面一致)
+    connect(m_mapView, &MapCanvas::sceneMoved, this, [this](const QPointF &sp) {
+        QPointF wp = sceneToWorld(sp.x(), sp.y());
+        m_coordLabel->setText(QString("X: %1  Y: %2").arg(wp.x(), 0, 'f', 2).arg(wp.y(), 0, 'f', 2));
+    });
+    connect(m_mapView, &MapCanvas::sceneClicked, this, [this](const QPointF &sp, Qt::MouseButton btn) {
+        if (btn != Qt::LeftButton) return;
+        if (m_drawStatus != Pose) return;
+        QPointF wp = sceneToWorld(sp.x(), sp.y());
+        QString carId = m_carCombo->currentData().toString();
+        if (carId.isEmpty()) return;
+        QJsonObject pose;
+        pose["x"] = wp.x();
+        pose["y"] = wp.y();
+        pose["angle"] = 0;
+        auto *loading = new LoadingDialog("正在初始化位姿...", this);
+        loading->show();
+        ApiService::instance().initPose(carId, pose, [this, loading](int code, const QJsonObject &) {
+            loading->close();
+            loading->deleteLater();
+            if (code == 200) {
+                QMessageBox::information(this, "成功", "初始化位姿成功");
+            }
+        });
+    });
 
     // 坐标显示
     m_coordLabel = new QLabel("X: 0.00  Y: 0.00");
@@ -323,6 +349,11 @@ void MapShowWidget::loadMapData()
                 }
                 m_imgW = m_mapImage.width();
                 m_imgH = m_mapImage.height();
+
+                // 同步 worldInfo 给 MapCanvas，使其内置的设备定位绘制与其它页面一致
+                if (m_mapView) {
+                    m_mapView->setWorldInfo(m_worldL, m_worldB, m_worldR, m_worldT, m_imgW, m_imgH);
+                }
 
                 double mapW = m_worldR - m_worldL;
                 double mapH = m_worldT - m_worldB;
@@ -916,38 +947,7 @@ void MapShowWidget::onCarSelected(int index)
 bool MapShowWidget::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == m_mapView->viewport()) {
-        if (event->type() == QEvent::MouseMove) {
-            QMouseEvent *me = static_cast<QMouseEvent *>(event);
-            QPointF sp = m_mapView->mapToScene(me->pos());
-            QPointF wp = sceneToWorld(sp.x(), sp.y());
-            m_coordLabel->setText(QString("X: %1  Y: %2").arg(wp.x(), 0, 'f', 2).arg(wp.y(), 0, 'f', 2));
-        } else if (event->type() == QEvent::Wheel) {
-            QWheelEvent *we = static_cast<QWheelEvent *>(event);
-            double factor = we->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
-            m_mapView->scale(factor, factor);
-            return true;
-        } else if (event->type() == QEvent::MouseButtonPress && m_drawStatus == Pose) {
-            QMouseEvent *me = static_cast<QMouseEvent *>(event);
-            QPointF sp = m_mapView->mapToScene(me->pos());
-            QPointF wp = sceneToWorld(sp.x(), sp.y());
-            double wx = wp.x(), wy = wp.y();
-            QString carId = m_carCombo->currentData().toString();
-            if (!carId.isEmpty()) {
-                QJsonObject pose;
-                pose["x"] = wx;
-                pose["y"] = wy;
-                pose["angle"] = 0;
-                auto *loading = new LoadingDialog("正在初始化位姿...", this);
-                loading->show();
-                ApiService::instance().initPose(carId, pose, [this, loading](int code, const QJsonObject &) {
-                    loading->close();
-                    loading->deleteLater();
-                    if (code == 200) {
-                        QMessageBox::information(this, "成功", "初始化位姿成功");
-                    }
-                });
-            }
-        }
+        // MouseMove / Wheel / 点击 已由 MapCanvas 统一信号处理，这里不再拦截
     }
     return QWidget::eventFilter(obj, event);
 }

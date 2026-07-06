@@ -7,6 +7,7 @@
 #include <QTranslator>
 #include <QLibraryInfo>
 #include <QIcon>
+#include <QNetworkProxy>
 #include "core/MainWindow.h"
 #include "core/DeviceManagerDialog.h"
 #include "core/AppConfig.h"
@@ -43,6 +44,11 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     app.setApplicationName("QT-AGV");
     app.setOrganizationName("AGV");
+
+    // 禁用系统代理。本应用连接局域网 AGV 服务器，QTcpSocket/QWebSocket/
+    // QNetworkAccessManager 默认会使用系统代理(含 VPN/科学上网工具)，导致
+    // 原始 MQTT TCP 流量被路由到 HTTP/SOCKS 代理而连接失败(TransportInvalid)。
+    QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
 
     // 设置中文locale，让Qt内置对话框(OK/Cancel/Close等)显示中文
     QLocale::setDefault(QLocale::Chinese);

@@ -9,7 +9,7 @@
 #include <QComboBox>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QGraphicsView>
+#include "MapCanvas.h"
 #include <QGraphicsScene>
 #include <QGraphicsItem>
 #include <QSet>
@@ -83,7 +83,7 @@ private:
     void selectFirstTask();
 
     // UI - 地图区域 (与 MapViewWidget 一致的标尺+网格布局)
-    QGraphicsView *m_mapView = nullptr;
+    MapCanvas      *m_mapView      = nullptr;
     QGraphicsScene *m_scene = nullptr;
     QLabel *m_mapInfoLabel = nullptr;
     QLabel *m_coordLabel = nullptr;
@@ -101,6 +101,7 @@ private:
     QToolButton *m_continueTaskBtn = nullptr;
     QToolButton *m_stopTaskBtn = nullptr;
     QToolButton *m_removeTaskBtn = nullptr;
+    QToolButton *m_resetViewBtn = nullptr;
     QLabel *m_currentTaskLabel = nullptr;
 
     // UI - 任务列表

@@ -16,10 +16,9 @@ struct DeviceProfile {
 };
 
 // 全局应用配置
-// 端口映射关系 (远程服务器):
-//   SSH(22)→6011  HTTP后台(400)→6012  地图资源(4000)→6013
-//   PCD资源(4001)→6014  API(8048)→6015  MQTT(1883)→6016
-//   AGV控制1(8061)→6017  AGV控制2(8062)→6018
+// 已取消端口映射，直接使用各服务的原始端口连接远程服务器
+// (SSH 22, HTTP后台 400, 地图资源 4000, PCD资源 4001, API 8048,
+//  MQTT 1883, AGV控制1 8061, AGV控制2 8062, 地图资源服务 8001)
 class AppConfig
 {
 public:
@@ -60,7 +59,7 @@ public:
     QString baseApiUrl() const;
     QString robotApiUrl(int port) const;
 
-    // Port mapping: internal port → external mapped port
+    // 已取消端口映射，原样返回传入端口（保留函数签名以兼容现有调用点）
     static int mapPort(int internalPort);
 
 private:

@@ -1,5 +1,4 @@
 #include "AppConfig.h"
-#include <QMap>
 #include <QVariant>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -122,7 +121,7 @@ void AppConfig::setServerIp(const QString &ip)
 
 QString AppConfig::mqttHost() const
 {
-    return m_settings.value("mqttHost", serverIp() + ":6016").toString();
+    return m_settings.value("mqttHost", serverIp() + ":1883").toString();
 }
 
 void AppConfig::setMqttHost(const QString &host)
@@ -133,7 +132,6 @@ void AppConfig::setMqttHost(const QString &host)
 
 QString AppConfig::mapHost() const
 {
-    // Map resource server runs on internal port 8001 → external port via mapping (8001→6019)
     return "http://" + serverIp() + ":" + QString::number(mapPort(8001)) + "/RobotResource/map/";
 }
 
@@ -184,7 +182,7 @@ void AppConfig::setDeptId(int id)
 
 QString AppConfig::baseApiUrl() const
 {
-    return "http://" + serverIp() + ":6015";
+    return "http://" + serverIp() + ":8048";
 }
 
 QString AppConfig::robotApiUrl(int port) const
@@ -194,16 +192,6 @@ QString AppConfig::robotApiUrl(int port) const
 
 int AppConfig::mapPort(int internalPort)
 {
-    static const QMap<int, int> portMap = {
-        {22,   6011},
-        {400,  6012},
-        {4000, 6013},
-        {4001, 6014},
-        {8048, 6015},
-        {1883, 6016},
-        {8061, 6017},
-        {8062, 6018},
-        {8001, 6019}
-    };
-    return portMap.value(internalPort, internalPort);
+    // 已取消端口映射，直接使用原始端口连接服务器
+    return internalPort;
 }

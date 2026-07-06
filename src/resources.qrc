@@ -3,5 +3,6 @@
     <file alias="ic-robot.svg">resources/ic-robot.svg</file>
     <file alias="ic-robot1.svg">resources/ic-robot1.svg</file>
     <file alias="app-icon.svg">resources/app-icon.svg</file>
+    <file alias="ic-reset-view.svg">resources/ic-reset-view.svg</file>
 </qresource>
 </RCC>

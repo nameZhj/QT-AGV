@@ -141,3 +141,34 @@ bool MapPgmUtil::parseMapYaml(const QString &yamlText, double &resolution,
     }
     return sawResolution;
 }
+
+QPointF MapPgmUtil::evaluateBezier(const QList<QPointF> &controlPoints, double t)
+{
+    int n = controlPoints.size() - 1;
+    if (n < 0) return QPointF();
+    if (n == 0) return controlPoints[0];
+
+    QList<QPointF> temp = controlPoints;
+    for (int r = 1; r <= n; ++r) {
+        for (int i = 0; i <= n - r; ++i) {
+            temp[i] = (1.0 - t) * temp[i] + t * temp[i + 1];
+        }
+    }
+    return temp[0];
+}
+
+QPainterPath MapPgmUtil::getBezierPath(const QList<QPointF> &controlPoints)
+{
+    QPainterPath path;
+    if (controlPoints.isEmpty()) return path;
+    path.moveTo(controlPoints.first());
+    if (controlPoints.size() < 2) return path;
+
+    int steps = 100;
+    for (int i = 1; i <= steps; ++i) {
+        double t = double(i) / steps;
+        path.lineTo(evaluateBezier(controlPoints, t));
+    }
+    return path;
+}
+

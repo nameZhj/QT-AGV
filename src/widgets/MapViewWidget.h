@@ -1,3 +1,4 @@
+#include "MapCanvas.h"
 #ifndef MAPVIEWWIDGET_H
 #define MAPVIEWWIDGET_H
 
@@ -39,33 +40,7 @@ private:
 };
 
 // ── Map canvas (QGraphicsView subclass) ──────────────────────────────────────
-class MapCanvas : public QGraphicsView
-{
-    Q_OBJECT
-public:
-    explicit MapCanvas(QGraphicsScene *scene, QWidget *parent = nullptr);
-    // 重定位模式下需要用左键拖拽设定朝向，此时应禁用左键拖拽平移
-    void setPanWithLeftButton(bool enabled);
 
-signals:
-    void transformChanged();
-    void sceneClicked(const QPointF &scenePos, Qt::MouseButton btn);
-    void sceneMoved(const QPointF &scenePos);
-    void sceneReleased(const QPointF &scenePos, Qt::MouseButton btn);
-    void canvasResized(const QSize &sz);
-
-protected:
-    void wheelEvent(QWheelEvent *e) override;
-    void mousePressEvent(QMouseEvent *e) override;
-    void mouseMoveEvent(QMouseEvent *e) override;
-    void mouseReleaseEvent(QMouseEvent *e) override;
-    void resizeEvent(QResizeEvent *e) override;
-
-private:
-    bool m_panning = false;
-    bool m_panWithLeftButton = true;
-    QPoint m_lastMousePos;
-};
 
 // ── Main comprehensive map view widget ───────────────────────────────────────
 class MapViewWidget : public QWidget
@@ -97,6 +72,7 @@ private slots:
     void onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn);
     void onSceneMoved(const QPointF &scenePos);
     void onSceneReleased(const QPointF &scenePos, Qt::MouseButton btn);
+    void onResetView();
 
 private:
     void setupUI();
@@ -165,6 +141,7 @@ private:
     QToolButton *m_createMapBtn = nullptr;
     QToolButton *m_switchMapBtn = nullptr;
     QToolButton *m_relocBtn     = nullptr;
+    QToolButton *m_resetViewBtn = nullptr;
     QPushButton *m_gridBtn      = nullptr;
 
     // Relocalization mode (click+drag to set position and heading)

@@ -3,6 +3,11 @@
 #include "core/ApiService.h"
 #include "core/MqttService.h"
 #include "core/LoadingDialog.h"
+
+static const QString kToolBtnStyle = "background:#2c3e50; color:white; border-radius:4px; padding:4px;";
+static const QString kToolBtnPrimary = "background:#3498db; color:white; border-radius:4px; padding:4px;";
+static const QString kBtnPrimary = "background:#2980b9; color:white; border-radius:4px; padding:6px 12px;";
+
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
 #include <QVBoxLayout>
@@ -133,6 +138,17 @@ QPixmap drawMapToolIcon(const QString &name, const QColor &col, int sz = 20)
         p.drawLine(QPointF(sz*0.38, sz*0.42), QPointF(sz*0.38, sz*0.76));
         p.drawLine(QPointF(c, sz*0.42), QPointF(c, sz*0.76));
         p.drawLine(QPointF(sz*0.62, sz*0.42), QPointF(sz*0.62, sz*0.76));
+    } else if (name == "reset") {
+        // 重置视图: 圆弧 + 箭头(顺时针箭头表示"恢复初始")
+        p.setPen(QPen(col, 1.8, Qt::SolidLine, Qt::RoundCap)); p.setBrush(Qt::NoBrush);
+        QRectF r(sz*0.22, sz*0.22, sz*0.56, sz*0.56);
+        p.drawArc(r, 30 * 16, 260 * 16);
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow;
+        arrow << QPointF(sz*0.78, sz*0.30)
+              << QPointF(sz*0.86, sz*0.46)
+              << QPointF(sz*0.66, sz*0.42);
+        p.drawPolygon(arrow);
     }
 
     p.end();
@@ -266,122 +282,6 @@ void RulerWidget::paintEvent(QPaintEvent *)
 // ═══════════════════════════════════════════════════════════════════════════
 //  MapCanvas
 // ═══════════════════════════════════════════════════════════════════════════
-
-MapCanvas::MapCanvas(QGraphicsScene *scene, QWidget *parent)
-    : QGraphicsView(scene, parent)
-{
-    setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
-    setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-    setResizeAnchor(QGraphicsView::AnchorUnderMouse);
-    setDragMode(QGraphicsView::NoDrag);
-    setBackgroundBrush(QColor(0x12, 0x15, 0x1a));
-    setFrameShape(QFrame::NoFrame);
-    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    setCursor(Qt::CrossCursor);
-}
-
-void MapCanvas::wheelEvent(QWheelEvent *e)
-{
-    double factor = e->angleDelta().y() > 0 ? 1.15 : 1.0/1.15;
-    scale(factor, factor);
-    emit transformChanged();
-}
-
-void MapCanvas::setPanWithLeftButton(bool enabled)
-{
-    m_panWithLeftButton = enabled;
-}
-
-void MapCanvas::mousePressEvent(QMouseEvent *e)
-{
-    if (e->button() == Qt::MiddleButton ||
-        (e->button() == Qt::LeftButton &&
-         (m_panWithLeftButton || (e->modifiers() & Qt::AltModifier)))) {
-        m_panning = true;
-        m_lastMousePos = e->pos();
-        setCursor(Qt::ClosedHandCursor);
-        e->accept();
-        return;
-    }
-    QPointF sp = mapToScene(e->pos());
-    emit sceneClicked(sp, e->button());
-    QGraphicsView::mousePressEvent(e);
-}
-
-void MapCanvas::mouseMoveEvent(QMouseEvent *e)
-{
-    if (!m_panning)
-        emit sceneMoved(mapToScene(e->pos()));
-    if (m_panning) {
-        QPoint delta = e->pos() - m_lastMousePos;
-        m_lastMousePos = e->pos();
-        horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
-        verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
-        emit transformChanged();
-        e->accept();
-        return;
-    }
-    QGraphicsView::mouseMoveEvent(e);
-    emit transformChanged();
-}
-
-void MapCanvas::mouseReleaseEvent(QMouseEvent *e)
-{
-    if (m_panning && (e->button() == Qt::MiddleButton || e->button() == Qt::LeftButton)) {
-        m_panning = false;
-        setCursor(Qt::CrossCursor);
-        e->accept();
-        return;
-    }
-    emit sceneReleased(mapToScene(e->pos()), e->button());
-    QGraphicsView::mouseReleaseEvent(e);
-}
-
-void MapCanvas::resizeEvent(QResizeEvent *e)
-{
-    QGraphicsView::resizeEvent(e);
-    emit canvasResized(size());
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  MapViewWidget
-// ═══════════════════════════════════════════════════════════════════════════
-
-static const char *kBtnStyle =
-    "QPushButton{"
-    "  background:#252a35; color:#c8d0d8; border:1px solid #3a3f4a;"
-    "  border-radius:4px; padding:5px 10px; font-size:12px; font-weight:600;"
-    "}"
-    "QPushButton:hover{background:#2d3340; border-color:#4a9eff;}"
-    "QPushButton:pressed{background:#1e4080;}"
-    "QPushButton:disabled{color:#445566; border-color:#2d3340;}";
-
-static const char *kBtnPrimary =
-    "QPushButton{"
-    "  background:#1e6fd4; color:#fff; border:none;"
-    "  border-radius:4px; padding:5px 14px; font-size:12px; font-weight:600;"
-    "}"
-    "QPushButton:hover{background:#2980e8;}"
-    "QPushButton:pressed{background:#155db8;}";
-
-// 二级菜单工具按钮：图标在上、文字在下 (Qt::ToolButtonTextUnderIcon)
-static const char *kToolBtnStyle =
-    "QToolButton{"
-    "  background:transparent; color:#9ab0c8; border:1px solid transparent;"
-    "  border-radius:5px; padding:3px 8px; font-size:11px; font-weight:600;"
-    "}"
-    "QToolButton:hover{background:#2d3340; border-color:#3a3f4a; color:#e0e8f0;}"
-    "QToolButton:pressed{background:#1e4080;}"
-    "QToolButton:disabled{color:#445566;}";
-
-static const char *kToolBtnPrimary =
-    "QToolButton{"
-    "  background:#1e6fd4; color:#fff; border:none;"
-    "  border-radius:5px; padding:3px 8px; font-size:11px; font-weight:600;"
-    "}"
-    "QToolButton:hover{background:#2980e8;}"
-    "QToolButton:pressed{background:#155db8;}";
 
 MapViewWidget::MapViewWidget(QWidget *parent)
     : QWidget(parent)
@@ -548,6 +448,11 @@ void MapViewWidget::setupToolbar(QWidget *parent)
     addBtn("file-download", "下载原文件", SLOT(onDownloadSource()));
     addBtn("upload",        "下发到设备", SLOT(onSendToCar()));
     addBtn("trash",         "删除地图",   SLOT(onDeleteMap()));
+
+    auto *sep3 = new QFrame; sep3->setFrameShape(QFrame::VLine);
+    sep3->setStyleSheet("color:#2d3340;"); lay->addWidget(sep3);
+
+    m_resetViewBtn = addBtn("reset", "重置视图", SLOT(onResetView()));
 
     lay->addStretch();
 }
@@ -1188,6 +1093,14 @@ void MapViewWidget::onViewTransformChanged()
             .arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2));
         m_coordLabel->adjustSize();
     }
+}
+
+void MapViewWidget::onResetView()
+{
+    if (!m_canvas || !m_scene) return;
+    m_canvas->resetTransform();
+    m_canvas->fitInView(m_scene->sceneRect(), Qt::KeepAspectRatioByExpanding);
+    onViewTransformChanged();
 }
 
 void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)

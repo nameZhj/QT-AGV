@@ -78,6 +78,8 @@ private:
     QLabel         *m_statusLabel     = nullptr;
 
     QLineEdit      *m_ipEdit          = nullptr;
+    QLineEdit      *m_nameEdit        = nullptr; // 设备名称输入（无 carId 时显示）
+    QWidget        *m_nameRow         = nullptr; // 设备名称行容器
     QLabel         *m_addStatus       = nullptr;
     QPushButton    *m_confirmBtn      = nullptr;
     QPushButton    *m_cancelBtn       = nullptr;

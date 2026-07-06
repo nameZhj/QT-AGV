@@ -84,6 +84,17 @@ QPixmap drawNavToolIcon(const QString &name, const QColor &col, int sz = 20)
         p.drawRect(QRectF(m1, m1, m2-m1, m2-m1));
         p.drawLine(QPointF(t1,m1), QPointF(t1,m2)); p.drawLine(QPointF(t2,m1), QPointF(t2,m2));
         p.drawLine(QPointF(m1,t1), QPointF(m2,t1)); p.drawLine(QPointF(m1,t2), QPointF(m2,t2));
+    } else if (name == "reset") {
+        // 重置视图: 圆弧 + 箭头
+        p.setPen(QPen(col, 1.8, Qt::SolidLine, Qt::RoundCap)); p.setBrush(Qt::NoBrush);
+        QRectF r(sz*0.22, sz*0.22, sz*0.56, sz*0.56);
+        p.drawArc(r, 30 * 16, 260 * 16);
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow;
+        arrow << QPointF(sz*0.78, sz*0.30)
+              << QPointF(sz*0.86, sz*0.46)
+              << QPointF(sz*0.66, sz*0.42);
+        p.drawPolygon(arrow);
     }
 
     p.end();
@@ -307,6 +318,16 @@ void TaskWidget::setupUI()
     });
     navBar->addWidget(m_gridBtn);
 
+    m_resetViewBtn = mkNavBtn("reset", "重置视图", QColor("#c8d0d8"));
+    m_resetViewBtn->setStyleSheet(S_TOOLBTN);
+    connect(m_resetViewBtn, &QToolButton::clicked, this, [this]() {
+        if (m_mapView) {
+            m_mapView->resetTransform();
+            m_mapView->fitInView(m_scene->sceneRect(), Qt::KeepAspectRatioByExpanding);
+        }
+    });
+    navBar->addWidget(m_resetViewBtn);
+
     navBar->addStretch();
 
     m_currentTaskLabel = new QLabel("无任务");
@@ -341,7 +362,7 @@ void TaskWidget::setupUI()
     mapAreaLayout->addWidget(m_leftRuler, 1, 0);
 
     m_scene = new QGraphicsScene(this);
-    m_mapView = new QGraphicsView(m_scene);
+    m_mapView = new MapCanvas(m_scene, this);
     m_mapView->setStyleSheet(S_MAPVIEW);
     m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
     m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
@@ -1410,12 +1431,50 @@ void TaskWidget::onDelete()
     msgBox.addButton("取消", QMessageBox::NoRole);
     msgBox.exec();
     if (msgBox.clickedButton() == yesBtn) {
-        ApiService::instance().delTask(taskId, [this](int code, const QJsonObject &data) {
-            if (code == 200) {
-                Toast::success(this, "删除成功");
-                getList();
-            }
-        });
+        // 如果该任务处于"被加载"状态(status==0执行中或status==3暂停)，
+        // 先执行"移除"操作，再删除
+        bool isLoaded = (jsonIdStr(task.value("status")) == "0" ||
+                         jsonIdStr(task.value("status")) == "3" ||
+                         taskId == m_currentTaskId);
+        if (isLoaded) {
+            auto *loading = new LoadingDialog("正在移除任务并删除...", this);
+            loading->show();
+            // 先移除
+            ApiService::instance().removeTask(QJsonObject{{"taskId", taskId}},
+                [this, taskId, loading](int code, const QJsonObject &resp) {
+                    if (code == 200) {
+                        // 移除成功后执行删除
+                        ApiService::instance().delTask(taskId, [this, taskId, loading](int code2, const QJsonObject &) {
+                            loading->close();
+                            loading->deleteLater();
+                            if (code2 == 200) {
+                                Toast::success(this, "删除成功");
+                                if (!m_currentTaskId.isEmpty() && m_currentTaskId == taskId) {
+                                    m_currentTaskId.clear();
+                                    m_currentTask = QJsonObject();
+                                    m_currentTaskLabel->setText("当前任务: 无");
+                                    updateTaskButtons();
+                                }
+                                getList();
+                                loadCurrentTask();
+                            }
+                        });
+                    } else {
+                        loading->close();
+                        loading->deleteLater();
+                        QString msg = resp.value("msg").toString();
+                        QMessageBox::warning(this, "错误", msg.isEmpty() ? "移除任务失败" : msg);
+                    }
+                });
+        } else {
+            // 不在加载状态，直接删除
+            ApiService::instance().delTask(taskId, [this](int code, const QJsonObject &data) {
+                if (code == 200) {
+                    Toast::success(this, "删除成功");
+                    getList();
+                }
+            });
+        }
     }
 }
 

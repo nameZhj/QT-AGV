@@ -14,6 +14,7 @@
 #include <QPainterPath>
 #include <QInputDialog>
 #include <QTimer>
+#include <QPointer>
 #include "Toast.h"
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -407,7 +408,7 @@ void DeviceManagerDialog::setupAddPanel()
     auto *phl = new QHBoxLayout(phdr);
     phl->setContentsMargins(16, 0, 16, 0);
 
-    m_cancelBtn = new QPushButton("← 返回");
+    m_cancelBtn = new QPushButton("\u2190 \u8fd4\u56de");
     m_cancelBtn->setFixedHeight(32);
     m_cancelBtn->setStyleSheet(
         "QPushButton{background:transparent;color:#8898a8;border:1px solid #3a3f4a;"
@@ -417,7 +418,7 @@ void DeviceManagerDialog::setupAddPanel()
     phl->addWidget(m_cancelBtn);
     phl->addStretch();
 
-    auto *panelTitle = new QLabel("添加设备");
+    auto *panelTitle = new QLabel("\u6dfb\u52a0\u8bbe\u5907");
     panelTitle->setStyleSheet("color:#c8d0d8; font-size:15px; font-weight:700;");
     phl->addWidget(panelTitle);
     phl->addStretch();
@@ -440,16 +441,35 @@ void DeviceManagerDialog::setupAddPanel()
     fbl->setContentsMargins(32, 28, 32, 28);
     fbl->setSpacing(16);
 
-    auto *fTitle = new QLabel("输入设备IP");
+    auto *fTitle = new QLabel("\u8f93\u5165\u8bbe\u5907IP");
     fTitle->setStyleSheet("color:#c8d0d8; font-size:16px; font-weight:700;");
     fbl->addWidget(fTitle);
 
     fbl->addSpacing(4);
 
     m_ipEdit = new QLineEdit;
-    m_ipEdit->setPlaceholderText("例如: 192.168.1.100");
+    m_ipEdit->setPlaceholderText("\u4f8b\u5982: 192.168.1.100");
     m_ipEdit->setFixedHeight(42);
     fbl->addWidget(m_ipEdit);
+
+    // ── 设备名称行（无 carId 时才显示） ──────────────────────────────────────
+    m_nameRow = new QWidget;
+    auto *nrl = new QVBoxLayout(m_nameRow);
+    nrl->setContentsMargins(0, 0, 0, 0);
+    nrl->setSpacing(6);
+
+    auto *nameLbl = new QLabel("\u8bbe\u5907\u540d\u79f0");
+    nameLbl->setStyleSheet("color:#8898a8; font-size:12px;");
+    nrl->addWidget(nameLbl);
+
+    m_nameEdit = new QLineEdit;
+    m_nameEdit->setPlaceholderText("\u8bf7\u8f93\u5165\u8bbe\u5907\u540d\u79f0");
+    m_nameEdit->setFixedHeight(42);
+    nrl->addWidget(m_nameEdit);
+
+    m_nameRow->hide(); // 默认隐藏，无 carId 时才展开
+    fbl->addWidget(m_nameRow);
+    // ────────────────────────────────────────────────────────────────────────
 
     m_addStatus = new QLabel;
     m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
@@ -457,7 +477,7 @@ void DeviceManagerDialog::setupAddPanel()
     m_addStatus->setMinimumHeight(18);
     fbl->addWidget(m_addStatus);
 
-    m_confirmBtn = new QPushButton("连接并添加");
+    m_confirmBtn = new QPushButton("\u8fde\u63a5\u5e76\u6dfb\u52a0");
     m_confirmBtn->setFixedHeight(42);
     m_confirmBtn->setStyleSheet(
         "QPushButton{background:#00bcd4;color:#fff;border:none;"
@@ -513,6 +533,11 @@ void DeviceManagerDialog::onRefreshAll()
 void DeviceManagerDialog::onAddDevice()
 {
     m_ipEdit->clear();
+    if (m_nameEdit) {
+        m_nameEdit->clear();
+        m_nameRow->hide();
+        m_confirmBtn->setText("连接并添加");
+    }
     m_addStatus->clear();
     m_confirmBtn->setEnabled(true);
     m_stack->setCurrentWidget(m_addPanel);
@@ -537,6 +562,72 @@ void DeviceManagerDialog::onConfirmAdd()
         return;
     }
 
+    // 如果设备名称行已展开，说明此次点击是确认创建新设备
+    if (m_nameRow && m_nameRow->isVisible()) {
+        QString carName = m_nameEdit->text().trimmed();
+        if (carName.isEmpty()) {
+            m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
+            m_addStatus->setText("请输入设备名称");
+            return;
+        }
+        m_confirmBtn->setEnabled(false);
+        m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
+        m_addStatus->setText("正在创建设备...");
+
+        // 参考 Vue submitCarForm: 先登录，再调用 addCarWithoutKey
+        ApiService::instance().login("admin", "admin123",
+            [this, ip, carName](int code, const QJsonObject &data) {
+                if (code != 200 || data.value("token").toString().isEmpty()) {
+                    m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
+                    m_addStatus->setText("登录失败: " +
+                        data.value("msg").toString("服务器无响应"));
+                    m_confirmBtn->setEnabled(true);
+                    return;
+                }
+                AppConfig::instance().setToken(data.value("token").toString());
+
+                // 构造与 Vue carForm 等价的请求体
+                QJsonObject carForm;
+                carForm["deptId"]    = 100;
+                carForm["mapId"]     = QJsonValue();
+                carForm["carName"]   = carName;
+                carForm["ipPort"]    = ip + ":8061";
+                carForm["robotType"] = "1";
+                carForm["machinery"] = "0";
+
+                ApiService::instance().addCarWithoutKey(carForm,
+                    [this, ip, carName](int code2, const QJsonObject &res) {
+                        if (code2 != 200) {
+                            m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
+                            m_addStatus->setText("创建设备失败: " +
+                                res.value("msg").toString("请检查服务器"));
+                            m_confirmBtn->setEnabled(true);
+                            return;
+                        }
+                        // 获取服务器返回的 carId
+                        QJsonValue v = res.value("data").toObject().value("carId");
+                        QString carId = v.isString() ? v.toString()
+                                                     : QString::number(v.toInt());
+
+                        DeviceProfile dev;
+                        dev.ip            = ip;
+                        dev.carId         = carId;
+                        dev.token         = AppConfig::instance().token();
+                        dev.name          = carName;
+                        dev.lastConnected = QDateTime::currentDateTime();
+                        AppConfig::instance().saveDevice(dev);
+                        AppConfig::instance().setAgvId(carId);
+
+                        m_stack->setCurrentWidget(m_mainPanel);
+                        refreshCards();
+                        setStatus(QString("设备 [%1] 已创建并添加").arg(dev.name), "#5cb85c");
+                        Toast::success(this, QString("设备 [%1] 已创建并添加").arg(dev.name));
+                    });
+            });
+        return;
+    }
+
+    // 第一阶段: 登录并尝试获取 carId
     m_confirmBtn->setEnabled(false);
     m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
     m_addStatus->setText("正在连接服务器...");
@@ -555,6 +646,7 @@ void DeviceManagerDialog::onConfirmAdd()
             AppConfig::instance().setToken(data.value("token").toString());
             m_addStatus->setText("登录成功，正在获取设备信息...");
 
+            // 参考 Vue submitForm: 查询设备列表，判断是否已有设备
             ApiService::instance().listCarAllNoLogin(
                 [this, ip](int code2, const QJsonObject &carData) {
                     QString carId, carName;
@@ -568,29 +660,33 @@ void DeviceManagerDialog::onConfirmAdd()
                         }
                     }
 
-                    // 服务器没有返回设备名称时，让用户自己起一个并保存，而不是静默生成占位名
-                    if (carName.isEmpty()) {
-                        bool ok = false;
-                        QString input = QInputDialog::getText(this, "设备名称",
-                            "无法从服务器获取设备名称，请输入一个名称：",
-                            QLineEdit::Normal, QString("AGV @ %1").arg(ip), &ok);
-                        carName = (ok && !input.trimmed().isEmpty())
-                                      ? input.trimmed() : QString("AGV @ %1").arg(ip);
+                    if (!carId.isEmpty()) {
+                        // 服务器已有设备，直接保存（对应 Vue 有设备时的处理逻辑）
+                        if (carName.isEmpty()) carName = QString("AGV @ %1").arg(ip);
+
+                        DeviceProfile dev;
+                        dev.ip            = ip;
+                        dev.carId         = carId;
+                        dev.token         = AppConfig::instance().token();
+                        dev.name          = carName;
+                        dev.lastConnected = QDateTime::currentDateTime();
+                        AppConfig::instance().saveDevice(dev);
+                        AppConfig::instance().setAgvId(carId);
+
+                        m_stack->setCurrentWidget(m_mainPanel);
+                        refreshCards();
+                        setStatus(QString("设备 [%1] 已添加").arg(dev.name), "#5cb85c");
+                        Toast::success(this, QString("设备 [%1] 已添加").arg(dev.name));
+                    } else {
+                        // 服务器无设备，展开设备名称输入行，要求用户输入名称创建
+                        // （对应 Vue 无设备时展示 createCar 对话框）
+                        m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
+                        m_addStatus->setText("服务器无已注册设备，请输入设备名称进行创建");
+                        m_nameEdit->setText(QString("AGV @ %1").arg(ip));
+                        m_nameRow->show();
+                        m_confirmBtn->setEnabled(true);
+                        m_confirmBtn->setText("创建并添加");
                     }
-
-                    DeviceProfile dev;
-                    dev.ip            = ip;
-                    dev.carId         = carId;
-                    dev.token         = AppConfig::instance().token();
-                    dev.name          = carName;
-                    dev.lastConnected = QDateTime::currentDateTime();
-                    AppConfig::instance().saveDevice(dev);
-                    AppConfig::instance().setAgvId(carId);
-
-                    m_stack->setCurrentWidget(m_mainPanel);
-                    refreshCards();
-                    setStatus(QString("设备 [%1] 已添加").arg(dev.name), "#5cb85c");
-                    Toast::success(this, QString("设备 [%1] 已添加").arg(dev.name));
                 });
         });
 }
@@ -622,8 +718,11 @@ void DeviceManagerDialog::connectDevice(int index)
 
     setStatus(QString("正在连接 %1 ...").arg(list[index].ip));
 
+    // 使用 QPointer 保护异步回调，防止 dialog 在请求返回前被销毁
+    QPointer<DeviceManagerDialog> guard(this);
     ApiService::instance().login("admin", "admin123",
-        [this, index](int code, const QJsonObject &data) {
+        [this, index, guard](int code, const QJsonObject &data) {
+            if (!guard) return;  // dialog 已销毁
             if (code == 200 && !data.value("token").toString().isEmpty()) {
                 QString token = data.value("token").toString();
                 AppConfig::instance().setToken(token);

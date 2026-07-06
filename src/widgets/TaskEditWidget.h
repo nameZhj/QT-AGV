@@ -2,7 +2,7 @@
 #define TASKEDITWIDGET_H
 
 #include <QWidget>
-#include <QGraphicsView>
+#include "MapCanvas.h"
 #include <QGraphicsScene>
 #include <QJsonObject>
 #include <QJsonArray>

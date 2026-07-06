@@ -5,6 +5,10 @@
 #include <QByteArray>
 #include <QImage>
 
+#include <QPointF>
+#include <QList>
+#include <QPainterPath>
+
 // PGM(P5/P2) 解析 + ROS map_server 风格 YAML 解析。
 // 用于直接从设备/服务器拉取的原始 carto_map.pgm + carto_map.yaml 渲染地图，
 // 绕开后端为生成瓦片金字塔而对图片做 padding/缩放后派生的 mapWidth/mapHeight/offsetX/offsetY，
@@ -23,6 +27,12 @@ public:
     // 解析 ROS map_server 风格的 yaml 文本：resolution / origin: [x,y,yaw] / negate
     static bool parseMapYaml(const QString &yamlText, double &resolution,
                               double &originX, double &originY, bool &negate);
+
+    // 评估任意阶贝塞尔曲线在参数 t (0.0 到 1.0) 的坐标值
+    static QPointF evaluateBezier(const QList<QPointF> &controlPoints, double t);
+
+    // 为任意阶贝塞尔曲线生成 QPainterPath 绘制路径
+    static QPainterPath getBezierPath(const QList<QPointF> &controlPoints);
 };
 
 #endif // MAPPGMUTIL_H

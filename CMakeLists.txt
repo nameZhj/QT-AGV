@@ -25,9 +25,19 @@ file(GLOB_RECURSE SOURCES
     main.cpp
 )
 
+# Generate app.rc with an absolute path to the icon, so windres reliably
+# locates the .ico regardless of its working directory.
+set(APP_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/src/resources/app-icon.ico)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/resources/app.rc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/app.rc
+    @ONLY
+)
+
 add_executable(${PROJECT_NAME} WIN32
     ${SOURCES}
     src/resources.qrc
+    ${CMAKE_CURRENT_BINARY_DIR}/app.rc
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE

@@ -218,6 +218,18 @@ QPixmap drawToolIcon(const QString &name, const QColor &col, int sz = 22)
         p.drawLine(QPointF(t1,m1), QPointF(t1,m2)); p.drawLine(QPointF(t2,m1), QPointF(t2,m2));
         p.drawLine(QPointF(m1,t1), QPointF(m2,t1)); p.drawLine(QPointF(m1,t2), QPointF(m2,t2));
     }
+    else if (name == "reset") {
+        // 重置视图: 圆弧 + 箭头(顺时针箭头表示"恢复初始")
+        p.setPen(QPen(col, 1.8, Qt::SolidLine, Qt::RoundCap)); p.setBrush(Qt::NoBrush);
+        QRectF r(sz*0.22, sz*0.22, sz*0.56, sz*0.56);
+        p.drawArc(r, 30 * 16, 260 * 16);
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow;
+        arrow << QPointF(sz*0.78, sz*0.30)
+              << QPointF(sz*0.86, sz*0.46)
+              << QPointF(sz*0.66, sz*0.42);
+        p.drawPolygon(arrow);
+    }
     else if (name == "robot") {
         QPolygonF tri;
         tri << QPointF(sz*0.85, c) << QPointF(sz*0.20, sz*0.82) << QPointF(sz*0.20, sz*0.18);
@@ -320,6 +332,24 @@ void MapEditWidget::setupUI()
     m_mapInfoLabel->setStyleSheet("color:#9ab8d8;font-weight:bold;font-size:13px;");
     tl->addWidget(m_mapInfoLabel);
     tl->addStretch();
+
+    m_resetViewBtn = new QPushButton;
+    m_resetViewBtn->setIcon(makeToolIcon("reset"));
+    m_resetViewBtn->setIconSize(QSize(18, 18));
+    m_resetViewBtn->setFixedSize(30, 30);
+    m_resetViewBtn->setToolTip(ttHtml("重置视图", "恢复地图到初始缩放与角度"));
+    m_resetViewBtn->setCursor(Qt::PointingHandCursor);
+    m_resetViewBtn->installEventFilter(new InstantTip(m_resetViewBtn));
+    m_resetViewBtn->setStyleSheet(
+        "QPushButton{background:transparent;border:none;border-radius:5px;padding:0;}"
+        "QPushButton:hover{background:rgba(255,255,255,12);}");
+    connect(m_resetViewBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_mapView || !m_scene) return;
+        m_mapView->resetTransform();
+        m_mapView->fitInView(m_scene->sceneRect(), Qt::KeepAspectRatioByExpanding);
+        updateRulers();
+    });
+    tl->addWidget(m_resetViewBtn);
 
     m_gridBtn = new QPushButton;
     m_gridBtn->setIcon(makeToolIcon("grid"));
@@ -449,7 +479,7 @@ void MapEditWidget::setupUI()
 
     // ── Map view with ruler strips ────────────────────────────────────────────
     m_scene   = new QGraphicsScene(this);
-    m_mapView = new QGraphicsView(m_scene);
+    m_mapView = new MapCanvas(m_scene, this);
     m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
     m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     m_mapView->setAlignment(Qt::AlignLeft | Qt::AlignTop);
@@ -802,6 +832,8 @@ void MapEditWidget::cancelDraw()
     m_drawHasP1 = false;
     m_drawP1    = {};
     m_drawP1Id.clear();
+    m_curveCtrlPts.clear();
+    m_curveCtrlIds.clear();
     clearPreview();
     updateSnapIndicator({});
 }
@@ -1202,11 +1234,11 @@ void MapEditWidget::removeAllHandles()
 void MapEditWidget::updateCurveShape(const QString &id)
 {
     auto it = m_curveHandles.find(id);
-    if (it == m_curveHandles.end() || it.value().size() < 3) return;
-    QPointF p1 = it.value()[0]->pos();
-    QPointF pc = it.value()[1]->pos();
-    QPointF p2 = it.value()[2]->pos();
-    QPainterPath path; path.moveTo(p1); path.quadTo(pc, p2);
+    if (it == m_curveHandles.end() || it.value().size() < 2) return;
+    // 支持任意阶贝塞尔曲线: 收集所有控制点位置
+    QList<QPointF> pts;
+    for (auto *h : it.value()) pts.append(h->pos());
+    QPainterPath path = MapPgmUtil::getBezierPath(pts);
     auto *pi = qgraphicsitem_cast<QGraphicsPathItem*>(m_featureItems.value("curve_" + id));
     if (pi) pi->setPath(path);
 }
@@ -1216,6 +1248,25 @@ void MapEditWidget::updateCurveShape(const QString &id)
 void MapEditWidget::updatePreview(const QPointF &sp)
 {
     clearPreview();
+    if (m_drawStatus == Curve && !m_curveCtrlPts.isEmpty()) {
+        // 多阶贝塞尔曲线预览: 已添加控制点 + 鼠标当前位置作为最后一个控制点
+        QList<QPointF> pts = m_curveCtrlPts;
+        pts.append(sp);
+        if (pts.size() >= 2) {
+            QPainterPath path = MapPgmUtil::getBezierPath(pts);
+            QPen pen(QColor(108, 92, 231, 200), 1.6, Qt::DashLine);
+            m_previewItem = m_scene->addPath(path, pen);
+            m_previewItem->setZValue(100);
+            // 显示控制点连线(辅助参考线)
+            QPen aidPen(QColor(250, 190, 50, 120), 1.0, Qt::DotLine);
+            for (int i = 0; i + 1 < pts.size(); ++i) {
+                auto *ln = m_scene->addLine(pts[i].x(), pts[i].y(), pts[i+1].x(), pts[i+1].y(), aidPen);
+                ln->setZValue(99);
+                m_previewAids.append(ln);
+            }
+        }
+        return;
+    }
     if (!m_drawHasP1) return;
     if (m_drawStatus == Line || m_drawStatus == Curve) {
         QPen pen(QColor(250, 190, 50, 170), 1.4, Qt::DashLine);
@@ -1227,6 +1278,8 @@ void MapEditWidget::updatePreview(const QPointF &sp)
 void MapEditWidget::clearPreview()
 {
     if (m_previewItem) { m_scene->removeItem(m_previewItem); delete m_previewItem; m_previewItem = nullptr; }
+    for (auto *ln : m_previewAids) { m_scene->removeItem(ln); delete ln; }
+    m_previewAids.clear();
 }
 
 // ── Feature addition ──────────────────────────────────────────────────────────
@@ -1299,6 +1352,67 @@ void MapEditWidget::addCurve(const QPointF &a, const QPointF &b,
     renderMap();
     if (m_tableVisible && m_currentTable == "curve") refreshTable();
     // Stay in Curve mode for continuous drawing; right-click → Drag to adjust handles
+}
+
+void MapEditWidget::finalizeCurve()
+{
+    if (m_curveCtrlPts.size() < 2) {
+        cancelDraw();
+        return;
+    }
+    addBezierCurve(m_curveCtrlPts, m_curveCtrlIds);
+    // 清理绘制状态，保持在 Curve 模式以便连续绘制
+    m_curveCtrlPts.clear();
+    m_curveCtrlIds.clear();
+    m_drawHasP1 = false;
+    m_drawP1 = {};
+    m_drawP1Id.clear();
+    clearPreview();
+}
+
+void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
+                                   const QList<QString> &snapIds)
+{
+    if (scenePts.size() < 2) return;
+    int n = m_curves.size() + 1;
+    QJsonObject cv;
+    cv["id"]   = QString("b_%1").arg(n);
+    cv["name"] = QString("曲%1").arg(n);
+    cv["direct"] = 100;
+
+    // 起终点(世界坐标)
+    QPointF wStart = sceneToWorld(scenePts.first().x(), scenePts.first().y());
+    QPointF wEnd   = sceneToWorld(scenePts.last().x(),  scenePts.last().y());
+    cv["x1"] = wStart.x(); cv["y1"] = wStart.y();
+    cv["x2"] = wEnd.x();   cv["y2"] = wEnd.y();
+    cv["startid"] = snapIds.isEmpty()     ? QString() : snapIds.first();
+    cv["endid"]   = (snapIds.size() >= 2) ? snapIds.last() : QString();
+
+    // 控制点数组(世界坐标)
+    QJsonArray ctrlArr;
+    for (const QPointF &sp : scenePts) {
+        QPointF wp = sceneToWorld(sp.x(), sp.y());
+        QJsonObject pt;
+        pt["x"] = wp.x();
+        pt["y"] = wp.y();
+        ctrlArr.append(pt);
+    }
+    cv["controlPoints"] = ctrlArr;
+
+    // 兼容旧字段(二次/三次贝塞尔)
+    if (scenePts.size() == 3) {
+        QPointF wc = sceneToWorld(scenePts[1].x(), scenePts[1].y());
+        cv["cx"] = wc.x(); cv["cy"] = wc.y();
+    } else if (scenePts.size() == 4) {
+        QPointF c1 = sceneToWorld(scenePts[1].x(), scenePts[1].y());
+        QPointF c2 = sceneToWorld(scenePts[2].x(), scenePts[2].y());
+        cv["cx1"] = c1.x(); cv["cy1"] = c1.y();
+        cv["cx2"] = c2.x(); cv["cy2"] = c2.y();
+    }
+
+    m_curves.append(cv);
+    renderMap();
+    if (m_tableVisible && m_currentTable == "curve") refreshTable();
 }
 
 // ── Feature selection ─────────────────────────────────────────────────────────
@@ -1672,8 +1786,13 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
     if (event->type() == QEvent::MouseButtonPress) {
         auto *me = static_cast<QMouseEvent*>(event);
 
-        // Right-click: cancel draw / return to Drag
+        // Right-click: complete curve drawing / cancel draw / return to Drag
         if (me->button() == Qt::RightButton) {
+            // Curve mode with control points → finalize the curve
+            if (m_drawStatus == Curve && m_curveCtrlPts.size() >= 2) {
+                finalizeCurve();
+                return true;
+            }
             if (m_drawStatus != Drag) setDrawMode(Drag);
             else cancelDraw();
             return true;
@@ -1735,19 +1854,18 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
                 clearPreview();
             }
             break;
-        case Curve:
-            if (!m_drawHasP1) {
+        case Curve: {
+            // 多阶贝塞尔：累积控制点
+            m_curveCtrlPts.append(usePos);
+            m_curveCtrlIds.append(useId);
+            // 第一个点也同步到 m_drawP1（便于兼容旧逻辑）
+            if (m_curveCtrlPts.size() == 1) {
                 m_drawP1   = usePos;
                 m_drawP1Id = useId;
                 m_drawHasP1 = true;
-            } else {
-                addCurve(m_drawP1, usePos, m_drawP1Id, useId);
-                // Continuous: last endpoint becomes new P1
-                m_drawP1   = usePos;
-                m_drawP1Id = useId;
-                clearPreview();
             }
             break;
+        }
         default: break;
         }
         return true;
