@@ -161,6 +161,11 @@ void EditConfigWidget::setupUI()
     mainLayout->addWidget(splitter);
 }
 
+void EditConfigWidget::refreshData()
+{
+    loadAll();
+}
+
 void EditConfigWidget::loadAll()
 {
     ApiService::instance().getAllConfigsPreserve([this](int code, const QByteArray &rawData) {

@@ -4,6 +4,7 @@
 #include "core/ApiService.h"
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
+#include "core/TeleopController.h"
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -29,11 +30,13 @@ CreateMapWidget::CreateMapWidget(QWidget *parent)
 {
     setFocusPolicy(Qt::StrongFocus);
 
-    m_teleopTimer = new QTimer(this);
-    m_teleopTimer->setInterval(100);
-    connect(m_teleopTimer, &QTimer::timeout, this, &CreateMapWidget::onTeleopTick);
-
     setupUI();
+
+    // 同步全局 TeleopController 状态到本页"启用遥控"按钮与 HUD
+    connect(&TeleopController::instance(), &TeleopController::activeChanged,
+            this, &CreateMapWidget::onTeleopActiveChanged);
+    connect(&TeleopController::instance(), &TeleopController::brakeChanged,
+            this, &CreateMapWidget::onTeleopBrakeChanged);
 }
 
 void CreateMapWidget::setupUI()
@@ -140,15 +143,30 @@ void CreateMapWidget::setupUI()
     m_teleopEnableBtn = new QPushButton("启用遥控");
     m_teleopEnableBtn->setCheckable(true);
     m_teleopEnableBtn->setFocusPolicy(Qt::NoFocus);
-    connect(m_teleopEnableBtn, &QPushButton::toggled, this, [this](bool checked) {
-        m_teleopEnabled = checked;
-        m_teleopEnableBtn->setText(checked ? "停用遥控" : "启用遥控");
-        m_teleopLabel->setText(checked ? "已启用" : "已停用");
-        // 通过 MQTT 发送遥控启用/停用
-        QString agvId = AppConfig::instance().agvId();
-        MqttService::instance().publish(
-            QString("/rob/%1/teleop_enable").arg(agvId),
-            checked ? "1" : "0");
+    // 同步初始状态（避免与全局 TeleopController 不一致）
+    m_teleopEnableBtn->setChecked(TeleopController::instance().isActive());
+    m_teleopEnableBtn->setText(TeleopController::instance().isActive() ? "停用遥控" : "启用遥控");
+    m_teleopLabel->setText(TeleopController::instance().isActive() ? "已启用" : "已停用");
+    // 点击委托给全局 TeleopController；状态回流由 onTeleopActiveChanged 同步
+    connect(m_teleopEnableBtn, &QPushButton::clicked, this, [this]() {
+        // 阻止 toggled 默认行为：以 TeleopController 为单一真源
+        bool target = !TeleopController::instance().isActive();
+        if (!MqttService::instance().isConnected()) {
+            Toast::error(this, "MQTT 未连接，无法启用遥控");
+            // 立即回滚勾选状态
+            QMetaObject::invokeMethod(this, [this]() {
+                m_teleopEnableBtn->setChecked(TeleopController::instance().isActive());
+            }, Qt::QueuedConnection);
+            return;
+        }
+        if (AppConfig::instance().agvId().isEmpty()) {
+            Toast::error(this, "未选择设备，无法启用遥控");
+            QMetaObject::invokeMethod(this, [this]() {
+                m_teleopEnableBtn->setChecked(TeleopController::instance().isActive());
+            }, Qt::QueuedConnection);
+            return;
+        }
+        TeleopController::instance().setActive(target);
     });
     teleopLayout->addWidget(m_teleopEnableBtn);
 
@@ -237,127 +255,28 @@ void CreateMapWidget::showEvent(QShowEvent *event)
     QWidget::showEvent(event);
     initMqtt();
     setFocus();
-    m_teleopTimer->start();
 }
 
 void CreateMapWidget::hideEvent(QHideEvent *event)
 {
     QWidget::hideEvent(event);
-    m_teleopTimer->stop();
-    m_keyForward = m_keyBack = m_keyLeft = m_keyRight = false;
-    m_keyBrake = m_keyBoost = m_keyHoistUp = m_keyHoistDown = false;
-    m_hasPublishedLinear = m_hasPublishedAngular = false;
+    // 注：全局键盘遥控由 TeleopController 管理，不随页面隐藏而停止
     disconnectMqtt();
 }
 
-void CreateMapWidget::keyPressEvent(QKeyEvent *event)
+void CreateMapWidget::onTeleopActiveChanged(bool active)
 {
-    if (event->isAutoRepeat()) { event->accept(); return; }
-    switch (event->key()) {
-    case Qt::Key_Up:    m_keyForward  = true; break;
-    case Qt::Key_Down:  m_keyBack     = true; break;
-    case Qt::Key_Left:  m_keyLeft     = true; break;
-    case Qt::Key_Right: m_keyRight    = true; break;
-    case Qt::Key_Space: m_keyBrake    = true; break;
-    case Qt::Key_Control: m_keyBoost  = true; break;
-    case Qt::Key_P:     m_keyHoistUp  = true; break;
-    case Qt::Key_L:     m_keyHoistDown = true; break;
-    default: QWidget::keyPressEvent(event); return;
-    }
-    event->accept();
-    updateTeleopMotion();
+    if (!m_teleopEnableBtn) return;
+    // 单一真源：TeleopController；按钮状态以它为准
+    QSignalBlocker blocker(m_teleopEnableBtn);
+    m_teleopEnableBtn->setChecked(active);
+    m_teleopEnableBtn->setText(active ? "停用遥控" : "启用遥控");
+    m_teleopLabel->setText(active ? "已启用" : "已停用");
 }
 
-void CreateMapWidget::keyReleaseEvent(QKeyEvent *event)
+void CreateMapWidget::onTeleopBrakeChanged(bool brake)
 {
-    if (event->isAutoRepeat()) { event->accept(); return; }
-    switch (event->key()) {
-    case Qt::Key_Up:    m_keyForward  = false; break;
-    case Qt::Key_Down:  m_keyBack     = false; break;
-    case Qt::Key_Left:  m_keyLeft     = false; break;
-    case Qt::Key_Right: m_keyRight    = false; break;
-    case Qt::Key_Space: m_keyBrake    = false; break;
-    case Qt::Key_Control: m_keyBoost  = false; break;
-    case Qt::Key_P:     m_keyHoistUp  = false; break;
-    case Qt::Key_L:     m_keyHoistDown = false; break;
-    default: QWidget::keyReleaseEvent(event); return;
-    }
-    event->accept();
-    updateTeleopMotion();
-}
-
-void CreateMapWidget::onTeleopTick()
-{
-    if (!m_teleopEnabled) return;
-
-    updateTeleopMotion();
-
-    // Hoist：按住期间持续发送（与速度去重逻辑无关）
-    QString agvId = AppConfig::instance().agvId();
-    if (m_keyHoistUp)
-        MqttService::instance().publish(QString("/rob/%1/hoisting_status").arg(agvId), "1");
-    else if (m_keyHoistDown)
-        MqttService::instance().publish(QString("/rob/%1/hoisting_status").arg(agvId), "0");
-}
-
-// 参考 Vue TeleopControls：方向键速度按"值变化"去重发送（按下/松开各发一次，
-// 持续按住不重复发送）；空格刹车则在按住期间每个 tick 都强制发0，松开后因目标值
-// 仍是0、与上次发布值相同，去重逻辑会自然停止继续发送。
-void CreateMapWidget::updateTeleopMotion()
-{
-    if (!m_teleopEnabled) return;
-
-    QString agvId = AppConfig::instance().agvId();
-
-    if (m_keyBrake) {
-        MqttService::instance().publish(
-            QString("/rob/%1/linear_speed").arg(agvId),
-            QJsonDocument(QJsonObject{{"velocity", 0.0}}).toJson(QJsonDocument::Compact));
-        MqttService::instance().publish(
-            QString("/rob/%1/angular_speed").arg(agvId),
-            QJsonDocument(QJsonObject{{"velocity", 0.0}}).toJson(QJsonDocument::Compact));
-        m_lastPublishedLinear = 0.0;
-        m_lastPublishedAngular = 0.0;
-        m_hasPublishedLinear = m_hasPublishedAngular = true;
-
-        m_brakeLabel->setText("按下(键盘)");
-        m_linearLabel->setText("0.00 m/s");
-        m_angularLabel->setText("0.00 rad/s");
-        return;
-    }
-    m_brakeLabel->setText("松开");
-
-    constexpr double kBase = 0.5;
-    constexpr double kAngBase = 0.3;
-    const double mult = m_keyBoost ? 2.0 : 1.0;
-
-    double linear  = 0.0;
-    double angular = 0.0;
-    if (m_keyForward)  linear  =  kBase * mult;
-    if (m_keyBack)     linear  = -kBase * mult;
-    if (m_keyLeft)     angular =  kAngBase * mult;
-    if (m_keyRight)    angular = -kAngBase * mult;
-
-    const double linRounded = qRound(linear * 100.0) / 100.0;
-    const double angRounded = qRound(angular * 100.0) / 100.0;
-
-    if (!m_hasPublishedLinear || linRounded != m_lastPublishedLinear) {
-        MqttService::instance().publish(
-            QString("/rob/%1/linear_speed").arg(agvId),
-            QJsonDocument(QJsonObject{{"velocity", linear}}).toJson(QJsonDocument::Compact));
-        m_lastPublishedLinear = linRounded;
-        m_hasPublishedLinear = true;
-    }
-    if (!m_hasPublishedAngular || angRounded != m_lastPublishedAngular) {
-        MqttService::instance().publish(
-            QString("/rob/%1/angular_speed").arg(agvId),
-            QJsonDocument(QJsonObject{{"velocity", angular}}).toJson(QJsonDocument::Compact));
-        m_lastPublishedAngular = angRounded;
-        m_hasPublishedAngular = true;
-    }
-
-    m_linearLabel->setText(QString::number(linear, 'f', 2) + " m/s");
-    m_angularLabel->setText(QString::number(angular, 'f', 2) + " rad/s");
+    if (m_brakeLabel) m_brakeLabel->setText(brake ? "按下(键盘)" : "松开");
 }
 
 void CreateMapWidget::initMqtt()

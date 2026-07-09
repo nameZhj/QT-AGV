@@ -16,6 +16,8 @@ class EditConfigWidget : public QWidget
     Q_OBJECT
 public:
     explicit EditConfigWidget(QWidget *parent = nullptr);
+    // 刷新参数配置数据(由 MainWindow 在切换菜单时调用)
+    void refreshData();
 
 private slots:
     void onSave();

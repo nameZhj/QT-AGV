@@ -343,6 +343,7 @@ void TaskEditWidget::setupUI()
         m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
         m_dragBtn->setChecked(true);
         m_targetBtn->setChecked(false);
+        updateSnapIndicator({});
     });
     connect(m_targetBtn, &QPushButton::clicked, [this]() {
         m_drawStatus = Target;
@@ -959,6 +960,8 @@ void TaskEditWidget::loadRouteData()
         m_points = QJsonArray();
         m_lines  = QJsonArray();
         m_curves = QJsonArray();
+        m_charges = QJsonArray();
+        m_highPrecisionPoints = QJsonArray();
 
         QString jsonStr = data.value("json").toString();
         if (jsonStr.isEmpty()) return;
@@ -989,13 +992,18 @@ void TaskEditWidget::loadRouteData()
             QString     id     = props.value("id").toString();
 
             if (gtype == "Point") {
-                if (id.startsWith("c_") || id.startsWith("hp_")) continue;
                 QJsonObject pt;
                 pt["id"]   = id;
                 pt["x"]    = coords[0].toDouble();
                 pt["y"]    = coords[1].toDouble();
                 pt["name"] = props.value("name").toString();
-                m_points.append(pt);
+                if (id.startsWith("c_"))
+                    m_charges.append(pt);
+                else if (id.startsWith("hp_")) {
+                    pt["visible"] = props.value("visible").toBool(true);
+                    m_highPrecisionPoints.append(pt);
+                } else
+                    m_points.append(pt);
             } else if (gtype == "LineString") {
                 if (coords.size() < 2) continue;
                 QJsonObject ln;
@@ -1007,16 +1015,36 @@ void TaskEditWidget::loadRouteData()
                 ln["name"] = props.value("name").toString();
                 m_lines.append(ln);
             } else if (gtype == "MultiPoint") {
-                if (coords.size() < 3) continue;
+                if (coords.size() < 2) continue;
                 QJsonObject cv;
                 cv["id"]   = id;
-                cv["x1"]   = coords[0].toArray()[0].toDouble();
-                cv["y1"]   = coords[0].toArray()[1].toDouble();
-                cv["cx"]   = coords[1].toArray()[0].toDouble();
-                cv["cy"]   = coords[1].toArray()[1].toDouble();
-                cv["x2"]   = coords[2].toArray()[0].toDouble();
-                cv["y2"]   = coords[2].toArray()[1].toDouble();
                 cv["name"] = props.value("name").toString();
+                cv["direct"] = props.value("direct").toInt(100);
+                cv["startid"] = props.value("startid").toString();
+                cv["endid"]   = props.value("endid").toString();
+                cv["x1"] = coords.first().toArray()[0].toDouble();
+                cv["y1"] = coords.first().toArray()[1].toDouble();
+                cv["x2"] = coords.last().toArray()[0].toDouble();
+                cv["y2"] = coords.last().toArray()[1].toDouble();
+                QJsonArray ctrlArr;
+                for (const auto &c : coords) {
+                    QJsonArray ca = c.toArray();
+                    if (ca.size() < 2) continue;
+                    QJsonObject pt;
+                    pt["x"] = ca[0].toDouble();
+                    pt["y"] = ca[1].toDouble();
+                    ctrlArr.append(pt);
+                }
+                cv["controlPoints"] = ctrlArr;
+                if (coords.size() == 3) {
+                    cv["cx"] = coords[1].toArray()[0].toDouble();
+                    cv["cy"] = coords[1].toArray()[1].toDouble();
+                } else if (coords.size() == 4) {
+                    cv["cx1"] = coords[1].toArray()[0].toDouble();
+                    cv["cy1"] = coords[1].toArray()[1].toDouble();
+                    cv["cx2"] = coords[2].toArray()[0].toDouble();
+                    cv["cy2"] = coords[2].toArray()[1].toDouble();
+                }
                 m_curves.append(cv);
             }
         }
@@ -1058,6 +1086,7 @@ void TaskEditWidget::renderMap()
     m_scene->clear();
     m_targetItems.clear();
     m_selectedTargetItem = nullptr;
+    m_snapIndicator = nullptr;   // scene->clear() 已删除该项，置空避免悬空指针
 
     // 渲染底图
     if (!m_mapImage.isNull()) {
@@ -1073,6 +1102,22 @@ void TaskEditWidget::renderMap()
         e->setPos(sp); e->setZValue(10); e->setOpacity(0.7);
     }
 
+    // 渲染充电点
+    for (const auto &item : m_charges) {
+        QJsonObject pt = item.toObject();
+        QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
+        auto *e = m_scene->addEllipse(-5,-5,10,10, QPen(QColor("#f39c12").darker(120),1.5), QBrush(QColor("#f39c12")));
+        e->setPos(sp); e->setZValue(10); e->setOpacity(0.85);
+    }
+
+    // 渲染高精度点：黄色圆点，与普通点统一大小和样式
+    for (const auto &item : m_highPrecisionPoints) {
+        QJsonObject pt = item.toObject();
+        QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
+        auto *e = m_scene->addEllipse(-5,-5,10,10, QPen(QColor("#f2c200").darker(120),1), QBrush(QColor("#f2c200")));
+        e->setPos(sp); e->setZValue(10); e->setOpacity(0.85);
+    }
+
     // 渲染线
     for (const auto &item : m_lines) {
         QJsonObject ln = item.toObject();
@@ -1082,15 +1127,29 @@ void TaskEditWidget::renderMap()
         li->setZValue(5); li->setOpacity(0.65);
     }
 
-    // 渲染曲线
+    // 渲染曲线(支持多阶贝塞尔)
     for (const auto &item : m_curves) {
         QJsonObject cv = item.toObject();
-        QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
-        QPointF pc = worldToScene(cv.value("cx").toDouble(), cv.value("cy").toDouble());
-        QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
-        QPainterPath path; path.moveTo(p1); path.quadTo(pc, p2);
-        auto *pi = m_scene->addPath(path, QPen(QColor("#6c5ce7"),1.5));
-        pi->setZValue(5); pi->setOpacity(0.65);
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        if (ctrlArr.size() >= 2) {
+            // 多阶贝塞尔: 使用 MapPgmUtil::getBezierPath
+            QList<QPointF> scenePts;
+            for (const auto &pv : ctrlArr) {
+                QJsonObject pt = pv.toObject();
+                scenePts.append(worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble()));
+            }
+            QPainterPath path = MapPgmUtil::getBezierPath(scenePts);
+            auto *pi = m_scene->addPath(path, QPen(QColor("#6c5ce7"),1.5));
+            pi->setZValue(5); pi->setOpacity(0.65);
+        } else {
+            // 兼容旧格式: 3点二次贝塞尔
+            QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
+            QPointF pc = worldToScene(cv.value("cx").toDouble(), cv.value("cy").toDouble());
+            QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+            QPainterPath path; path.moveTo(p1); path.quadTo(pc, p2);
+            auto *pi = m_scene->addPath(path, QPen(QColor("#6c5ce7"),1.5));
+            pi->setZValue(5); pi->setOpacity(0.65);
+        }
     }
 
     // 渲染任务目标点 (世界坐标→场景像素坐标)
@@ -1125,19 +1184,6 @@ void TaskEditWidget::renderMap()
             QPointF a=worldToScene(xMin,wy),b=worldToScene(xMax,wy);
             m_scene->addLine(a.x(),a.y(),b.x(),b.y(), std::abs(wy)<1e-6?ag:gp)->setZValue(-50);
         }
-        // 坐标轴指示器
-        QPointF O=worldToScene(0,0);
-        const double arm=52,aL=11,aW=4.5,lw=1.8;
-        QColor xC(210,45,45,230),yC(30,185,60,230);
-        auto mkA=[&](QPointF tip,double dx,double dy,QColor c){
-            QPolygonF t; t<<tip<<QPointF(tip.x()-dx*aL-dy*aW,tip.y()-dy*aL+dx*aW)
-                          <<QPointF(tip.x()-dx*aL+dy*aW,tip.y()-dy*aL-dx*aW);
-            m_scene->addPolygon(t,QPen(Qt::NoPen),QBrush(c))->setZValue(12);
-        };
-        m_scene->addLine(O.x(),O.y(),O.x()+arm-aL,O.y(),QPen(xC,lw))->setZValue(10);
-        mkA({O.x()+arm,O.y()},1,0,xC);
-        m_scene->addLine(O.x(),O.y(),O.x(),O.y()-arm+aL,QPen(yC,lw))->setZValue(10);
-        mkA({O.x(),O.y()-arm},0,-1,yC);
     }
 
     m_scene->setSceneRect(0, 0, m_imgW, m_imgH);
@@ -1176,7 +1222,11 @@ void TaskEditWidget::updateTargetSelectionHighlight()
 
 void TaskEditWidget::addTargetPoint(const QPointF &scenePos)
 {
-    QPointF world = sceneToWorld(scenePos.x(), scenePos.y());
+    // 任务点必须落在路网(点/线/曲线)上: 无论点击位置离路网多远，都吸附到
+    // 整个地图上最近的路网元素位置。
+    SnapResult snap = findNearestRoadSnap(scenePos);
+    if (!snap.valid) return;   // 路网为空，无法吸附
+    QPointF world = snap.worldPos;
 
     // 距离已有目标点小于 0.3m 时，视为选中该点而不是新增
     const double snapDist = 0.3;
@@ -1317,6 +1367,8 @@ void TaskEditWidget::onSaveDraw()
             m_saveBtn->setEnabled(true);
             if (code == 200) {
                 Toast::success(this, "保存成功");
+                // 保存成功后重新加载任务数据，保证显示与服务器一致
+                loadTaskData();
             } else {
                 QMessageBox::warning(this, "错误", "保存失败");
             }
@@ -1566,6 +1618,102 @@ QPointF TaskEditWidget::sceneToWorld(double sx, double sy) const
              m_worldT - sy / m_imgH * mapH };
 }
 
+// 点到线段最近点
+static QPointF nearestOnSegment(const QPointF &p, const QPointF &a, const QPointF &b)
+{
+    QPointF ab = b - a;
+    double len2 = QPointF::dotProduct(ab, ab);
+    if (len2 < 1e-12) return a;
+    double t = QPointF::dotProduct(p - a, ab) / len2;
+    t = std::clamp(t, 0.0, 1.0);
+    return a + ab * t;
+}
+
+TaskEditWidget::SnapResult TaskEditWidget::findNearestRoadSnap(const QPointF &scenePos) const
+{
+    SnapResult best;
+    double bestDist = std::numeric_limits<double>::max();
+
+    auto consider = [&](const QPointF &candidateScene, const QString &type, const QString &id) {
+        double d = std::hypot(scenePos.x() - candidateScene.x(),
+                              scenePos.y() - candidateScene.y());
+        if (d < bestDist) {
+            bestDist   = d;
+            best.valid = true;
+            best.type  = type;
+            best.id    = id;
+            best.scenePos = candidateScene;
+            best.worldPos = sceneToWorld(candidateScene.x(), candidateScene.y());
+        }
+    };
+
+    // 1) 路网点 / 充电桩 / 高精度点
+    auto checkPoints = [&](const QJsonArray &arr, const QString &type) {
+        for (const auto &v : arr) {
+            QJsonObject o = v.toObject();
+            QPointF sp = worldToScene(o.value("x").toDouble(), o.value("y").toDouble());
+            consider(sp, type, o.value("id").toString());
+        }
+    };
+    checkPoints(m_points, "point");
+    checkPoints(m_charges, "charge");
+    checkPoints(m_highPrecisionPoints, "highPrecision");
+
+    // 2) 路网线段: 找点到线段的最近点
+    for (const auto &v : m_lines) {
+        QJsonObject o = v.toObject();
+        QPointF a = worldToScene(o.value("x1").toDouble(), o.value("y1").toDouble());
+        QPointF b = worldToScene(o.value("x2").toDouble(), o.value("y2").toDouble());
+        QPointF np = nearestOnSegment(scenePos, a, b);
+        consider(np, "line", o.value("id").toString());
+    }
+
+    // 3) 路网曲线: 在贝塞尔曲线上采样找最近点
+    for (const auto &v : m_curves) {
+        QJsonObject cv = v.toObject();
+        QString id = cv.value("id").toString();
+        // 收集控制点(场景坐标)
+        QList<QPointF> pts;
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        if (ctrlArr.size() >= 2) {
+            for (const auto &pv : ctrlArr)
+                pts.append(worldToScene(pv.toObject().value("x").toDouble(),
+                                        pv.toObject().value("y").toDouble()));
+        } else {
+            // 兼容旧格式: x1/cy/x2
+            pts.append(worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble()));
+            pts.append(worldToScene(cv.value("cx").toDouble(),  cv.value("cy").toDouble()));
+            pts.append(worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble()));
+        }
+        if (pts.size() < 2) continue;
+        // 在曲线上采样 200 段取最近点
+        const int steps = 200;
+        for (int i = 0; i <= steps; ++i) {
+            double t = double(i) / steps;
+            QPointF sp = MapPgmUtil::evaluateBezier(pts, t);
+            consider(sp, "curve", id);
+        }
+    }
+
+    return best;
+}
+
+void TaskEditWidget::updateSnapIndicator(const SnapResult &r)
+{
+    if (m_snapIndicator) {
+        m_scene->removeItem(m_snapIndicator);
+        delete m_snapIndicator;
+        m_snapIndicator = nullptr;
+    }
+    if (!r.valid) return;
+    const double rad = 10.0;
+    m_snapIndicator = m_scene->addEllipse(-rad, -rad, rad * 2, rad * 2,
+                                          QPen(QColor("#00e676"), 2.0),
+                                          QBrush(QColor(0, 230, 118, 28)));
+    m_snapIndicator->setPos(r.scenePos);
+    m_snapIndicator->setZValue(200);
+}
+
 bool TaskEditWidget::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj != m_mapView->viewport())
@@ -1581,7 +1729,13 @@ bool TaskEditWidget::eventFilter(QObject *obj, QEvent *event)
 
     if (event->type() == QEvent::MouseMove) {
         QMouseEvent *me = static_cast<QMouseEvent *>(event);
-        updateCoordinateDisplay(m_mapView->mapToScene(me->pos()));
+        QPointF sp = m_mapView->mapToScene(me->pos());
+        updateCoordinateDisplay(sp);
+        // 绘制任务点模式下，实时显示最近路网吸附位置
+        if (m_drawStatus == Target) {
+            SnapResult snap = findNearestRoadSnap(sp);
+            updateSnapIndicator(snap);
+        }
         return false;
     }
 
@@ -1594,6 +1748,7 @@ bool TaskEditWidget::eventFilter(QObject *obj, QEvent *event)
             m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
             if (m_dragBtn)   m_dragBtn->setChecked(true);
             if (m_targetBtn) m_targetBtn->setChecked(false);
+            updateSnapIndicator({});
             return true;
         }
         if (me->button() == Qt::LeftButton && m_drawStatus == Target) {

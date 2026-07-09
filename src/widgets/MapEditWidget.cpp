@@ -237,6 +237,20 @@ QPixmap drawToolIcon(const QString &name, const QColor &col, int sz = 22)
         p.setBrush(col);
         p.drawPolygon(tri);
     }
+    else if (name == "devicepoint") {
+        // 设备打点: 定位针图标，代表用设备当前位置打点
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPainterPath pin;
+        double r = sz*0.28;
+        pin.moveTo(c - r, c - sz*0.06);
+        pin.cubicTo(c - r, c - sz*0.30, c + r, c - sz*0.30, c + r, c - sz*0.06);
+        pin.lineTo(c, sz*0.88);
+        pin.closeSubpath();
+        p.setBrush(col);
+        p.drawPath(pin);
+        p.setPen(Qt::NoPen); p.setBrush(col.lighter(140));
+        p.drawEllipse(QPointF(c, c - sz*0.12), sz*0.10, sz*0.10);
+    }
     return pm;
 }
 
@@ -429,6 +443,7 @@ void MapEditWidget::setupUI()
         {Curve,         "curve",        "曲线",   "点击两点自动生成曲线\n拖动橙色控制手柄微调"},
         {Charge,        "charge",       "充电桩", "点击放置充电节点"},
         {HighPrecision, "highprecision","高精度", "点击放置高精度节点"},
+        {-2,            "devicepoint",  "设备打点","添加设备当前位置为普通节点"},
     };
 
     m_toolBtns.clear();
@@ -443,16 +458,29 @@ void MapEditWidget::setupUI()
         auto *b = new QPushButton;
         b->setIcon(makeToolIcon(t.icon));
         b->setIconSize(QSize(22, 22));
-        b->setCheckable(true);
+        b->setCheckable(t.mode != -2);   // 设备打点是动作按钮，不需要 checkable
         b->setFixedSize(40, 40);
         b->setStyleSheet(S_TOOLBTN);
         b->setToolTip(ttHtml(t.tip, t.detail));
         b->setCursor(Qt::PointingHandCursor);
         b->installEventFilter(new InstantTip(b));
-        int mode = t.mode;
-        connect(b, &QPushButton::clicked, this, [this, mode]() { setDrawMode(mode); });
+        if (t.mode == -2) {
+            // 设备打点: 直接添加设备当前位置为普通节点
+            connect(b, &QPushButton::clicked, this, [this]() {
+                if (!m_hasCarPose) {
+                    Toast::info(this, "未收到设备位置信息，无法打点");
+                    return;
+                }
+                QPointF sp = worldToScene(m_carX, m_carY);
+                addPoint(sp);
+                Toast::success(this, QString("已在设备位置(%1, %2)添加节点").arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2));
+            });
+        } else {
+            int mode = t.mode;
+            connect(b, &QPushButton::clicked, this, [this, mode]() { setDrawMode(mode); });
+        }
         tbLayout->addWidget(b, 0, Qt::AlignHCenter);
-        m_toolBtns[mode] = b;
+        if (t.mode != -2) m_toolBtns[t.mode] = b;
     }
 
     tbLayout->addStretch();
@@ -610,6 +638,19 @@ void MapEditWidget::setupUI()
         dl->addWidget(dLbl); dl->addWidget(m_propDirectCombo);
         pl->addWidget(m_propDirectRow);
 
+        // 点类型切换行: 仅在选中点(普通/高精度/充电桩)时显示
+        m_propKindRow = new QWidget;
+        auto *kl = new QHBoxLayout(m_propKindRow);
+        kl->setContentsMargins(0,0,0,0);
+        auto *kLbl = new QLabel("点类型:");
+        kLbl->setStyleSheet("color:#4a6080;font-size:12px;background:transparent;");
+        m_propKindCombo = new QComboBox;
+        m_propKindCombo->addItem("普通点",   "point");
+        m_propKindCombo->addItem("高精度点", "highPrecision");
+        m_propKindCombo->addItem("充电桩",   "charge");
+        kl->addWidget(kLbl); kl->addWidget(m_propKindCombo);
+        pl->addWidget(m_propKindRow);
+
         QHBoxLayout *pb = new QHBoxLayout;
         auto *applyBtn = new QPushButton("应用");
         auto *delBtn   = new QPushButton("删除");
@@ -693,10 +734,16 @@ double MapEditWidget::hitTolScene(double screenPx) const
     return s > 1e-6 ? screenPx / s : screenPx;
 }
 
-MapEditWidget::SnapResult MapEditWidget::findSnap(const QPointF &sp, double pixelTol) const
+MapEditWidget::SnapResult MapEditWidget::findSnap(const QPointF &sp, double worldTol) const
 {
     SnapResult best;
-    double bestDist = hitTolScene(pixelTol);
+    // worldTol 为地图世界单位容差(默认0.3)，转换为场景坐标距离用于比较
+    // worldToScene 是线性变换，取一个单位向量的场景长度作为缩放因子
+    QPointF w0 = worldToScene(0.0, 0.0);
+    QPointF w1 = worldToScene(1.0, 0.0);
+    double scenePerWorld = std::hypot(w1.x()-w0.x(), w1.y()-w0.y());
+    double bestDist = (scenePerWorld > 1e-6) ? worldTol * scenePerWorld : worldTol;
+
     auto check = [&](const QJsonArray &arr, const QString &type) {
         for (const auto &v : arr) {
             QJsonObject o = v.toObject();
@@ -716,6 +763,33 @@ MapEditWidget::SnapResult MapEditWidget::findSnap(const QPointF &sp, double pixe
     check(m_points, "point");
     check(m_charges, "charge");
     check(m_highPrecisionPoints, "highPrecision");
+
+    // 也吸附到线/曲线的端点
+    auto checkEndpoint = [&](double wx, double wy, const QString &id, const QString &type) {
+        QPointF snap = worldToScene(wx, wy);
+        double dist = std::hypot(sp.x()-snap.x(), sp.y()-snap.y());
+        if (dist < bestDist) {
+            bestDist = dist;
+            best.valid    = true;
+            best.type     = type;
+            best.id       = id;
+            best.scenePos = snap;
+            best.worldPos = {wx, wy};
+        }
+    };
+    for (const auto &v : m_lines) {
+        QJsonObject o = v.toObject();
+        QString id = o.value("id").toString();
+        checkEndpoint(o.value("x1").toDouble(), o.value("y1").toDouble(), id, "line");
+        checkEndpoint(o.value("x2").toDouble(), o.value("y2").toDouble(), id, "line");
+    }
+    for (const auto &v : m_curves) {
+        QJsonObject o = v.toObject();
+        QString id = o.value("id").toString();
+        checkEndpoint(o.value("x1").toDouble(), o.value("y1").toDouble(), id, "curve");
+        checkEndpoint(o.value("x2").toDouble(), o.value("y2").toDouble(), id, "curve");
+    }
+
     return best;
 }
 
@@ -772,28 +846,6 @@ void MapEditWidget::updateGrid()
         m_scene->addLine(a.x(),a.y(),b.x(),b.y(),
             std::abs(wy) < 1e-6 ? axisGPen : gridPen)->setZValue(-50);
     }
-
-    // Origin axes indicator (matches MapViewWidget style)
-    QPointF O = worldToScene(0.0, 0.0);
-    const double arm = 52.0, aL = 11.0, aW = 4.5, lw = 1.8;
-    const QColor xCol(210,45,45,230), yCol(30,185,60,230);
-
-    auto mkArrow = [&](QPointF tip, double dx, double dy, QColor col) {
-        double px=-dy, py=dx;
-        QPolygonF tri;
-        tri << tip
-            << QPointF(tip.x()-dx*aL+px*aW, tip.y()-dy*aL+py*aW)
-            << QPointF(tip.x()-dx*aL-px*aW, tip.y()-dy*aL-py*aW);
-        m_scene->addPolygon(tri, QPen(Qt::NoPen), QBrush(col))->setZValue(12);
-    };
-
-    QPointF xTip(O.x()+arm, O.y());
-    m_scene->addLine(O.x(),O.y(),xTip.x()-aL,O.y(), QPen(xCol,lw))->setZValue(10);
-    mkArrow(xTip, 1.0, 0.0, xCol);
-
-    QPointF yTip(O.x(), O.y()-arm);
-    m_scene->addLine(O.x(),O.y(),O.x(),yTip.y()+aL, QPen(yCol,lw))->setZValue(10);
-    mkArrow(yTip, 0.0, -1.0, yCol);
 }
 
 void MapEditWidget::updateRulers()
@@ -816,7 +868,7 @@ void MapEditWidget::setDrawMode(int mode)
 
     bool handles = (mode == Drag);
     for (auto &lst : m_curveHandles.values())
-        for (auto *h : lst) h->setVisible(handles);
+        for (auto *h : lst) if (h) h->setVisible(handles);
 
     if (mode == Drag) {
         m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
@@ -1026,12 +1078,27 @@ void MapEditWidget::loadRouteData()
             } else if (gtype == "MultiPoint") {
                 QJsonObject obj = props;
                 if (coords.size() >= 3) {
+                    // 支持任意阶贝塞尔曲线: 构建 controlPoints 数组
+                    QJsonArray ctrlArr;
+                    for (const auto &cv : coords) {
+                        QJsonArray c = cv.toArray();
+                        if (c.size() < 2) continue;
+                        QJsonObject pt;
+                        pt["x"] = c[0].toDouble();
+                        pt["y"] = c[1].toDouble();
+                        ctrlArr.append(pt);
+                    }
+                    obj["controlPoints"] = ctrlArr;
+                    // 同步起终点字段(兼容旧版渲染/逻辑)
                     QJsonArray c0 = coords[0].toArray();
-                    QJsonArray c1 = coords[1].toArray();
-                    QJsonArray c2 = coords[2].toArray();
+                    QJsonArray cN = coords.last().toArray();
                     obj["x1"] = c0[0].toDouble(); obj["y1"] = c0[1].toDouble();
-                    obj["cx"] = c1[0].toDouble(); obj["cy"] = c1[1].toDouble();
-                    obj["x2"] = c2[0].toDouble(); obj["y2"] = c2[1].toDouble();
+                    obj["x2"] = cN[0].toDouble(); obj["y2"] = cN[1].toDouble();
+                    // 兼容旧格式: 若为3点二次贝塞尔，则填充 cx/cy
+                    if (coords.size() == 3) {
+                        QJsonArray c1 = coords[1].toArray();
+                        obj["cx"] = c1[0].toDouble(); obj["cy"] = c1[1].toDouble();
+                    }
                 }
                 m_curves.append(obj);
             }
@@ -1062,6 +1129,7 @@ void MapEditWidget::renderMap()
     m_featureItems.clear();
     m_curveHandles.clear();
     m_previewItem   = nullptr;
+    m_previewAids.clear();      // scene->clear() 已删除这些 items，清空指针避免 double-free
     m_selItem       = nullptr;
     m_snapIndicator = nullptr;   // scene cleared
     m_robotItem     = nullptr;  // scene cleared
@@ -1090,9 +1158,9 @@ void MapEditWidget::renderMap()
     };
 
     for (const auto &v : m_points)  addNode(v.toObject(), QColor("#4a9fd4"), 5, "point");
-    for (const auto &v : m_charges) addNode(v.toObject(), QColor("#e8a020"), 7, "charge");
-    // 高精度点：按需求隐藏绘制，但仍保留 scene item 以维持选中/删除/表格等既有逻辑
-    for (const auto &v : m_highPrecisionPoints) addNode(v.toObject(), QColor("#e05050"), 4, "highPrecision", false);
+    for (const auto &v : m_charges) addNode(v.toObject(), QColor("#2ecc71"), 7, "charge");
+    // 高精度点：黄色圆点，与普通点统一大小和样式
+    for (const auto &v : m_highPrecisionPoints) addNode(v.toObject(), QColor("#f2c200"), 5, "highPrecision", true);
 
     for (const auto &v : m_lines) {
         QJsonObject ln = v.toObject();
@@ -1119,11 +1187,24 @@ void MapEditWidget::renderMap()
         QJsonObject cv = v.toObject();
         QString id     = cv.value("id").toString();
         int direct     = cv.value("direct").toInt(100);
-        QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
-        QPointF pc = worldToScene(cv.value("cx").toDouble(),  cv.value("cy").toDouble());
-        QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
-        QPainterPath path; path.moveTo(p1); path.quadTo(pc, p2);
         QPen pen(direct == 10 ? QColor("#a29bfe") : QColor("#6c5ce7"), 1.8);
+
+        // 支持多阶贝塞尔曲线: 优先使用 controlPoints 数组
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        QPainterPath path;
+        if (!ctrlArr.isEmpty()) {
+            QList<QPointF> pts;
+            for (const auto &pv : ctrlArr)
+                pts.append(worldToScene(pv.toObject().value("x").toDouble(),
+                                        pv.toObject().value("y").toDouble()));
+            path = MapPgmUtil::getBezierPath(pts);
+        } else {
+            // 兼容旧格式: cx/cy 二次贝塞尔
+            QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
+            QPointF pc = worldToScene(cv.value("cx").toDouble(),  cv.value("cy").toDouble());
+            QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+            path.moveTo(p1); path.quadTo(pc, p2);
+        }
         auto *pi = m_scene->addPath(path, pen);
         pi->setZValue(5); pi->setData(0, "curve"); pi->setData(1, id);
         m_featureItems["curve_" + id] = pi;
@@ -1160,7 +1241,7 @@ void MapEditWidget::renderMap()
     // Handle visibility matches current mode
     bool showH = (m_drawStatus == Drag);
     for (auto &lst : m_curveHandles.values())
-        for (auto *h : lst) h->setVisible(showH);
+        for (auto *h : lst) if (h) h->setVisible(showH);
 }
 
 void MapEditWidget::fitView()
@@ -1196,30 +1277,53 @@ void MapEditWidget::rebuildCurveHandles(const QString &id)
     }
     if (cv.isEmpty()) return;
 
-    QPointF pts[3] = {
-        worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble()),
-        worldToScene(cv.value("cx").toDouble(),  cv.value("cy").toDouble()),
-        worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble()),
-    };
-    // Endpoint handles: blue; control handle: orange
-    QColor cols[3] = { QColor("#4a9fd4"), QColor("#f39c12"), QColor("#4a9fd4") };
-    QList<QGraphicsEllipseItem*> handles;
+    // 支持多阶贝塞尔曲线: 优先使用 controlPoints 数组
+    QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+    QList<QPointF> scenePts;
+    if (!ctrlArr.isEmpty()) {
+        for (const auto &pv : ctrlArr)
+            scenePts.append(worldToScene(pv.toObject().value("x").toDouble(),
+                                         pv.toObject().value("y").toDouble()));
+    } else {
+        // 兼容旧格式: cx/cy 二次贝塞尔
+        scenePts.append(worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble()));
+        scenePts.append(worldToScene(cv.value("cx").toDouble(),  cv.value("cy").toDouble()));
+        scenePts.append(worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble()));
+    }
 
-    for (int i = 0; i < 3; ++i) {
+    // 起终点已关联节点(startid/endid 非空)时，该位置由节点本身显示，
+    // 不再绘制端点手柄，避免覆盖原有点；中间控制点始终绘制橙色手柄。
+    QString startId = cv.value("startid").toString();
+    QString endId   = cv.value("endid").toString();
+
+    QList<QGraphicsEllipseItem*> handles;
+    // 用 nullptr 占位端点，保持 handles 索引与 scenePts 一致(0=起点, last=终点)，
+    // 便于 updateCurveShape / 手柄拖拽等按索引访问的逻辑不受影响。
+    for (int i = 0; i < scenePts.size(); ++i) {
+        bool isEndpoint = (i == 0 || i == scenePts.size() - 1);
+        bool hasNode    = isEndpoint && ((i == 0) ? !startId.isEmpty() : !endId.isEmpty());
+        if (hasNode) {
+            handles.append(nullptr);   // 端点由节点显示，不绘制手柄
+            continue;
+        }
+        // 点(未关联节点)用蓝色，中间控制点用橙色
+        QColor col = isEndpoint ? QColor("#4a9fd4") : QColor("#f39c12");
         auto *h = m_scene->addEllipse(-5, -5, 10, 10,
-                                       QPen(cols[i].darker(140), 1.5),
-                                       QBrush(cols[i].lighter(130)));
-        h->setPos(pts[i]);
+                                       QPen(col.darker(140), 1.5),
+                                       QBrush(col.lighter(130)));
+        h->setPos(scenePts[i]);
         h->setZValue(50);
         h->setData(Qt::UserRole,   id);
         h->setData(Qt::UserRole+1, i);
         h->setVisible(m_drawStatus == Drag);
         handles.append(h);
     }
-    // Control arms (dotted lines from endpoints to control point)
+    // 控制臂(相邻控制点之间的虚线)
     auto arm = QPen(QColor(240,180,50,100), 1, Qt::DotLine);
-    m_scene->addLine(pts[0].x(), pts[0].y(), pts[1].x(), pts[1].y(), arm)->setZValue(49);
-    m_scene->addLine(pts[1].x(), pts[1].y(), pts[2].x(), pts[2].y(), arm)->setZValue(49);
+    for (int i = 0; i + 1 < scenePts.size(); ++i) {
+        m_scene->addLine(scenePts[i].x(), scenePts[i].y(),
+                         scenePts[i+1].x(), scenePts[i+1].y(), arm)->setZValue(49);
+    }
 
     m_curveHandles[id] = handles;
 }
@@ -1227,7 +1331,7 @@ void MapEditWidget::rebuildCurveHandles(const QString &id)
 void MapEditWidget::removeAllHandles()
 {
     for (auto &lst : m_curveHandles.values())
-        for (auto *h : lst) { m_scene->removeItem(h); delete h; }
+        for (auto *h : lst) { if (h) { m_scene->removeItem(h); delete h; } }
     m_curveHandles.clear();
 }
 
@@ -1235,9 +1339,23 @@ void MapEditWidget::updateCurveShape(const QString &id)
 {
     auto it = m_curveHandles.find(id);
     if (it == m_curveHandles.end() || it.value().size() < 2) return;
+    // 端点手柄可能为 nullptr(已关联节点时由节点显示)，需从曲线 JSON 取端点坐标
+    QJsonObject cv;
+    for (const auto &v : m_curves) {
+        auto o = v.toObject();
+        if (o.value("id").toString() == id) { cv = o; break; }
+    }
+    QPointF startScene = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
+    QPointF endScene   = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
     // 支持任意阶贝塞尔曲线: 收集所有控制点位置
     QList<QPointF> pts;
-    for (auto *h : it.value()) pts.append(h->pos());
+    const auto &lst = it.value();
+    for (int i = 0; i < lst.size(); ++i) {
+        if (lst[i]) pts.append(lst[i]->pos());
+        else if (i == 0)            pts.append(startScene);
+        else if (i == lst.size()-1) pts.append(endScene);
+        else                        pts.append(QPointF());   // 不应发生
+    }
     QPainterPath path = MapPgmUtil::getBezierPath(pts);
     auto *pi = qgraphicsitem_cast<QGraphicsPathItem*>(m_featureItems.value("curve_" + id));
     if (pi) pi->setPath(path);
@@ -1360,14 +1478,34 @@ void MapEditWidget::finalizeCurve()
         cancelDraw();
         return;
     }
-    addBezierCurve(m_curveCtrlPts, m_curveCtrlIds);
-    // 清理绘制状态，保持在 Curve 模式以便连续绘制
+    // 起点: 已在首次点击时通过 ensureNodeAt 处理；此处做一次校验，若意外无 id
+    // 则补吸附/创建(例如从外部状态进入 finalize)。
+    if (m_curveCtrlIds.isEmpty() || m_curveCtrlIds.first().isEmpty()) {
+        SnapResult head = ensureNodeAt(m_curveCtrlPts.first());
+        m_curveCtrlPts.first() = head.scenePos;
+        m_curveCtrlIds.first() = head.id;
+    }
+    // 终点: 强制吸到附近已有点，否则在该位置创建一个新节点，保证曲线两端
+    // 始终关联到节点 id，而不是悬空端点。
+    if (m_curveCtrlIds.size() < 2 || m_curveCtrlIds.last().isEmpty()) {
+        SnapResult tail = ensureNodeAt(m_curveCtrlPts.last());
+        m_curveCtrlPts.last() = tail.scenePos;
+        m_curveCtrlIds.last() = tail.id;
+    }
+    // 保存数据后立即清空状态，防止 addBezierCurve → renderMap 链中重入
+    QList<QPointF> pts = m_curveCtrlPts;
+    QList<QString> ids = m_curveCtrlIds;
     m_curveCtrlPts.clear();
     m_curveCtrlIds.clear();
     m_drawHasP1 = false;
     m_drawP1 = {};
     m_drawP1Id.clear();
-    clearPreview();
+    // 注意: addBezierCurve → renderMap → scene->clear() 会删除 m_previewAids 中的 items
+    // 所以先清空 m_previewAids 防止 clearPreview 二次删除
+    m_previewAids.clear();
+    if (m_previewItem) { m_scene->removeItem(m_previewItem); delete m_previewItem; m_previewItem = nullptr; }
+
+    addBezierCurve(pts, ids);
 }
 
 void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
@@ -1413,6 +1551,29 @@ void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
     m_curves.append(cv);
     renderMap();
     if (m_tableVisible && m_currentTable == "curve") refreshTable();
+}
+
+MapEditWidget::SnapResult MapEditWidget::ensureNodeAt(const QPointF &sp)
+{
+    // 曲线端点必须落在某个节点上: 先尝试吸附到附近已有的节点/高精度点/充电桩，
+    // 命中则直接复用该点；未命中则在该位置创建一个新的普通节点，保证线首尾
+    // 始终关联到一个节点 id，而不是悬空一个无 id 的端点。
+    SnapResult snap = findSnap(sp);
+    if (snap.valid) return snap;
+
+    // 附近无点 → 创建新节点。addPoint 内部会 renderMap，此处不重复渲染。
+    addPoint(sp);
+    // addPoint 会按 m_points 当前数量生成 id，取最后追加的元素 id 作为关联 id
+    SnapResult r;
+    if (!m_points.isEmpty()) {
+        QJsonObject o = m_points.last().toObject();
+        r.valid    = true;
+        r.type     = "point";
+        r.id       = o.value("id").toString();
+        r.worldPos = QPointF(o.value("x").toDouble(), o.value("y").toDouble());
+        r.scenePos = worldToScene(r.worldPos.x(), r.worldPos.y());
+    }
+    return r;
 }
 
 // ── Feature selection ─────────────────────────────────────────────────────────
@@ -1510,6 +1671,15 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
     bool hasDir = (type == "line" || type == "curve");
     m_propDirectRow->setVisible(hasDir);
     if (hasDir) m_propDirectCombo->setCurrentIndex(obj.value("direct").toInt(100) == 10 ? 1 : 0);
+
+    // 点类型切换: 仅当选中的是点(普通/高精度/充电桩)时显示
+    bool isPointKind = (type == "point" || type == "highPrecision" || type == "charge");
+    m_propKindRow->setVisible(isPointKind);
+    if (isPointKind) {
+        int idx = m_propKindCombo->findData(type);
+        if (idx >= 0) m_propKindCombo->setCurrentIndex(idx);
+    }
+
     m_propsPanel->setVisible(true);
 
     if (m_tableVisible) {
@@ -1528,6 +1698,53 @@ void MapEditWidget::applyPropsEdit()
     if (m_selType.isEmpty()) return;
     QString newName = m_propNameEdit->text().trimmed();
     int newDirect   = m_propDirectCombo->currentData().toInt();
+
+    // 点类型切换: 把点从原数组移到目标数组(并生成对应前缀的新ID)
+    bool isPointKind = (m_selType == "point" || m_selType == "highPrecision" || m_selType == "charge");
+    if (isPointKind && m_propKindRow && m_propKindRow->isVisible()) {
+        QString newKind = m_propKindCombo->currentData().toString();
+        if (newKind != m_selType) {
+            // 从原数组取出该点
+            QJsonObject pointObj;
+            auto take = [&](QJsonArray &arr) {
+                for (int i = 0; i < arr.size(); ++i) {
+                    QJsonObject o = arr[i].toObject();
+                    if (o.value("id").toString() == m_selId) {
+                        pointObj = o; arr.removeAt(i); return true;
+                    }
+                }
+                return false;
+            };
+            if      (m_selType == "point")         take(m_points);
+            else if (m_selType == "charge")        take(m_charges);
+            else if (m_selType == "highPrecision") take(m_highPrecisionPoints);
+
+            if (!pointObj.isEmpty()) {
+                // 生成新类型对应的 ID 与默认名称
+                QString newId, defaultName;
+                if      (newKind == "point")         { newId = QString("p_%1").arg(m_points.size() + 1);              defaultName = QString("P%1").arg(m_points.size() + 1); }
+                else if (newKind == "charge")        { newId = QString("c_%1").arg(m_charges.size() + 1);             defaultName = QString("充电%1").arg(m_charges.size() + 1); }
+                else                                  { newId = QString("hp_%1").arg(m_highPrecisionPoints.size() + 1); defaultName = QString("高精%1").arg(m_highPrecisionPoints.size() + 1); }
+
+                pointObj["id"]   = newId;
+                if (newName.isEmpty()) pointObj["name"] = defaultName;
+                else                   pointObj["name"] = newName;
+
+                if      (newKind == "point")         m_points.append(pointObj);
+                else if (newKind == "charge")        m_charges.append(pointObj);
+                else                                  m_highPrecisionPoints.append(pointObj);
+
+                m_selType = newKind;
+                m_selId   = newId;
+            }
+            renderMap();
+            showFeatureProperties(m_selType, m_selId);
+            if (m_tableVisible) refreshTable();
+            return;
+        }
+    }
+
+    // 普通属性更新(名称/方向)
     auto upd = [&](QJsonArray &arr) {
         for (int i = 0; i < arr.size(); ++i) {
             QJsonObject o = arr[i].toObject();
@@ -1614,19 +1831,39 @@ void MapEditWidget::refreshTable()
 
 void MapEditWidget::onSaveRoute()
 {
-    // Flush any dragged handle positions to JSON
+    // Flush any dragged handle positions to JSON (支持任意阶贝塞尔)
     for (auto it = m_curveHandles.begin(); it != m_curveHandles.end(); ++it) {
         auto &lst = it.value();
-        if (lst.size() < 3) continue;
+        if (lst.size() < 2) continue;
         const QString &id = it.key();
         for (int i = 0; i < m_curves.size(); ++i) {
             QJsonObject cv = m_curves[i].toObject();
             if (cv.value("id").toString() != id) continue;
-            QPointF w1 = sceneToWorld(lst[0]->pos().x(), lst[0]->pos().y());
-            QPointF wc = sceneToWorld(lst[1]->pos().x(), lst[1]->pos().y());
-            QPointF w2 = sceneToWorld(lst[2]->pos().x(), lst[2]->pos().y());
-            cv["x1"]=w1.x(); cv["y1"]=w1.y(); cv["cx"]=wc.x();
-            cv["cy"]=wc.y(); cv["x2"]=w2.x(); cv["y2"]=w2.y();
+
+            // 更新 controlPoints 数组
+            QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+            if (!ctrlArr.isEmpty() && lst.size() == ctrlArr.size()) {
+                // 多阶贝塞尔: 逐个更新控制点
+                for (int j = 0; j < lst.size(); ++j) {
+                    QPointF wp = sceneToWorld(lst[j]->pos().x(), lst[j]->pos().y());
+                    QJsonObject pt = ctrlArr[j].toObject();
+                    pt["x"] = wp.x(); pt["y"] = wp.y();
+                    ctrlArr[j] = pt;
+                }
+                cv["controlPoints"] = ctrlArr;
+                // 同步起终点字段
+                QPointF wFirst = sceneToWorld(lst.first()->pos().x(), lst.first()->pos().y());
+                QPointF wLast  = sceneToWorld(lst.last()->pos().x(), lst.last()->pos().y());
+                cv["x1"] = wFirst.x(); cv["y1"] = wFirst.y();
+                cv["x2"] = wLast.x();  cv["y2"] = wLast.y();
+            } else if (lst.size() == 3) {
+                // 兼容旧格式: 二次贝塞尔 cx/cy
+                QPointF w1 = sceneToWorld(lst[0]->pos().x(), lst[0]->pos().y());
+                QPointF wc = sceneToWorld(lst[1]->pos().x(), lst[1]->pos().y());
+                QPointF w2 = sceneToWorld(lst[2]->pos().x(), lst[2]->pos().y());
+                cv["x1"]=w1.x(); cv["y1"]=w1.y(); cv["cx"]=wc.x();
+                cv["cy"]=wc.y(); cv["x2"]=w2.x(); cv["y2"]=w2.y();
+            }
             m_curves[i] = cv; break;
         }
     }
@@ -1664,15 +1901,31 @@ void MapEditWidget::onSaveRoute()
 
     for (const auto &v : m_curves) {
         QJsonObject cv = v.toObject();
-        QJsonArray c0, c1, c2;
-        c0.append(cv.value("x1").toDouble()); c0.append(cv.value("y1").toDouble());
-        c1.append(cv.value("cx").toDouble()); c1.append(cv.value("cy").toDouble());
-        c2.append(cv.value("x2").toDouble()); c2.append(cv.value("y2").toDouble());
-        QJsonArray coords; coords.append(c0); coords.append(c1); coords.append(c2);
+        QJsonArray coords;
+
+        // 支持多阶贝塞尔曲线: 优先使用 controlPoints 数组
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        if (!ctrlArr.isEmpty()) {
+            for (const auto &pv : ctrlArr) {
+                QJsonObject pt = pv.toObject();
+                QJsonArray c;
+                c.append(pt.value("x").toDouble());
+                c.append(pt.value("y").toDouble());
+                coords.append(c);
+            }
+        } else {
+            // 兼容旧格式: cx/cy 二次贝塞尔(3点)
+            QJsonArray c0, c1, c2;
+            c0.append(cv.value("x1").toDouble()); c0.append(cv.value("y1").toDouble());
+            c1.append(cv.value("cx").toDouble()); c1.append(cv.value("cy").toDouble());
+            c2.append(cv.value("x2").toDouble()); c2.append(cv.value("y2").toDouble());
+            coords.append(c0); coords.append(c1); coords.append(c2);
+        }
+
         QJsonObject geom; geom["type"] = "MultiPoint"; geom["coordinates"] = coords;
         QJsonObject props = cv;
         props.remove("x1"); props.remove("y1"); props.remove("cx"); props.remove("cy");
-        props.remove("x2"); props.remove("y2");
+        props.remove("x2"); props.remove("y2"); props.remove("controlPoints");
         QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
         features.append(f);
     }
@@ -1681,15 +1934,25 @@ void MapEditWidget::onSaveRoute()
     geojson["type"]     = "FeatureCollection";
     geojson["features"] = features;
     geojson["mapId"]    = m_mapId;
+    geojson["mapName"]  = m_mapName;
 
     m_saveBtn->setEnabled(false);
     auto *loading = new LoadingDialog("正在保存路网...", this);
     loading->show();
-    ApiService::instance().saveEditedMap(geojson, [this, loading](int code, const QJsonObject &) {
+    ApiService::instance().saveEditedMap(geojson, [this, loading](int code, const QJsonObject &resp) {
         loading->close(); loading->deleteLater();
         m_saveBtn->setEnabled(true);
-        if (code == 200) Toast::success(this, "路网保存成功");
-        else QMessageBox::warning(this, "错误", "保存失败，请检查网络");
+        if (code == 200) {
+            Toast::success(this, "路网保存成功");
+            // 保存成功后立即刷新路网数据，保证显示与服务器一致
+            loadRouteData();
+        } else {
+            // 显示服务器返回的错误信息
+            QString errMsg = resp.value("msg").toString();
+            if (errMsg.isEmpty()) errMsg = resp.value("message").toString();
+            if (errMsg.isEmpty()) errMsg = QString("保存失败 (HTTP %1)").arg(code);
+            QMessageBox::warning(this, "保存失败", errMsg);
+        }
     });
 }
 
@@ -1773,11 +2036,13 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             updateSnapIndicator({});
             const double hoverTol = hitTolScene(10.0);
             for (auto &lst : m_curveHandles.values())
-                for (auto *h : lst)
+                for (auto *h : lst) {
+                    if (!h) continue;
                     if (std::hypot(sp.x()-h->pos().x(), sp.y()-h->pos().y()) < hoverTol) {
                         m_mapView->viewport()->setCursor(Qt::SizeAllCursor);
                         return false;
                     }
+                }
             m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
         }
         return false;
@@ -1807,6 +2072,7 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             for (auto lit = m_curveHandles.begin(); lit != m_curveHandles.end(); ++lit) {
                 auto &handles = lit.value();
                 for (int i = 0; i < handles.size(); ++i) {
+                    if (!handles[i]) continue;   // 端点由节点显示，无手柄
                     QPointF hp = handles[i]->pos();
                     if (std::hypot(sp.x()-hp.x(), sp.y()-hp.y()) < tol) {
                         m_activeHandle     = handles[i];
@@ -1843,10 +2109,12 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             break;
         case Line:
             if (!m_drawHasP1) {
+                // 起点: 优先吸附到已有点，附近无点则直接使用点击位置(不创建新点)
                 m_drawP1   = usePos;
                 m_drawP1Id = useId;
                 m_drawHasP1 = true;
             } else {
+                // 终点: 优先吸附到已有点，附近无点则直接使用点击位置(不创建新点)
                 addLine(m_drawP1, usePos, m_drawP1Id, useId);
                 // Continuous: last endpoint becomes new P1
                 m_drawP1   = usePos;
@@ -1856,13 +2124,22 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             break;
         case Curve: {
             // 多阶贝塞尔：累积控制点
-            m_curveCtrlPts.append(usePos);
-            m_curveCtrlIds.append(useId);
-            // 第一个点也同步到 m_drawP1（便于兼容旧逻辑）
-            if (m_curveCtrlPts.size() == 1) {
-                m_drawP1   = usePos;
-                m_drawP1Id = useId;
+            // 起点和终点必须落在已有节点/高精度点上；附近无点时在该位置创建一个
+            // 新节点，而不是让端点悬空。中间控制点为自由放置，不创建节点。
+            int n = m_curveCtrlPts.size();
+            if (n == 0) {
+                // 起点: 强制吸附或创建节点
+                SnapResult head = ensureNodeAt(usePos);
+                m_curveCtrlPts.append(head.scenePos);
+                m_curveCtrlIds.append(head.id);
+                m_drawP1   = head.scenePos;
+                m_drawP1Id = head.id;
                 m_drawHasP1 = true;
+            } else {
+                // 后续点击暂存为自由控制点；是否为终点由右键完成时判定，
+                // 完成时会将最后一个点强制吸附/创建节点。
+                m_curveCtrlPts.append(usePos);
+                m_curveCtrlIds.append(useId);
             }
             break;
         }
@@ -1874,26 +2151,61 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
     if (event->type() == QEvent::MouseButtonRelease) {
         auto *me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::LeftButton && m_isDraggingHandle) {
-            // Commit to JSON
+            // Commit to JSON: 支持任意阶贝塞尔曲线
+            // 端点手柄可能为 nullptr(已关联节点时由节点显示)，其位置取自曲线 JSON 的
+            // x1/y1、x2/y2；仅非空手柄(中间控制点或未关联节点的端点)随拖拽更新。
             auto &lst = m_curveHandles[m_handleCurveId];
-            if (lst.size() == 3) {
-                for (int i = 0; i < m_curves.size(); ++i) {
-                    QJsonObject cv = m_curves[i].toObject();
-                    if (cv.value("id").toString() != m_handleCurveId) continue;
-                    QPointF w1 = sceneToWorld(lst[0]->pos().x(), lst[0]->pos().y());
-                    QPointF wc = sceneToWorld(lst[1]->pos().x(), lst[1]->pos().y());
-                    QPointF w2 = sceneToWorld(lst[2]->pos().x(), lst[2]->pos().y());
-                    cv["x1"]=w1.x(); cv["y1"]=w1.y(); cv["cx"]=wc.x();
-                    cv["cy"]=wc.y(); cv["x2"]=w2.x(); cv["y2"]=w2.y();
-                    // 端点手柄落点若吸附到某个已有点，记录其 id 作为关联关系；
-                    // 否则视为脱离原有关联，清空对应 startid/endid。
-                    if (m_handleIndex == 0 || m_handleIndex == 2) {
-                        SnapResult snap = findSnap(lst[m_handleIndex]->pos());
-                        const QString &key = (m_handleIndex == 0) ? "startid" : "endid";
-                        cv[key] = snap.valid ? snap.id : QString();
-                    }
-                    m_curves[i] = cv; break;
+            auto handlePos = [&](int idx) {
+                if (lst[idx]) return lst[idx]->pos();
+                // 端点无手柄 → 从 JSON 取端点坐标
+                for (const auto &v : m_curves) {
+                    auto o = v.toObject();
+                    if (o.value("id").toString() != m_handleCurveId) continue;
+                    if (idx == 0)
+                        return worldToScene(o.value("x1").toDouble(), o.value("y1").toDouble());
+                    return worldToScene(o.value("x2").toDouble(), o.value("y2").toDouble());
                 }
+                return QPointF();
+            };
+            for (int i = 0; i < m_curves.size(); ++i) {
+                QJsonObject cv = m_curves[i].toObject();
+                if (cv.value("id").toString() != m_handleCurveId) continue;
+
+                // 更新 controlPoints 数组
+                QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+                if (ctrlArr.isEmpty() && lst.size() == 3) {
+                    // 兼容旧格式: 从 cx/cy 构建 controlPoints
+                    QList<QPointF> wPts;
+                    for (int k = 0; k < lst.size(); ++k)
+                        wPts.append(sceneToWorld(handlePos(k).x(), handlePos(k).y()));
+                    cv["x1"] = wPts[0].x(); cv["y1"] = wPts[0].y();
+                    cv["cx"] = wPts[1].x(); cv["cy"] = wPts[1].y();
+                    cv["x2"] = wPts[2].x(); cv["y2"] = wPts[2].y();
+                } else {
+                    // 多阶贝塞尔: 逐个更新 controlPoints(跳过无手柄的端点，保持其坐标)
+                    for (int j = 0; j < lst.size() && j < ctrlArr.size(); ++j) {
+                        QPointF wp = sceneToWorld(handlePos(j).x(), handlePos(j).y());
+                        QJsonObject pt = ctrlArr[j].toObject();
+                        pt["x"] = wp.x(); pt["y"] = wp.y();
+                        ctrlArr[j] = pt;
+                    }
+                    cv["controlPoints"] = ctrlArr;
+                    // 同步起终点字段
+                    if (!ctrlArr.isEmpty()) {
+                        QPointF wFirst = sceneToWorld(handlePos(0).x(), handlePos(0).y());
+                        QPointF wLast  = sceneToWorld(handlePos(lst.size()-1).x(),
+                                                     handlePos(lst.size()-1).y());
+                        cv["x1"] = wFirst.x(); cv["y1"] = wFirst.y();
+                        cv["x2"] = wLast.x();  cv["y2"] = wLast.y();
+                    }
+                }
+                // 被拖拽的端点手柄落点若吸附到某个已有点，记录其 id
+                if (m_handleIndex == 0 || m_handleIndex == lst.size() - 1) {
+                    SnapResult snap = findSnap(lst[m_handleIndex]->pos());
+                    const QString &key = (m_handleIndex == 0) ? "startid" : "endid";
+                    cv[key] = snap.valid ? snap.id : QString();
+                }
+                m_curves[i] = cv; break;
             }
             m_isDraggingHandle = false;
             m_activeHandle = nullptr;

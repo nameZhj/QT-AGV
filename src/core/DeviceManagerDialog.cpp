@@ -12,6 +12,8 @@
 #include <QJsonArray>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
+#include <QIcon>
 #include <QInputDialog>
 #include <QTimer>
 #include <QPointer>
@@ -66,18 +68,41 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
 
     hl->addStretch();
 
-    auto mkIconBtn = [](const QString &text, const QString &hoverColor) {
-        auto *b = new QPushButton(text);
+    auto mkDelBtn = []() {
+        // 绘制垃圾桶图标，避免文字字符渲染问题
+        QPixmap pm(20, 20);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        QColor col("#e8e8e8");
+        p.setPen(QPen(col, 1.5, Qt::SolidLine, Qt::RoundCap));
+        p.setBrush(Qt::NoBrush);
+        // 桶身
+        p.drawRoundedRect(QRectF(5, 7, 10, 11), 1.5, 1.5);
+        // 桶盖
+        p.drawLine(QPointF(3.5, 7), QPointF(16.5, 7));
+        p.drawLine(QPointF(7, 4.5), QPointF(13, 4.5));
+        p.drawLine(QPointF(8, 4.5), QPointF(8, 7));
+        p.drawLine(QPointF(12, 4.5), QPointF(12, 7));
+        // 桶身竖线
+        p.drawLine(QPointF(8.5, 9), QPointF(8.5, 16));
+        p.drawLine(QPointF(11.5, 9), QPointF(11.5, 16));
+        p.end();
+
+        auto *b = new QPushButton;
         b->setFlat(true);
-        b->setFixedSize(26, 26);
+        b->setFixedSize(30, 30);
+        b->setIcon(QIcon(pm));
+        b->setIconSize(QSize(18, 18));
         b->setCursor(Qt::PointingHandCursor);
-        b->setStyleSheet(QString(
-            "QPushButton{color:#8898a8;background:transparent;border:none;font-size:14px;}"
-            "QPushButton:hover{color:%1;}").arg(hoverColor));
+        b->setStyleSheet(
+            "QPushButton{background:#3a4450;border:1px solid #5a6070;border-radius:4px;}"
+            "QPushButton:hover{background:#4a1414;border-color:#e05555;}"
+            "QPushButton:pressed{background:#2a0a0a;}");
         return b;
     };
 
-    auto *delBtn = mkIconBtn("✕", "#e05555");
+    auto *delBtn = mkDelBtn();
     connect(delBtn, &QPushButton::clicked, this, [this]{ emit removeClicked(m_index); });
     hl->addWidget(delBtn);
 
@@ -497,12 +522,19 @@ void DeviceManagerDialog::setupAddPanel()
 
 void DeviceManagerDialog::refreshCards()
 {
-    // Remove old cards from grid
+    // Remove old cards and any other widgets from grid
     for (DeviceCard *c : m_cards) {
         m_cardsGrid->removeWidget(c);
         c->deleteLater();
     }
     m_cards.clear();
+
+    // Also remove any leftover non-card widgets (e.g. empty label)
+    while (m_cardsGrid->count() > 0) {
+        QLayoutItem *item = m_cardsGrid->takeAt(0);
+        if (item->widget()) item->widget()->deleteLater();
+        delete item;
+    }
 
     const QList<DeviceProfile> list = AppConfig::instance().deviceList();
 

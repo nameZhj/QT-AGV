@@ -18,6 +18,7 @@ class TaskLogWidget;
 class QToolBar;
 class QAction;
 class QActionGroup;
+class QPushButton;
 
 // Main window with dark-themed top-tab navigation matching the reference UI.
 // Layout: top header bar → icon toolbar → (left tools | center content | right panel) → status bar
@@ -34,6 +35,8 @@ private slots:
     void onAbout();
     void updateStatusBar();
     void onMqttStatusClicked();
+    void onTeleopToggled();
+    void onTeleopActiveChanged(bool active);
 
 private:
     void setupGlobalStyle();
@@ -48,6 +51,7 @@ protected:
 
     void switchToPage(const QString &pageKey);
     void highlightTabForPageIndex(int pageIndex);
+    void refreshCurrentPage(int index);
 
     // Section toolbar (top tabs)
     QToolBar *m_sectionBar     = nullptr;
@@ -70,6 +74,7 @@ protected:
     QLabel *m_sbDevice  = nullptr;
     QLabel *m_sbCarId   = nullptr;
     QLabel *m_sbConn    = nullptr;
+    QPushButton *m_teleopBtn = nullptr;   // 底部"开始遥控"按钮
 
     QTimer *m_statusTimer = nullptr;
 };

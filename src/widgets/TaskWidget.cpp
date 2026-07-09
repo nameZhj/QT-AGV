@@ -735,6 +735,8 @@ void TaskWidget::loadRouteData(const QString &mapId)
         m_points = QJsonArray();
         m_lines  = QJsonArray();
         m_curves = QJsonArray();
+        m_charges = QJsonArray();
+        m_highPrecisionPoints = QJsonArray();
 
         QString jsonStr = data.value("json").toString();
         if (jsonStr.isEmpty()) {
@@ -765,13 +767,18 @@ void TaskWidget::loadRouteData(const QString &mapId)
             QString     id     = props.value("id").toString();
 
             if (gtype == "Point") {
-                if (id.startsWith("c_") || id.startsWith("hp_")) continue;
                 QJsonObject pt;
                 pt["id"]   = id;
                 pt["x"]    = coords[0].toDouble();
                 pt["y"]    = coords[1].toDouble();
                 pt["name"] = props.value("name").toString();
-                m_points.append(pt);
+                if (id.startsWith("c_"))
+                    m_charges.append(pt);
+                else if (id.startsWith("hp_")) {
+                    pt["visible"] = props.value("visible").toBool(true);
+                    m_highPrecisionPoints.append(pt);
+                } else
+                    m_points.append(pt);
             } else if (gtype == "LineString") {
                 if (coords.size() < 2) continue;
                 QJsonObject ln;
@@ -783,16 +790,28 @@ void TaskWidget::loadRouteData(const QString &mapId)
                 ln["name"] = props.value("name").toString();
                 m_lines.append(ln);
             } else if (gtype == "MultiPoint") {
-                if (coords.size() < 3) continue;
+                if (coords.size() < 2) continue;
                 QJsonObject cv;
                 cv["id"]   = id;
-                cv["x1"]   = coords[0].toArray()[0].toDouble();
-                cv["y1"]   = coords[0].toArray()[1].toDouble();
-                cv["cx"]   = coords[1].toArray()[0].toDouble();
-                cv["cy"]   = coords[1].toArray()[1].toDouble();
-                cv["x2"]   = coords[2].toArray()[0].toDouble();
-                cv["y2"]   = coords[2].toArray()[1].toDouble();
                 cv["name"] = props.value("name").toString();
+                cv["x1"] = coords.first().toArray()[0].toDouble();
+                cv["y1"] = coords.first().toArray()[1].toDouble();
+                cv["x2"] = coords.last().toArray()[0].toDouble();
+                cv["y2"] = coords.last().toArray()[1].toDouble();
+                QJsonArray ctrlArr;
+                for (const auto &c : coords) {
+                    QJsonArray ca = c.toArray();
+                    if (ca.size() < 2) continue;
+                    QJsonObject pt;
+                    pt["x"] = ca[0].toDouble();
+                    pt["y"] = ca[1].toDouble();
+                    ctrlArr.append(pt);
+                }
+                cv["controlPoints"] = ctrlArr;
+                if (coords.size() == 3) {
+                    cv["cx"] = coords[1].toArray()[0].toDouble();
+                    cv["cy"] = coords[1].toArray()[1].toDouble();
+                }
                 m_curves.append(cv);
             }
         }
@@ -921,38 +940,6 @@ void TaskWidget::renderAxesAndGrid()
     };
 
     double wLeft = m_worldL, wRight = m_worldR, wBottom = m_worldB, wTop = m_worldT;
-    const QColor xCol(210, 45, 45, 230);
-    const QColor yCol(30, 185, 60, 230);
-
-    QPointF O = worldToScene(0.0, 0.0);
-    bool inView = (O.x() > -60 && O.x() < m_imgW + 60 && O.y() > -60 && O.y() < m_imgH + 60);
-    if (inView) {
-        const double arm = 52.0, aL = 11.0, aW = 4.5, lw = 1.8;
-        auto mkArrow = [&](QPointF tip, double dx, double dy, QColor col) {
-            double px = -dy, py = dx;
-            QPolygonF tri;
-            tri << tip
-                << QPointF(tip.x() - dx*aL + px*aW, tip.y() - dy*aL + py*aW)
-                << QPointF(tip.x() - dx*aL - px*aW, tip.y() - dy*aL - py*aW);
-            tag(m_scene->addPolygon(tri, QPen(Qt::NoPen), QBrush(col)), 12);
-        };
-        auto mkLabel = [&](QPointF pos, const QString &txt, QColor col) {
-            auto *t = m_scene->addText(txt);
-            t->setDefaultTextColor(col);
-            t->setFont(QFont("Arial", 9, QFont::Bold));
-            t->setPos(pos);
-            tag(t, 13);
-        };
-        QPointF xTip(O.x() + arm, O.y());
-        tag(m_scene->addLine(O.x(), O.y(), xTip.x() - aL, O.y(), QPen(xCol, lw)), 10);
-        mkArrow(xTip, 1.0, 0.0, xCol);
-        mkLabel(QPointF(xTip.x() + 2, xTip.y() - 9), "x", xCol);
-
-        QPointF yTip(O.x(), O.y() - arm);
-        tag(m_scene->addLine(O.x(), O.y(), O.x(), yTip.y() + aL, QPen(yCol, lw)), 10);
-        mkArrow(yTip, 0.0, -1.0, yCol);
-        mkLabel(QPointF(yTip.x() + 4, yTip.y() - 2), "y", yCol);
-    }
 
     if (!m_showGrid) return;
 
@@ -1000,6 +987,24 @@ void TaskWidget::renderMap()
         e->setZValue(20);
     }
 
+    // 渲染充电点
+    for (const auto &item : m_charges) {
+        QJsonObject pt = item.toObject();
+        QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
+        auto *e = m_scene->addEllipse(sp.x()-5, sp.y()-5, 10, 10,
+            QPen(QColor("#f39c12"), 1.5), QBrush(QColor("#f39c12")));
+        e->setZValue(15); e->setOpacity(0.85);
+    }
+
+    // 渲染高精度点：黄色圆点，与普通点统一大小和样式
+    for (const auto &item : m_highPrecisionPoints) {
+        QJsonObject pt = item.toObject();
+        QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
+        auto *e = m_scene->addEllipse(sp.x()-5, sp.y()-5, 10, 10,
+            QPen(QColor("#f2c200"), 1), QBrush(QColor(242, 194, 0, 180)));
+        e->setZValue(20);
+    }
+
     for (const auto &item : m_lines) {
         QJsonObject ln = item.toObject();
         QPointF a = worldToScene(ln.value("x1").toDouble(), ln.value("y1").toDouble());
@@ -1010,12 +1015,24 @@ void TaskWidget::renderMap()
 
     for (const auto &item : m_curves) {
         QJsonObject cv = item.toObject();
-        QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
-        QPointF pc = worldToScene(cv.value("cx").toDouble(), cv.value("cy").toDouble());
-        QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
-        QPainterPath path; path.moveTo(p1); path.quadTo(pc, p2);
-        auto *pi = m_scene->addPath(path, QPen(QColor(60, 160, 255, 160), 1.5));
-        pi->setZValue(15);
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        if (ctrlArr.size() >= 2) {
+            QList<QPointF> scenePts;
+            for (const auto &pv : ctrlArr) {
+                QJsonObject pt = pv.toObject();
+                scenePts.append(worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble()));
+            }
+            QPainterPath path = MapPgmUtil::getBezierPath(scenePts);
+            auto *pi = m_scene->addPath(path, QPen(QColor(60, 160, 255, 160), 1.5));
+            pi->setZValue(15);
+        } else {
+            QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
+            QPointF pc = worldToScene(cv.value("cx").toDouble(), cv.value("cy").toDouble());
+            QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+            QPainterPath path; path.moveTo(p1); path.quadTo(pc, p2);
+            auto *pi = m_scene->addPath(path, QPen(QColor(60, 160, 255, 160), 1.5));
+            pi->setZValue(15);
+        }
     }
 
     // 渲染任务目标点 (与 TaskEditWidget 一致的小圆点 + 序号)

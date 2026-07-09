@@ -51,6 +51,7 @@ private:
     double fitScale() const;
 
     QImage m_image;
+    QImage m_originalImage;   // 原始地图数据(用于橡皮擦恢复)
     double m_scale = 1.0;
     double m_panX = 0;
     double m_panY = 0;

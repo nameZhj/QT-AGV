@@ -68,6 +68,19 @@ private:
     QPointF worldToScene(double wx, double wy) const;
     QPointF sceneToWorld(double sx, double sy) const;
 
+    // 任务点全局最近吸附: 在所有路网点/线/曲线中找到离点击位置最近的目标，
+    // 不限距离，始终返回最近的一个。用于绘制任务点时强制吸附到路网。
+    struct SnapResult {
+        bool    valid    = false;
+        QString type;        // "point" | "charge" | "highPrecision" | "line" | "curve"
+        QString id;
+        QPointF scenePos;    // 吸附目标在场景中的坐标
+        QPointF worldPos;    // 吸附目标在世界坐标中的坐标
+    };
+    SnapResult findNearestRoadSnap(const QPointF &scenePos) const;
+    // 显示/隐藏吸附指示圈(绿色环)，nullptr 或 invalid 时清除
+    void updateSnapIndicator(const SnapResult &r);
+
     bool eventFilter(QObject *obj, QEvent *event) override;
     void resizeEvent(QResizeEvent *e) override;
 
@@ -124,6 +137,7 @@ private:
     QString    m_taskId, m_mapId, m_mapName;
     QImage     m_mapImage;
     QJsonArray m_points, m_lines, m_curves, m_targets, m_carList;
+    QJsonArray m_charges, m_highPrecisionPoints;
     QJsonObject m_taskForm, m_form;
 
     // 坐标转换参数 (world extent + thumbnail size)
@@ -140,6 +154,9 @@ private:
 
     // 当前在画布上高亮(变绿)的目标点，随列表选中行同步
     QGraphicsItem *m_selectedTargetItem = nullptr;
+
+    // 吸附指示圈(绘制任务点时显示最近的路网吸附位置)
+    QGraphicsEllipseItem *m_snapIndicator = nullptr;
 };
 
 #endif // TASKEDITWIDGET_H

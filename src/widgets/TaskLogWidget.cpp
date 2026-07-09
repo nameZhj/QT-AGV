@@ -93,6 +93,12 @@ void TaskLogWidget::setupUI()
     mainLayout->addWidget(rightWidget);
 }
 
+void TaskLogWidget::refreshData()
+{
+    m_pageNum = 1;
+    getList();
+}
+
 void TaskLogWidget::getList()
 {
     QJsonObject query;

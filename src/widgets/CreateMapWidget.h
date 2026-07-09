@@ -150,6 +150,11 @@ private:
 
 // 对应 create-map/index.vue - 建图功能
 // 包含自适应建图、高阶建图（反光柱）、暂停/恢复巡航、MQTT 实时地图数据、遥控
+//
+// 注：键盘遥控已提取为全局 TeleopController 单例，本页面只保留：
+//   - 鼠标方向/刹车按钮（走 /rob/{agvId}/cmd_vel 与 /brake 主题）
+//   - "启用遥控"开关（委托给 TeleopController::setActive，与主窗口底部"开始遥控"按钮同步）
+//   - HUD（线/角速度来自 /carto_pose 实时反馈，遥控/刹车状态来自 TeleopController 信号）
 class CreateMapWidget : public QWidget
 {
     Q_OBJECT
@@ -162,12 +167,9 @@ signals:
 protected:
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
-    void keyPressEvent(QKeyEvent *event) override;
-    void keyReleaseEvent(QKeyEvent *event) override;
 
 private slots:
     void onStartAdaptiveClick();
-    void onTeleopTick();
     void onStopAdaptiveClick();
     void onStartHighClick();
     void onStopHighClick();
@@ -175,13 +177,14 @@ private slots:
     void onResetReflectorLocal();
     void onToggleCruiseClick();
     void onMqttMessage(const QString &topic, const QByteArray &payload);
+    void onTeleopActiveChanged(bool active);
+    void onTeleopBrakeChanged(bool brake);
 
 private:
     void setupUI();
     void initMqtt();
     void disconnectMqtt();
     void updateToolbar();
-    void updateTeleopMotion();
 
     // 工具栏按钮
     QPushButton *m_adaptiveBtn = nullptr;
@@ -209,30 +212,12 @@ private:
     QPushButton *m_leftBtn = nullptr;
     QPushButton *m_rightBtn = nullptr;
     QPushButton *m_brakeBtn = nullptr;
-    bool m_teleopEnabled = false;
     bool m_brakeActive = false;
 
     // 状态
     bool m_mappingActive = false;
     bool m_highMappingActive = false;
     bool m_cruiseSuspended = false;
-
-    // 键盘遥控状态
-    QTimer *m_teleopTimer  = nullptr;
-    bool m_keyForward  = false;
-    bool m_keyBack     = false;
-    bool m_keyLeft     = false;
-    bool m_keyRight    = false;
-    bool m_keyBrake    = false;
-    bool m_keyBoost    = false;
-    bool m_keyHoistUp  = false;
-    bool m_keyHoistDown = false;
-
-    // 上次实际发布的速度值（用于去重，避免持续发0）
-    double m_lastPublishedLinear  = 0.0;
-    double m_lastPublishedAngular = 0.0;
-    bool m_hasPublishedLinear  = false;
-    bool m_hasPublishedAngular = false;
 
     // MQTT 数据
     QJsonObject m_mapData;

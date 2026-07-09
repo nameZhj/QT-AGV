@@ -4,8 +4,16 @@
 #include "core/MqttService.h"
 #include "core/LoadingDialog.h"
 
-static const QString kToolBtnStyle = "background:#2c3e50; color:white; border-radius:4px; padding:4px;";
-static const QString kToolBtnPrimary = "background:#3498db; color:white; border-radius:4px; padding:4px;";
+static const QString kToolBtnStyle =
+    "QToolButton{background:#252a35;color:#c8d0d8;border:1px solid #3a3f4a;"
+    "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+    "QToolButton:hover{background:#2d3340;border-color:#4a9eff;}"
+    "QToolButton:pressed{background:#1e4080;}";
+static const QString kToolBtnPrimary =
+    "QToolButton{background:#1e6fd4;color:#fff;border:none;"
+    "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+    "QToolButton:hover{background:#2980e8;}"
+    "QToolButton:pressed{background:#155db8;}";
 static const QString kBtnPrimary = "background:#2980b9; color:white; border-radius:4px; padding:6px 12px;";
 
 #include "core/Toast.h"
@@ -48,6 +56,14 @@ static const QString kBtnPrimary = "background:#2980b9; color:white; border-radi
 
 // ── Toolbar icon helpers ─────────────────────────────────────────────────────
 namespace {
+
+// 与 Vue 一致：carId/mapId 在 Vue store 中是数字(parseInt)，发送 MQTT 时需要
+// 以数字类型出现在 JSON 中，否则后端无法识别。此函数把数字字符串转为 QJsonValue
+// 数字，非数字字符串保持为字符串。
+QJsonValue numOrStr(const QString &s) {
+    bool ok; qlonglong n = s.toLongLong(&ok);
+    return ok ? QJsonValue((double)n) : QJsonValue(s);
+}
 
 QPixmap drawMapToolIcon(const QString &name, const QColor &col, int sz = 20)
 {
@@ -529,6 +545,14 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
 
 // ── Show / hide ──────────────────────────────────────────────────────────────
 
+void MapViewWidget::refreshData()
+{
+    if (m_mapId.isEmpty())
+        loadCurrentCarMap();
+    else
+        loadMapById(m_mapId);
+}
+
 void MapViewWidget::showEvent(QShowEvent *e)
 {
     QWidget::showEvent(e);
@@ -736,6 +760,8 @@ void MapViewWidget::loadRoute()
         m_points = QJsonArray();
         m_lines  = QJsonArray();
         m_curves = QJsonArray();
+        m_charges = QJsonArray();
+        m_highPrecisionPoints = QJsonArray();
 
         QString jsonStr = data.value("json").toString();
         if (!jsonStr.isEmpty()) {
@@ -747,35 +773,55 @@ void MapViewWidget::loadRoute()
                     QJsonObject props = f.value("properties").toObject();
                     QJsonObject geom  = f.value("geometry").toObject();
                     QString gtype = geom.value("type").toString();
+                    QString id    = props.value("id").toString();
                     QJsonArray coords = geom.value("coordinates").toArray();
-                    QString ftype = props.value("featureType").toString();
 
-                    if (gtype == "Point" && ftype == "point") {
+                    if (gtype == "Point") {
                         QJsonObject pt;
-                        pt["id"] = props.value("id").toString();
-                        pt["x"] = coords[0].toDouble();
-                        pt["y"] = coords[1].toDouble();
+                        pt["id"]   = id;
+                        pt["x"]    = coords[0].toDouble();
+                        pt["y"]    = coords[1].toDouble();
                         pt["name"] = props.value("name").toString();
-                        m_points.append(pt);
-                    } else if (gtype == "LineString" && ftype == "line") {
+                        if (id.startsWith("c_"))
+                            m_charges.append(pt);
+                        else if (id.startsWith("hp_"))
+                            m_highPrecisionPoints.append(pt);
+                        else
+                            m_points.append(pt);
+                    } else if (gtype == "LineString") {
+                        // 路网线段: id 以 l_ 开头
                         QJsonObject ln;
-                        ln["id"] = props.value("id").toString();
-                        ln["x1"] = coords[0].toArray()[0].toDouble();
-                        ln["y1"] = coords[0].toArray()[1].toDouble();
-                        ln["x2"] = coords[1].toArray()[0].toDouble();
-                        ln["y2"] = coords[1].toArray()[1].toDouble();
+                        ln["id"]   = id;
+                        if (coords.size() >= 2) {
+                            QJsonArray c0 = coords[0].toArray();
+                            QJsonArray c1 = coords[1].toArray();
+                            ln["x1"] = c0[0].toDouble(); ln["y1"] = c0[1].toDouble();
+                            ln["x2"] = c1[0].toDouble(); ln["y2"] = c1[1].toDouble();
+                        }
                         ln["name"] = props.value("name").toString();
                         m_lines.append(ln);
-                    } else if (gtype == "LineString" && ftype == "curve") {
+                    } else if (gtype == "MultiPoint") {
+                        // 多阶贝塞尔曲线(>=3 个点): id 以 b_ 开头
                         QJsonObject cv;
-                        cv["id"] = props.value("id").toString();
-                        cv["x1"] = coords[0].toArray()[0].toDouble();
-                        cv["y1"] = coords[0].toArray()[1].toDouble();
-                        cv["x2"] = coords[2].toArray()[0].toDouble();
-                        cv["y2"] = coords[2].toArray()[1].toDouble();
-                        cv["cx"] = coords[1].toArray()[0].toDouble();
-                        cv["cy"] = coords[1].toArray()[1].toDouble();
+                        cv["id"]   = id;
                         cv["name"] = props.value("name").toString();
+                        QJsonArray ctrlArr;
+                        for (const auto &c : coords) {
+                            QJsonArray ca = c.toArray();
+                            if (ca.size() < 2) continue;
+                            QJsonObject p; p["x"] = ca[0].toDouble(); p["y"] = ca[1].toDouble();
+                            ctrlArr.append(p);
+                        }
+                        cv["controlPoints"] = ctrlArr;
+                        if (coords.size() >= 2) {
+                            QJsonArray a0 = coords[0].toArray(), aN = coords[coords.size()-1].toArray();
+                            cv["x1"] = a0[0].toDouble(); cv["y1"] = a0[1].toDouble();
+                            cv["x2"] = aN[0].toDouble(); cv["y2"] = aN[1].toDouble();
+                        }
+                        if (coords.size() == 3) {
+                            QJsonArray a1 = coords[1].toArray();
+                            cv["cx"] = a1[0].toDouble(); cv["cy"] = a1[1].toDouble();
+                        }
                         m_curves.append(cv);
                     }
                 }
@@ -828,54 +874,6 @@ void MapViewWidget::renderAxesAndGrid()
     double wBottom = m_worldB;
     double wTop    = m_worldT;
 
-    const QColor xCol(210,  45,  45, 230);   // red  X
-    const QColor yCol( 30, 185,  60, 230);   // green Y
-    const QColor oCol( 30, 140, 230, 255);   // blue  origin dot
-
-    // ── Compact axis indicator at the world origin (reference-image style) ─
-    QPointF O = worldToScene(0.0, 0.0);
-    bool inView = (O.x() > -60 && O.x() < m_imgW + 60 &&
-                   O.y() > -60 && O.y() < m_imgH + 60);
-
-    if (inView) {
-        const double arm = 52.0;   // arm length in scene pixels
-        const double aL  = 11.0;  // arrowhead length
-        const double aW  =  4.5;  // arrowhead half-width
-        const double lw  =  1.8;  // line width
-
-        // Helper: filled triangular arrowhead at tip, pointing in direction (dx,dy)
-        auto mkArrow = [&](QPointF tip, double dx, double dy, QColor col) {
-            double px = -dy, py = dx;
-            QPolygonF tri;
-            tri << tip
-                << QPointF(tip.x() - dx*aL + px*aW, tip.y() - dy*aL + py*aW)
-                << QPointF(tip.x() - dx*aL - px*aW, tip.y() - dy*aL - py*aW);
-            tag(m_scene->addPolygon(tri, QPen(Qt::NoPen), QBrush(col)), 12);
-        };
-        auto mkLabel = [&](QPointF pos, const QString &txt, QColor col) {
-            auto *t = m_scene->addText(txt);
-            t->setDefaultTextColor(col);
-            t->setFont(QFont("Arial", 9, QFont::Bold));
-            t->setPos(pos);
-            tag(t, 13);
-        };
-
-        // +X arm — pointing right in scene
-        QPointF xTip(O.x() + arm, O.y());
-        tag(m_scene->addLine(O.x(), O.y(), xTip.x() - aL, O.y(),
-            QPen(xCol, lw)), 10);
-        mkArrow(xTip, 1.0, 0.0, xCol);
-        mkLabel(QPointF(xTip.x() + 2, xTip.y() - 9), "x", xCol);
-
-        // +Y arm — pointing up in scene (world +Y = scene -Y)
-        QPointF yTip(O.x(), O.y() - arm);
-        tag(m_scene->addLine(O.x(), O.y(), O.x(), yTip.y() + aL,
-            QPen(yCol, lw)), 10);
-        mkArrow(yTip, 0.0, -1.0, yCol);
-        mkLabel(QPointF(yTip.x() + 4, yTip.y() - 2), "y", yCol);
-
-    }
-
     // ── Grid (only when toggled on) ───────────────────────────────────────
     if (!m_showGrid) return;
 
@@ -910,7 +908,8 @@ void MapViewWidget::renderRoute()
         }
     }
 
-    if (m_points.isEmpty() && m_lines.isEmpty() && m_curves.isEmpty()) return;
+    if (m_points.isEmpty() && m_lines.isEmpty() && m_curves.isEmpty()
+        && m_charges.isEmpty() && m_highPrecisionPoints.isEmpty()) return;
 
     auto addRoute = [](QGraphicsItem *item) {
         item->setData(0, 2);
@@ -928,16 +927,26 @@ void MapViewWidget::renderRoute()
     QPen curvePen(QColor(180, 120, 240, 200), 1.5);
     for (const auto &v : m_curves) {
         QJsonObject cv = v.toObject();
-        QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
-        QPointF pc = worldToScene(cv.value("cx").toDouble(), cv.value("cy").toDouble());
-        QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
         QPainterPath path;
-        path.moveTo(p1);
-        path.quadTo(pc, p2);
-        auto *pi = m_scene->addPath(path, curvePen);
-        addRoute(pi);
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        if (ctrlArr.size() >= 2) {
+            // 多阶贝塞尔曲线
+            QList<QPointF> pts;
+            for (const auto &pv : ctrlArr)
+                pts.append(worldToScene(pv.toObject().value("x").toDouble(),
+                                        pv.toObject().value("y").toDouble()));
+            path = MapPgmUtil::getBezierPath(pts);
+        } else {
+            // 兼容旧格式: cx/cy 二次贝塞尔
+            QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
+            QPointF pc = worldToScene(cv.value("cx").toDouble(),  cv.value("cy").toDouble());
+            QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+            path.moveTo(p1); path.quadTo(pc, p2);
+        }
+        addRoute(m_scene->addPath(path, curvePen));
     }
 
+    // 路网点
     for (const auto &v : m_points) {
         QJsonObject pt = v.toObject();
         QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
@@ -953,6 +962,24 @@ void MapViewWidget::renderRoute()
             lbl->setFont(QFont("Microsoft YaHei UI", 8));
             addRoute(lbl);
         }
+    }
+
+    // 充电桩
+    for (const auto &v : m_charges) {
+        QJsonObject pt = v.toObject();
+        QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
+        auto *ell = m_scene->addEllipse(sp.x()-6, sp.y()-6, 12, 12,
+            QPen(QColor("#e8a020"), 1.5), QBrush(QColor(232, 160, 32, 200)));
+        addRoute(ell);
+    }
+
+    // 高精度点：黄色圆点，与其他界面统一大小和样式
+    for (const auto &v : m_highPrecisionPoints) {
+        QJsonObject pt = v.toObject();
+        QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
+        auto *ell = m_scene->addEllipse(sp.x()-5, sp.y()-5, 10, 10,
+            QPen(QColor("#f2c200"), 1), QBrush(QColor(242, 194, 0, 180)));
+        addRoute(ell);
     }
 }
 
@@ -1189,8 +1216,8 @@ void MapViewWidget::onSceneReleased(const QPointF &scenePos, Qt::MouseButton btn
 
     QJsonObject msg;
     msg["action"] = "initialpose";
-    msg["car_id"] = carId;
-    msg["map_id"] = m_mapId;
+    msg["car_id"] = numOrStr(carId);
+    msg["map_id"] = numOrStr(m_mapId);
     msg["pose"]   = poseObj;
 
     setStatus("正在发送重定位...", "#4a9eff");
@@ -1448,6 +1475,8 @@ void MapViewWidget::onSwitchMap()
             m_points = QJsonArray();
             m_lines  = QJsonArray();
             m_curves = QJsonArray();
+            m_charges = QJsonArray();
+            m_highPrecisionPoints = QJsonArray();
             m_routeLoaded = false;
             m_robot.posValid = false;
             loadMapById(selectedMapId);
@@ -1481,6 +1510,8 @@ void MapViewWidget::onSwitchMap()
                 m_points = QJsonArray();
                 m_lines  = QJsonArray();
                 m_curves = QJsonArray();
+                m_charges = QJsonArray();
+                m_highPrecisionPoints = QJsonArray();
                 m_routeLoaded = false;
                 m_robot.posValid = false;
                 loadMapById(selectedMapId);

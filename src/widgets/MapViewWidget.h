@@ -50,6 +50,9 @@ public:
     explicit MapViewWidget(QWidget *parent = nullptr);
     ~MapViewWidget() override;
 
+    // 刷新当前地图数据(由 MainWindow 在切换菜单时调用)
+    void refreshData();
+
 signals:
     void navigateRequested(const QString &target, const QString &id);
 
@@ -111,7 +114,7 @@ private:
     bool   m_mapReady = false;
 
     // Route data
-    QJsonArray m_points, m_lines, m_curves;
+    QJsonArray m_points, m_lines, m_curves, m_charges, m_highPrecisionPoints;
     bool m_routeLoaded = false;
 
     // Robot / car state

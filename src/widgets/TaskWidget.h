@@ -126,6 +126,8 @@ private:
     QJsonArray m_points;
     QJsonArray m_lines;
     QJsonArray m_curves;
+    QJsonArray m_charges;
+    QJsonArray m_highPrecisionPoints;
     QJsonArray m_targets;
 
     // 坐标转换参数 (world extent + thumbnail size)

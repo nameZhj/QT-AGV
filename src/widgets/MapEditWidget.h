@@ -64,9 +64,13 @@ private:
         QString type, id;
         QPointF scenePos, worldPos;
     };
-    SnapResult findSnap(const QPointF &sp, double pixelTol = 15.0) const;
+    SnapResult findSnap(const QPointF &sp, double worldTol = 0.3) const;
     bool       hasOverlap(const QPointF &sp) const;   // 0.3 m world check
     void       updateSnapIndicator(const SnapResult &r);
+    // 确保曲线端点处存在节点: 优先吸附到附近已有点，否则在该位置建一个新节点，
+    // 返回该端点对应的节点 id 与吸附/创建后的场景坐标。
+    // 仅用于曲线首尾端点，中间控制点不应调用。
+    SnapResult ensureNodeAt(const QPointF &sp);
 
     // 把"屏幕像素"半径换算成当前缩放下的场景坐标半径，避免缩小地图后命中容差跟着缩小
     double hitTolScene(double screenPx) const;
@@ -134,6 +138,8 @@ private:
     QLineEdit *m_propNameEdit    = nullptr;
     QWidget   *m_propDirectRow   = nullptr;
     QComboBox *m_propDirectCombo = nullptr;
+    QWidget   *m_propKindRow     = nullptr;   // 点类型切换行(普通点/高精度点/充电桩)
+    QComboBox *m_propKindCombo   = nullptr;   // 点类型下拉框
 
     // Data
     QString    m_mapId, m_mapName;

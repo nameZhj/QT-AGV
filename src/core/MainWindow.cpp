@@ -13,6 +13,9 @@
 #include "core/WebSocketService.h"
 #include "core/DeviceManagerDialog.h"
 #include "core/Toast.h"
+#include "core/TeleopController.h"
+#include "core/ApiService.h"
+#include <QDebug>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QToolBar>
@@ -503,6 +506,26 @@ void MainWindow::setupStatusBar()
     sb->addWidget(m_sbCarId);
     sb->addWidget(m_sbConn);
 
+    // 底部"开始遥控"按钮：点击启用/停用全局键盘遥控
+    // 启用后用户在任意界面（除文本输入控件焦点外）通过键盘 ↑↓←→ 移动、Space 刹车、
+    // Ctrl 加速、P/L 升降；遥控键优先级最高，会拦截其他控件的相同按键。
+    m_teleopBtn = new QPushButton("▶ 开始遥控");
+    m_teleopBtn->setCursor(Qt::PointingHandCursor);
+    m_teleopBtn->setFocusPolicy(Qt::NoFocus);   // 不抢焦点，避免影响键盘遥控
+    m_teleopBtn->setToolTip(
+        "点击启用全局键盘遥控\n"
+        "键盘: ↑↓←→ 移动 | Space 刹车 | Ctrl 加速 | P 升降上 | L 升降下\n"
+        "启用后遥控键优先级最高，会拦截其他控件的相同按键");
+    m_teleopBtn->setStyleSheet(
+        "QPushButton{background:#252a35;border:1px solid #3a3f4a;color:#c8d0d8;"
+        "padding:3px 14px;border-radius:3px;font-size:12px;font-weight:600;}"
+        "QPushButton:hover{background:#2f3540;border-color:#4a9eff;color:#4a9eff;}"
+        "QPushButton:pressed{background:#1e2228;}"
+        "#teleopBtnActive{background:#c0392b;border-color:#e74c3c;color:#ffffff;}"
+        "#teleopBtnActive:hover{background:#e74c3c;}");
+    connect(m_teleopBtn, &QPushButton::clicked, this, &MainWindow::onTeleopToggled);
+    sb->addPermanentWidget(m_teleopBtn);
+
     QString ipText = dev.ip.isEmpty() ? "--" : dev.ip;
     sb->addPermanentWidget(new QLabel(QString("IP: %1").arg(ipText)));
 
@@ -510,6 +533,10 @@ void MainWindow::setupStatusBar()
     connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::updateStatusBar);
     m_statusTimer->start(3000);
     updateStatusBar();
+
+    // 同步 TeleopController 状态到按钮（防止外部 setActive 触发后按钮不同步）
+    connect(&TeleopController::instance(), &TeleopController::activeChanged,
+            this, &MainWindow::onTeleopActiveChanged);
 }
 
 void MainWindow::connectServices()
@@ -528,6 +555,31 @@ void MainWindow::connectServices()
 void MainWindow::onSectionChanged(int index)
 {
     m_stack->setCurrentIndex(index);
+    refreshCurrentPage(index);
+}
+
+// 每次切换主菜单时刷新当前页面数据，保证数据是最新的
+void MainWindow::refreshCurrentPage(int index)
+{
+    switch (index) {
+    case 0:  // 设备信息 - MQTT实时数据，无需主动刷新
+        break;
+    case 1:  // 地图管理
+        if (m_mapPage) m_mapPage->refreshData();
+        break;
+    case 2:  // 创建地图 - 无需刷新列表
+        break;
+    case 3:  // 任务管理
+        if (m_taskPage) m_taskPage->refreshList();
+        break;
+    case 4:  // 任务日志
+        if (m_taskLogPage) m_taskLogPage->refreshData();
+        break;
+    case 5:  // 参数配置
+        if (m_editConfigPage) m_editConfigPage->refreshData();
+        break;
+    default: break;
+    }
 }
 
 void MainWindow::switchToPage(const QString &pageKey)
@@ -578,6 +630,7 @@ void MainWindow::onNavigateRequested(const QString &target, const QString &id)
             MapEditWidget *w = new MapEditWidget(id);
             connect(w, &MapEditWidget::goBack, this, [this, key]() {
                 m_stack->setCurrentWidget(m_mapPage);
+                if (m_mapPage) m_mapPage->refreshData();
                 QWidget *p = m_dynamicPages.take(key);
                 if (p) { m_stack->removeWidget(p); p->deleteLater(); }
             });
@@ -592,6 +645,7 @@ void MainWindow::onNavigateRequested(const QString &target, const QString &id)
             MapImageEditWidget *w = new MapImageEditWidget(id);
             connect(w, &MapImageEditWidget::goBack, this, [this, key]() {
                 m_stack->setCurrentWidget(m_mapPage);
+                if (m_mapPage) m_mapPage->refreshData();
                 QWidget *p = m_dynamicPages.take(key);
                 if (p) { m_stack->removeWidget(p); p->deleteLater(); }
             });
@@ -692,4 +746,47 @@ void MainWindow::onMqttStatusClicked()
     connectServices();
     updateStatusBar();
     Toast::info(this, "正在重新连接 MQTT...");
+}
+
+void MainWindow::onTeleopToggled()
+{
+    if (!MqttService::instance().isConnected()) {
+        Toast::error(this, "MQTT 未连接，无法启用遥控");
+        return;
+    }
+    if (AppConfig::instance().agvId().isEmpty()) {
+        Toast::error(this, "未选择设备，无法启用遥控");
+        return;
+    }
+    TeleopController::instance().setActive(!TeleopController::instance().isActive());
+}
+
+void MainWindow::onTeleopActiveChanged(bool active)
+{
+    if (!m_teleopBtn) return;
+    if (active) {
+        m_teleopBtn->setText("■ 停止遥控");
+        m_teleopBtn->setObjectName("teleopBtnActive");
+        // 强制刷新样式（objectName 改变后需要重新 polish）
+        m_teleopBtn->style()->unpolish(m_teleopBtn);
+        m_teleopBtn->style()->polish(m_teleopBtn);
+        Toast::info(this, "遥控已启用：↑↓←→ 移动 | Space 刹车 | Ctrl 加速 | P/L 升降");
+        // 启用遥控前先暂停巡航，避免遥控与自动巡航冲突
+        ApiService::instance().suspendWork([](int code, const QJsonObject &) {
+            if (code != 200) {
+                qWarning("暂停巡航失败 (HTTP %d)，遥控可能受影响", code);
+            }
+        });
+    } else {
+        m_teleopBtn->setText("▶ 开始遥控");
+        m_teleopBtn->setObjectName("");
+        m_teleopBtn->style()->unpolish(m_teleopBtn);
+        m_teleopBtn->style()->polish(m_teleopBtn);
+        // 停止遥控后恢复巡航
+        ApiService::instance().continueWork([](int code, const QJsonObject &) {
+            if (code != 200) {
+                qWarning("恢复巡航失败 (HTTP %d)", code);
+            }
+        });
+    }
 }

@@ -13,6 +13,8 @@ class TaskLogWidget : public QWidget
     Q_OBJECT
 public:
     explicit TaskLogWidget(QWidget *parent = nullptr);
+    // 刷新任务日志列表(由 MainWindow 在切换菜单时调用)
+    void refreshData();
 
 signals:
     void navigateRequested(const QString &target, const QString &id);

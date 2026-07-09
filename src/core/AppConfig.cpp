@@ -73,9 +73,13 @@ void AppConfig::removeDevice(int index)
         list.removeAt(index);
         saveDeviceList(list);
 
-        int cur = currentDeviceIndex();
-        if (cur >= list.size())
-            setCurrentDeviceIndex(qMax(0, list.size() - 1));
+        if (list.isEmpty()) {
+            setCurrentDeviceIndex(-1);
+        } else {
+            int cur = currentDeviceIndex();
+            if (cur >= list.size())
+                setCurrentDeviceIndex(qMax(0, list.size() - 1));
+        }
     }
 }
 
