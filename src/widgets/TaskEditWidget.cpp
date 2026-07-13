@@ -590,7 +590,7 @@ void TaskEditWidget::setupUI()
         tbh->addWidget(upBtn); tbh->addWidget(downBtn); tbh->addStretch(); tbh->addWidget(delBtn);
         gl->addLayout(tbh);
 
-        // 目标点属性：选中列表某行后显示，可编辑名称/坐标/朝向
+        // 目标点属性：选中列表某行后显示，可编辑名称/朝向(坐标由路网决定，不可手动修改)
         m_targetPropsPanel = new QWidget;
         auto *tpl = new QFormLayout(m_targetPropsPanel);
         tpl->setSpacing(4); tpl->setLabelAlignment(Qt::AlignRight);
@@ -598,7 +598,11 @@ void TaskEditWidget::setupUI()
         m_targetIdEdit->setStyleSheet("background:#131d2a;color:#5a7088;");
         m_targetNameEdit = new QLineEdit;
         m_targetXSpin = new QDoubleSpinBox; m_targetXSpin->setRange(-100000, 100000); m_targetXSpin->setDecimals(3);
+        m_targetXSpin->setReadOnly(true);   // 任务点坐标由路网决定，不允许手动修改
+        m_targetXSpin->setStyleSheet("background:#131d2a;color:#5a7088;");
         m_targetYSpin = new QDoubleSpinBox; m_targetYSpin->setRange(-100000, 100000); m_targetYSpin->setDecimals(3);
+        m_targetYSpin->setReadOnly(true);   // 任务点坐标由路网决定，不允许手动修改
+        m_targetYSpin->setStyleSheet("background:#131d2a;color:#5a7088;");
         m_targetYawSpin = new QDoubleSpinBox; m_targetYawSpin->setRange(-100000, 100000); m_targetYawSpin->setDecimals(3);
         // 鼠标只是经过这几个步进器(并非有意调整)时不应该被滚轮意外改值
         for (auto *spin : {m_targetXSpin, m_targetYSpin, m_targetYawSpin})
@@ -1153,21 +1157,77 @@ void TaskEditWidget::renderMap()
     }
 
     // 渲染任务目标点 (世界坐标→场景像素坐标)
-    for (int i = 0; i < m_targets.size(); ++i) {
-        QJsonObject target = m_targets[i].toObject();
-        QPointF sp = worldToScene(target.value("x").toDouble(), target.value("y").toDouble());
-        QString id = target.value("id").toString();
+    // 距离较近的点合并为一个点，标号用逗号分隔并按顺序显示: "1,2,3"
+    {
+        // 先计算所有点的场景坐标
+        QList<QPointF> scenePositions;
+        for (int i = 0; i < m_targets.size(); ++i) {
+            QJsonObject target = m_targets[i].toObject();
+            QPointF sp = worldToScene(target.value("x").toDouble(), target.value("y").toDouble());
+            scenePositions.append(sp);
+        }
 
-        QGraphicsEllipseItem *ellipse = m_scene->addEllipse(sp.x() - 4, sp.y() - 4, 8, 8,
-            QPen(Qt::red, 1.5), QBrush(QColor(255, 0, 0, 128)));
-        ellipse->setZValue(20);
-        m_targetItems[id] = ellipse;
+        // 按距离聚类分组: 场景坐标距离小于阈值(12px)的归为一组
+        const double mergeDist = 12.0;
+        QList<QList<int>> groups;
+        QList<bool> assigned;
+        assigned.fill(false, m_targets.size());
+        for (int i = 0; i < m_targets.size(); ++i) {
+            if (assigned[i]) continue;
+            QList<int> group;
+            group.append(i);
+            assigned[i] = true;
+            for (int j = i + 1; j < m_targets.size(); ++j) {
+                if (assigned[j]) continue;
+                // 判断 j 是否属于当前组(与组内任一点距离小于阈值)
+                for (int k : group) {
+                    if (std::hypot(scenePositions[j].x() - scenePositions[k].x(),
+                                   scenePositions[j].y() - scenePositions[k].y()) < mergeDist) {
+                        group.append(j);
+                        assigned[j] = true;
+                        break;
+                    }
+                }
+            }
+            groups.append(group);
+        }
 
-        // 序号
-        int targetNumber = target.value("targetNumber").toInt(i + 1);
-        QGraphicsTextItem *label = m_scene->addText(QString::number(targetNumber));
-        label->setPos(sp.x() + 6, sp.y() - 6);
-        label->setZValue(21);
+        // 逐组渲染
+        for (const QList<int> &indices : groups) {
+            // 取组内所有点的平均位置作为显示位置
+            QPointF center(0, 0);
+            for (int idx : indices) center += scenePositions[idx];
+            center /= indices.size();
+
+            // 只画一个圆点
+            QGraphicsEllipseItem *ellipse = m_scene->addEllipse(center.x() - 4, center.y() - 4, 8, 8,
+                QPen(Qt::red, 1.5), QBrush(QColor(255, 0, 0, 128)));
+            ellipse->setZValue(20);
+
+            // 收集标号按 targetNumber 排序
+            QList<QPair<int, QString>> numbered;
+            for (int idx : indices) {
+                QJsonObject target = m_targets[idx].toObject();
+                QString id = target.value("id").toString();
+                int targetNumber = target.value("targetNumber").toInt(idx + 1);
+                m_targetItems[id] = ellipse;   // 多个 id 共享同一图元(点击任一都命中)
+                numbered.append(qMakePair(targetNumber, id));
+            }
+            std::sort(numbered.begin(), numbered.end(),
+                      [](const QPair<int, QString> &a, const QPair<int, QString> &b) {
+                          return a.first < b.first;
+                      });
+
+            // 拼标号: "1,2,3"
+            QStringList nums;
+            for (const auto &p : numbered)
+                nums << QString::number(p.first);
+            QString labelText = nums.join(",");
+
+            QGraphicsTextItem *label = m_scene->addText(labelText);
+            label->setPos(center.x() + 6, center.y() - 6);
+            label->setZValue(21);
+        }
     }
 
     // 网格和坐标轴
@@ -1228,17 +1288,7 @@ void TaskEditWidget::addTargetPoint(const QPointF &scenePos)
     if (!snap.valid) return;   // 路网为空，无法吸附
     QPointF world = snap.worldPos;
 
-    // 距离已有目标点小于 0.3m 时，视为选中该点而不是新增
-    const double snapDist = 0.3;
-    for (int i = 0; i < m_targets.size(); ++i) {
-        QJsonObject t = m_targets[i].toObject();
-        double dx = t.value("x").toDouble() - world.x();
-        double dy = t.value("y").toDouble() - world.y();
-        if (std::sqrt(dx * dx + dy * dy) < snapDist) {
-            m_targetTable->selectRow(i);
-            return;
-        }
-    }
+    // 与 Vue 一致: 打点模式下总是添加新点，允许在同一位置或已有点周围重复打点
 
     QJsonObject target;
     int newNum = m_targets.size() + 1;
@@ -1659,41 +1709,12 @@ TaskEditWidget::SnapResult TaskEditWidget::findNearestRoadSnap(const QPointF &sc
     checkPoints(m_charges, "charge");
     checkPoints(m_highPrecisionPoints, "highPrecision");
 
-    // 2) 路网线段: 找点到线段的最近点
-    for (const auto &v : m_lines) {
-        QJsonObject o = v.toObject();
-        QPointF a = worldToScene(o.value("x1").toDouble(), o.value("y1").toDouble());
-        QPointF b = worldToScene(o.value("x2").toDouble(), o.value("y2").toDouble());
-        QPointF np = nearestOnSegment(scenePos, a, b);
-        consider(np, "line", o.value("id").toString());
-    }
-
-    // 3) 路网曲线: 在贝塞尔曲线上采样找最近点
-    for (const auto &v : m_curves) {
-        QJsonObject cv = v.toObject();
-        QString id = cv.value("id").toString();
-        // 收集控制点(场景坐标)
-        QList<QPointF> pts;
-        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-        if (ctrlArr.size() >= 2) {
-            for (const auto &pv : ctrlArr)
-                pts.append(worldToScene(pv.toObject().value("x").toDouble(),
-                                        pv.toObject().value("y").toDouble()));
-        } else {
-            // 兼容旧格式: x1/cy/x2
-            pts.append(worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble()));
-            pts.append(worldToScene(cv.value("cx").toDouble(),  cv.value("cy").toDouble()));
-            pts.append(worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble()));
-        }
-        if (pts.size() < 2) continue;
-        // 在曲线上采样 200 段取最近点
-        const int steps = 200;
-        for (int i = 0; i <= steps; ++i) {
-            double t = double(i) / steps;
-            QPointF sp = MapPgmUtil::evaluateBezier(pts, t);
-            consider(sp, "curve", id);
-        }
-    }
+    // 注: 任务点只能吸附在路网点上，不再吸附路网线段和曲线
+    // (原逻辑保留注释，便于后续恢复)
+    // // 2) 路网线段: 找点到线段的最近点
+    // for (const auto &v : m_lines) { ... }
+    // // 3) 路网曲线: 在贝塞尔曲线上采样找最近点
+    // for (const auto &v : m_curves) { ... }
 
     return best;
 }
@@ -1758,8 +1779,32 @@ bool TaskEditWidget::eventFilter(QObject *obj, QEvent *event)
         // 拖拽/选择模式下点击目标点：选中对应列表行，而不是开始平移地图
         if (me->button() == Qt::LeftButton && m_drawStatus == Drag) {
             QPointF scenePos = m_mapView->mapToScene(me->pos());
-            if (QGraphicsEllipseItem *hit = targetItemAt(scenePos)) {
-                QString id = m_targetItems.key(hit);
+            // 收集点击位置附近所有的目标点(支持重叠点循环切换)
+            const double tol = 8.0;
+            QList<QGraphicsEllipseItem*> hits;
+            for (auto *item : m_scene->items(QRectF(scenePos.x()-tol, scenePos.y()-tol, tol*2, tol*2))) {
+                auto *ellipse = qgraphicsitem_cast<QGraphicsEllipseItem*>(item);
+                if (ellipse && m_targetItems.values().contains(ellipse))
+                    hits.append(ellipse);
+            }
+            if (!hits.isEmpty()) {
+                // 循环切换: 找到当前选中点在命中列表中的位置，选下一个
+                int curRow = m_targetTable->currentRow();
+                QString curId;
+                if (curRow >= 0 && curRow < m_targets.size())
+                    curId = m_targets[curRow].toObject().value("id").toString();
+
+                int nextIdx = 0;
+                if (!curId.isEmpty()) {
+                    QString curItemId = m_targetItems.key(m_selectedTargetItem);
+                    for (int i = 0; i < hits.size(); ++i) {
+                        if (hits[i] == m_selectedTargetItem) {
+                            nextIdx = (i + 1) % hits.size();
+                            break;
+                        }
+                    }
+                }
+                QString id = m_targetItems.key(hits[nextIdx]);
                 for (int i = 0; i < m_targets.size(); ++i) {
                     if (m_targets[i].toObject().value("id").toString() == id) {
                         m_targetTable->selectRow(i);

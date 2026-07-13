@@ -11,6 +11,7 @@
 #include <QMap>
 #include <QTableWidget>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
@@ -140,6 +141,9 @@ private:
     QComboBox *m_propDirectCombo = nullptr;
     QWidget   *m_propKindRow     = nullptr;   // 点类型切换行(普通点/高精度点/充电桩)
     QComboBox *m_propKindCombo   = nullptr;   // 点类型下拉框
+    QWidget   *m_propCoordRow    = nullptr;   // 坐标编辑行(仅点类型显示)
+    QDoubleSpinBox *m_propXSpin = nullptr;   // 点的 X 坐标(可编辑)
+    QDoubleSpinBox *m_propYSpin = nullptr;   // 点的 Y 坐标(可编辑)
 
     // Data
     QString    m_mapId, m_mapName;

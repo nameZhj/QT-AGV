@@ -651,6 +651,20 @@ void MapEditWidget::setupUI()
         kl->addWidget(kLbl); kl->addWidget(m_propKindCombo);
         pl->addWidget(m_propKindRow);
 
+        // 点坐标编辑行: 仅在选中点(普通/高精度/充电桩)时显示
+        m_propCoordRow = new QWidget;
+        auto *cl = new QHBoxLayout(m_propCoordRow);
+        cl->setContentsMargins(0,0,0,0);
+        auto *xLbl = new QLabel("X:");
+        xLbl->setStyleSheet("color:#4a6080;font-size:12px;background:transparent;");
+        m_propXSpin = new QDoubleSpinBox; m_propXSpin->setRange(-100000, 100000); m_propXSpin->setDecimals(3);
+        auto *yLbl = new QLabel("Y:");
+        yLbl->setStyleSheet("color:#4a6080;font-size:12px;background:transparent;");
+        m_propYSpin = new QDoubleSpinBox; m_propYSpin->setRange(-100000, 100000); m_propYSpin->setDecimals(3);
+        cl->addWidget(xLbl); cl->addWidget(m_propXSpin);
+        cl->addWidget(yLbl); cl->addWidget(m_propYSpin);
+        pl->addWidget(m_propCoordRow);
+
         QHBoxLayout *pb = new QHBoxLayout;
         auto *applyBtn = new QPushButton("应用");
         auto *delBtn   = new QPushButton("删除");
@@ -1675,9 +1689,12 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
     // 点类型切换: 仅当选中的是点(普通/高精度/充电桩)时显示
     bool isPointKind = (type == "point" || type == "highPrecision" || type == "charge");
     m_propKindRow->setVisible(isPointKind);
+    m_propCoordRow->setVisible(isPointKind);
     if (isPointKind) {
         int idx = m_propKindCombo->findData(type);
         if (idx >= 0) m_propKindCombo->setCurrentIndex(idx);
+        m_propXSpin->setValue(obj.value("x").toDouble());
+        m_propYSpin->setValue(obj.value("y").toDouble());
     }
 
     m_propsPanel->setVisible(true);
@@ -1729,6 +1746,9 @@ void MapEditWidget::applyPropsEdit()
                 pointObj["id"]   = newId;
                 if (newName.isEmpty()) pointObj["name"] = defaultName;
                 else                   pointObj["name"] = newName;
+                // 同步坐标(从编辑框取值)
+                pointObj["x"] = m_propXSpin->value();
+                pointObj["y"] = m_propYSpin->value();
 
                 if      (newKind == "point")         m_points.append(pointObj);
                 else if (newKind == "charge")        m_charges.append(pointObj);
@@ -1744,13 +1764,18 @@ void MapEditWidget::applyPropsEdit()
         }
     }
 
-    // 普通属性更新(名称/方向)
+    // 普通属性更新(名称/方向/坐标)
     auto upd = [&](QJsonArray &arr) {
         for (int i = 0; i < arr.size(); ++i) {
             QJsonObject o = arr[i].toObject();
             if (o.value("id").toString() != m_selId) continue;
             o["name"] = newName;
             if (m_selType == "line" || m_selType == "curve") o["direct"] = newDirect;
+            // 点类型: 更新坐标
+            if (isPointKind) {
+                o["x"] = m_propXSpin->value();
+                o["y"] = m_propYSpin->value();
+            }
             arr[i] = o; break;
         }
     };

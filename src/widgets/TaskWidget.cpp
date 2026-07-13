@@ -3,6 +3,7 @@
 #include "core/ApiService.h"
 #include "core/AppConfig.h"
 #include "core/MqttService.h"
+#include "core/WebSocketService.h"
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
@@ -134,6 +135,16 @@ TaskWidget::TaskWidget(QWidget *parent)
     setupUI();
     getList();
 
+    // 防抖定时器: 收到多次 navigation 消息时合并为一次刷新
+    m_refreshDebounce = new QTimer(this);
+    m_refreshDebounce->setSingleShot(true);
+    m_refreshDebounce->setInterval(800);   // 800ms 内的多次刷新请求合并为一次
+    connect(m_refreshDebounce, &QTimer::timeout, this, [this]() {
+        refreshList();
+        // 不调用 loadCurrentTask: MQTT navigation 消息已直接更新了 m_currentTask，
+        // loadCurrentTask 可能因 m_currentCarId 为空而覆盖掉有效状态
+    });
+
     connect(&MqttService::instance(), &MqttService::connected, this, [this]() {
         initMqtt();
     });
@@ -145,6 +156,10 @@ TaskWidget::TaskWidget(QWidget *parent)
     if (MqttService::instance().isConnected()) {
         initMqtt();
     }
+
+    // 监听 WebSocket 通知，实时更新任务执行状态(对应 Vue show.vue 的 navigation watch)
+    connect(&WebSocketService::instance(), &WebSocketService::notificationReceived,
+            this, &TaskWidget::onWebSocketNotification);
 }
 
 void TaskWidget::setupUI()
@@ -465,6 +480,10 @@ void TaskWidget::setupUI()
 void TaskWidget::refreshList()
 {
     getList();
+    // 重新初始化 MQTT 订阅，确保设备切换后能收到新设备的位置更新
+    initMqtt();
+    // 不调用 loadCurrentTask: MQTT navigation 已直接更新 m_currentTask，
+    // loadCurrentTask 会覆盖用户手动选中的行
 }
 
 void TaskWidget::getList()
@@ -478,6 +497,9 @@ void TaskWidget::getList()
         if (code != 200) return;
         m_taskList = data.value("rows").toArray();
         m_total = data.value("total").toInt();
+
+        // 重建表格时阻塞信号，避免中间状态触发 onTaskSelectionChanged
+        bool wasBlocking = m_table->blockSignals(true);
 
         m_table->setRowCount(m_taskList.size());
         for (int i = 0; i < m_taskList.size(); ++i) {
@@ -508,10 +530,26 @@ void TaskWidget::getList()
 
         applyTaskValidityStyle();
 
-        // 默认选中第一个任务
-        if (m_taskList.size() > 0) {
-            m_table->selectRow(0);
+        // 恢复之前选中的任务(若仍存在)，否则选中第一个
+        int restoreRow = -1;
+        if (!m_lastSelectedTaskId.isEmpty()) {
+            for (int i = 0; i < m_taskList.size(); ++i) {
+                QJsonObject t = m_taskList[i].toObject();
+                if (jsonIdStr(t.value("taskId")) == m_lastSelectedTaskId) {
+                    restoreRow = i;
+                    break;
+                }
+            }
+        }
+        if (restoreRow < 0 && m_taskList.size() > 0) restoreRow = 0;
+        if (restoreRow >= 0) {
+            m_table->blockSignals(false);   // 恢复信号，让 selectRow 触发 selectionChanged
+            m_suppressTaskLoad = true;     // 恢复选中时不要触发 loadCurrentTask
+            m_table->selectRow(restoreRow);
+            onTaskSelectionChanged();       // 手动触发一次，确保地图/任务点更新
+            m_suppressTaskLoad = false;
         } else {
+            m_table->blockSignals(false);   // 恢复信号
             // 没有任务时也应该看到设备当前所在地图与实时位置，而不是空白页面
             loadCurrentCarMap();
         }
@@ -587,6 +625,7 @@ void TaskWidget::onTaskSelectionChanged()
     QJsonObject task = m_taskList[row].toObject();
     m_currentTaskId = jsonIdStr(task.value("taskId"));
     m_currentCarId = jsonIdStr(task.value("carId"));
+    m_lastSelectedTaskId = m_currentTaskId;   // 记录当前选中，刷新后恢复
 
     // 服务器标记为"已失效"的任务通常是因为设备当前地图与任务地图不一致，
     // "加载任务"会先自动切换地图再加载，因此这里不禁用按钮，仅提示原因。
@@ -616,7 +655,10 @@ void TaskWidget::onTaskSelectionChanged()
     }
 
     // 加载当前任务状态
-    loadCurrentTask();
+    // 仅在用户手动选择时调用，刷新列表恢复选中时不调用(避免覆盖 WebSocket 设置的状态)
+    if (!m_suppressTaskLoad) {
+        loadCurrentTask();
+    }
 }
 
 void TaskWidget::loadMapForTask(const QString &mapId)
@@ -1035,19 +1077,66 @@ void TaskWidget::renderMap()
         }
     }
 
-    // 渲染任务目标点 (与 TaskEditWidget 一致的小圆点 + 序号)
-    for (int i = 0; i < m_targets.size(); ++i) {
-        QJsonObject t = m_targets[i].toObject();
-        QPointF sp = worldToScene(t.value("x").toDouble(), t.value("y").toDouble());
-        auto *e = m_scene->addEllipse(sp.x()-4, sp.y()-4, 8, 8,
-            QPen(Qt::red, 1.5), QBrush(QColor(255, 0, 0, 128)));
-        e->setZValue(25);
+    // 渲染任务目标点 (与 TaskEditWidget 一致: 距离近的点合并，标号逗号分隔按序显示)
+    {
+        // 先计算所有点的场景坐标
+        QList<QPointF> scenePositions;
+        for (int i = 0; i < m_targets.size(); ++i) {
+            QJsonObject t = m_targets[i].toObject();
+            QPointF sp = worldToScene(t.value("x").toDouble(), t.value("y").toDouble());
+            scenePositions.append(sp);
+        }
 
-        int targetNumber = t.value("targetNumber").toInt(i + 1);
-        auto *label = m_scene->addText(QString::number(targetNumber));
-        label->setDefaultTextColor(QColor(255, 170, 170));
-        label->setPos(sp.x() + 6, sp.y() - 6);
-        label->setZValue(26);
+        // 按距离聚类分组: 场景坐标距离小于阈值(12px)的归为一组
+        const double mergeDist = 12.0;
+        QList<QList<int>> groups;
+        QList<bool> assigned;
+        assigned.fill(false, m_targets.size());
+        for (int i = 0; i < m_targets.size(); ++i) {
+            if (assigned[i]) continue;
+            QList<int> group;
+            group.append(i);
+            assigned[i] = true;
+            for (int j = i + 1; j < m_targets.size(); ++j) {
+                if (assigned[j]) continue;
+                for (int k : group) {
+                    if (std::hypot(scenePositions[j].x() - scenePositions[k].x(),
+                                   scenePositions[j].y() - scenePositions[k].y()) < mergeDist) {
+                        group.append(j);
+                        assigned[j] = true;
+                        break;
+                    }
+                }
+            }
+            groups.append(group);
+        }
+
+        for (const QList<int> &indices : groups) {
+            // 取组内平均位置
+            QPointF center(0, 0);
+            for (int idx : indices) center += scenePositions[idx];
+            center /= indices.size();
+
+            auto *e = m_scene->addEllipse(center.x()-4, center.y()-4, 8, 8,
+                QPen(Qt::red, 1.5), QBrush(QColor(255, 0, 0, 128)));
+            e->setZValue(25);
+
+            // 收集标号并按 targetNumber 排序
+            QList<int> nums;
+            for (int idx : indices) {
+                QJsonObject t = m_targets[idx].toObject();
+                nums << t.value("targetNumber").toInt(idx + 1);
+            }
+            std::sort(nums.begin(), nums.end());
+            QStringList numStrs;
+            for (int n : nums) numStrs << QString::number(n);
+            QString labelText = numStrs.join(",");
+
+            auto *label = m_scene->addText(labelText);
+            label->setDefaultTextColor(QColor(255, 170, 170));
+            label->setPos(center.x() + 6, center.y() - 6);
+            label->setZValue(26);
+        }
     }
 
     // 清除设备标记指针（scene->clear 已删除所有 item）
@@ -1126,6 +1215,9 @@ void TaskWidget::initMqtt()
     QString agvId = AppConfig::instance().agvId();
     if (agvId.isEmpty()) return;
 
+    // 先断开旧订阅，避免设备切换后仍订阅旧设备的 topic
+    disconnectMqtt();
+
     // 订阅设备在线状态
     mqtt.subscribeTopic("/rob/online", 0, [this](const QString &topic, const QByteArray &payload) {
         Q_UNUSED(topic)
@@ -1198,12 +1290,49 @@ void TaskWidget::onMqttMessage(const QString &topic, const QByteArray &payload)
     }
 }
 
+void TaskWidget::onWebSocketNotification(const QJsonObject &msg)
+{
+    // 对应 Vue show.vue 中的 websocket watch:
+    //   if (newData.type === "navigation" && newData.car_id === this.carSelect)
+    //   { taskInfo.taskId = newData.task_id; taskInfo.status = newData.status; ... }
+    QString type = msg.value("type").toString();
+    if (type != "navigation") return;
+
+    QString carId = jsonIdStr(msg.value("car_id"));
+    if (carId.isEmpty()) carId = jsonIdStr(msg.value("carId"));
+    // 仅处理当前选中设备的任务通知
+    QString agvId = AppConfig::instance().agvId();
+    if (!carId.isEmpty() && carId != agvId) return;
+
+    // 直接用 WebSocket 通知数据更新任务状态(与 Vue 一致)
+    // API status 编码: 0=执行中 1=已完成 2=失败 3=暂停 4=未开始
+    m_currentTask["taskId"]          = msg.value("task_id");
+    m_currentTask["taskName"]         = msg.value("task_name");
+    m_currentTask["status"]           = msg.value("status");
+    m_currentTask["current_count"]    = msg.value("current_count");
+    m_currentTask["execution_count"]  = msg.value("execution_count");
+    m_currentTaskId = jsonIdStr(msg.value("task_id"));
+
+    QString status = jsonIdStr(msg.value("status"));
+    QString statusText;
+    if      (status == "0") statusText = "执行中";
+    else if (status == "1") statusText = "已完成";
+    else if (status == "2") statusText = "失败";
+    else if (status == "3") statusText = "暂停";
+    else if (status == "4") statusText = "未开始";
+    else                    statusText = status;
+
+    QString taskName = msg.value("task_name").toString();
+    m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
+    updateTaskButtons();
+
+    // 防抖刷新任务列表
+    m_refreshDebounce->start();
+}
+
 void TaskWidget::loadCurrentTask()
 {
     if (m_currentCarId.isEmpty()) {
-        m_currentTask = QJsonObject();
-        m_currentTaskLabel->setText("无任务");
-        updateTaskButtons();
         return;
     }
 
@@ -1214,7 +1343,6 @@ void TaskWidget::loadCurrentTask()
     ApiService::instance().getCurrentTask(query, [this](int code, const QJsonObject &data) {
         if (code != 200) return;
         // 响应结构: {data:{taskId,taskName,...}, taskInfo_data:{status,current_count,execution_count}}
-        // 基础信息和状态信息分属两个不同的顶层字段，需要分别取出再合并。
         QJsonValue dataVal = data.value("data");
         if (dataVal.isUndefined() || dataVal.isNull() || !dataVal.isObject()) {
             m_currentTask = QJsonObject();
@@ -1228,8 +1356,9 @@ void TaskWidget::loadCurrentTask()
 
             QString taskName = taskData.value("taskName").toString();
             QString status = jsonIdStr(m_currentTask.value("status"));
+            // API status 编码: 0=执行中 1=已完成 2=失败 3=暂停 4=未开始
             QString statusText;
-            if (status == "0") statusText = "执行中";
+            if      (status == "0") statusText = "执行中";
             else if (status == "1") statusText = "已完成";
             else if (status == "2") statusText = "失败";
             else if (status == "3") statusText = "暂停";
@@ -1245,6 +1374,14 @@ void TaskWidget::updateTaskButtons()
 {
     QString status = jsonIdStr(m_currentTask.value("status"));
     bool hasTask = !m_currentTask.isEmpty();
+    // API status 编码(与 Vue show.vue 一致):
+    //   0=执行中 1=已完成 2=失败 3=暂停 4=未开始
+    // Vue 按钮逻辑:
+    //   执行: disabled when ['1','2','4'].indexOf(status) < 0  → 仅 1/2/4 启用
+    //   暂停: disabled when ['0'].indexOf(status) < 0          → 仅 0 启用
+    //   继续: disabled when ['3'].indexOf(status) < 0          → 仅 3 启用
+    //   结束: disabled when ['0','3'].indexOf(status) < 0      → 仅 0/3 启用
+    //   移除: disabled when ['1','2','4'].indexOf(status) < 0  → 仅 1/2/4 启用
     m_startTaskBtn->setEnabled(hasTask && (status == "1" || status == "2" || status == "4"));
     m_pauseTaskBtn->setEnabled(hasTask && status == "0");
     m_continueTaskBtn->setEnabled(hasTask && status == "3");

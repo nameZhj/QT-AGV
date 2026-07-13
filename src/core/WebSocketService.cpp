@@ -62,10 +62,13 @@ void WebSocketService::onTextMessageReceived(const QString &message)
     if (err.error != QJsonParseError::NoError) return;
 
     QJsonObject obj = doc.object();
-    // 区分通知消息和普通消息
-    if (obj.contains("type") && obj["type"].toString() == "notification") {
-        emit notificationReceived(obj);
-    } else {
+    // 与 Vue 一致: 非存储类消息(messageType != "storage")都作为通知分发，
+    // 通知类型由消息体内的 type 字段区分(navigation/pcd/agv/connect/crud 等)。
+    // 存储类消息(messageType == "storage")走 messageReceived。
+    QString messageType = obj.value("messageType").toString();
+    if (messageType == "storage") {
         emit messageReceived(obj);
+    } else {
+        emit notificationReceived(obj);
     }
 }
