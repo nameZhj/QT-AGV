@@ -59,7 +59,10 @@ void CreateMapWidget::setupUI()
         "padding:4px 12px;font-size:12px;background:transparent;}"
         "QPushButton:hover{background:rgba(255,255,255,18);}");
     backBtn->setFocusPolicy(Qt::NoFocus);
-    connect(backBtn, &QPushButton::clicked, this, &CreateMapWidget::goBack);
+    connect(backBtn, &QPushButton::clicked, this, [this]() {
+        if (!tryExitMapping()) return;
+        emit goBack();
+    });
     hl->addWidget(backBtn);
 
     QFrame *div = new QFrame; div->setFrameShape(QFrame::VLine);
@@ -255,6 +258,10 @@ void CreateMapWidget::showEvent(QShowEvent *event)
     QWidget::showEvent(event);
     initMqtt();
     setFocus();
+    // 闲置状态(非建图中)不显示地图，避免上次建图的残留画面
+    if (!m_mappingActive && !m_highMappingActive) {
+        m_mapCanvas->setMapData(QJsonObject());
+    }
 }
 
 void CreateMapWidget::hideEvent(QHideEvent *event)
@@ -567,4 +574,96 @@ void CreateMapWidget::onToggleCruiseClick()
             }
         });
     }
+}
+
+bool CreateMapWidget::tryExitMapping()
+{
+    // 未在建图中 → 直接允许离开
+    if (!m_mappingActive && !m_highMappingActive) return true;
+
+    // 建图中途退出 → 弹出保存提示
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("保存地图");
+    msgBox.setText("是否保存当前建图地图？");
+    QPushButton *saveBtn   = msgBox.addButton("保存地图", QMessageBox::YesRole);
+    QPushButton *cancelBtn = msgBox.addButton("取消保存", QMessageBox::NoRole);
+    QPushButton *abortBtn  = msgBox.addButton("返回", QMessageBox::RejectRole);
+    msgBox.exec();
+    auto *clicked = msgBox.clickedButton();
+
+    if (clicked == abortBtn) return false;   // 用户选择返回，不离开
+
+    if (clicked == saveBtn) {
+        // 保存地图: 调用对应接口，成功后才允许离开
+        auto *loading = new LoadingDialog("正在保存地图，请稍候...", window(), Qt::ApplicationModal);
+        loading->show();
+        if (m_highMappingActive) {
+            ApiService::instance().stopReflectorMapping([this, loading](int code, const QJsonObject &) {
+                loading->close();
+                loading->deleteLater();
+                if (code == 200) {
+                    m_mappingActive = false;
+                    m_highMappingActive = false;
+                    m_mapCanvas->setHighMappingActive(false);
+                    updateToolbar();
+                    Toast::success(this, "地图保存成功");
+                    emit goBack();
+                } else {
+                    QMessageBox::warning(this, "错误", "保存地图失败，请重试");
+                }
+            });
+        } else {
+            ApiService::instance().saveMap([this, loading](int code, const QJsonObject &) {
+                loading->close();
+                loading->deleteLater();
+                if (code == 200) {
+                    m_mappingActive = false;
+                    m_highMappingActive = false;
+                    m_mapCanvas->setHighMappingActive(false);
+                    updateToolbar();
+                    Toast::success(this, "地图保存成功");
+                    emit goBack();
+                } else {
+                    QMessageBox::warning(this, "错误", "保存地图失败，请重试");
+                }
+            });
+        }
+        return false;   // API 返回前阻止离开，回调中成功后 emit goBack
+    }
+
+    // 取消保存: 调用取消接口，成功后才允许离开
+    auto *loading = new LoadingDialog("正在取消建图，请稍候...", window(), Qt::ApplicationModal);
+    loading->show();
+    if (m_highMappingActive) {
+        ApiService::instance().cancelReflectorMapping([this, loading](int code, const QJsonObject &) {
+            loading->close();
+            loading->deleteLater();
+            if (code == 200) {
+                m_mappingActive = false;
+                m_highMappingActive = false;
+                m_mapCanvas->setHighMappingActive(false);
+                updateToolbar();
+                Toast::success(this, "建图已取消");
+                emit goBack();
+            } else {
+                QMessageBox::warning(this, "错误", "取消建图失败，请重试");
+            }
+        });
+    } else {
+        ApiService::instance().cancelMapping([this, loading](int code, const QJsonObject &) {
+            loading->close();
+            loading->deleteLater();
+            if (code == 200) {
+                m_mappingActive = false;
+                m_highMappingActive = false;
+                m_mapCanvas->setHighMappingActive(false);
+                updateToolbar();
+                Toast::success(this, "建图已取消");
+                emit goBack();
+            } else {
+                QMessageBox::warning(this, "错误", "取消建图失败，请重试");
+            }
+        });
+    }
+    return false;   // API 返回前阻止离开，回调中成功后 emit goBack
 }

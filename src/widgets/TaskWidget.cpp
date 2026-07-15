@@ -145,6 +145,11 @@ TaskWidget::TaskWidget(QWidget *parent)
         // loadCurrentTask 可能因 m_currentCarId 为空而覆盖掉有效状态
     });
 
+    // 任务状态轮询定时器: 任务执行中以1Hz轮询API，直到暂停或结束
+    m_taskPollTimer = new QTimer(this);
+    m_taskPollTimer->setInterval(1000);   // 1Hz
+    connect(m_taskPollTimer, &QTimer::timeout, this, &TaskWidget::onTaskPollTimeout);
+
     connect(&MqttService::instance(), &MqttService::connected, this, [this]() {
         initMqtt();
     });
@@ -408,6 +413,7 @@ void TaskWidget::setupUI()
     mainLayout->addWidget(leftPanel, 7);
 
     // ========== 右侧：任务列表 ==========
+    // 完全重构：紧凑布局，确保所有内容在任何窗口尺寸下完整显示
     QWidget *rightPanel = new QWidget;
     rightPanel->setStyleSheet(S_RIGHT);
     QVBoxLayout *rightLayout = new QVBoxLayout(rightPanel);
@@ -418,17 +424,34 @@ void TaskWidget::setupUI()
     QWidget *hdrWidget = new QWidget;
     hdrWidget->setStyleSheet("background:#1e2d3d;border-bottom:1px solid rgba(255,255,255,0.08);");
     QHBoxLayout *hdrLay = new QHBoxLayout(hdrWidget);
-    hdrLay->setContentsMargins(12,8,8,8);
+    hdrLay->setContentsMargins(10,6,6,6);
     QLabel *hdrLbl = new QLabel("任务列表");
     hdrLbl->setStyleSheet("color:#6a9cbf;font-size:12px;font-weight:600;letter-spacing:1px;");
     hdrLay->addWidget(hdrLbl);
     hdrLay->addStretch();
     rightLayout->addWidget(hdrWidget);
 
-    // 任务列表工具栏
+    // 任务列表工具栏：紧凑按钮，等宽分配
     QWidget *tbWidget = new QWidget; tbWidget->setStyleSheet(S_TOOLBAR);
     QHBoxLayout *toolbar = new QHBoxLayout(tbWidget);
-    toolbar->setContentsMargins(0,0,0,0); toolbar->setSpacing(6);
+    toolbar->setContentsMargins(6,4,6,4); toolbar->setSpacing(4);
+
+    // 紧凑按钮样式
+    static const char *S_BTN_COMPACT =
+        "QPushButton{background:#252a35; color:#c8d0d8; border:1px solid #3a3f4a;"
+        "border-radius:3px; padding:4px 8px; font-size:12px;}"
+        "QPushButton:hover{background:#2d3340; border-color:#4a9eff;}"
+        "QPushButton:disabled{color:#445566; border-color:#2d3340;}";
+    static const char *S_BTN_PRIMARY_COMPACT =
+        "QPushButton{background:#1e6fd4; color:#fff; border:none;"
+        "border-radius:3px; padding:4px 8px; font-size:12px;}"
+        "QPushButton:hover{background:#2980e8;}"
+        "QPushButton:disabled{color:#7a98c0; background:#16335a;}";
+    static const char *S_BTN_STOP_COMPACT =
+        "QPushButton{background:#252a35; color:#c85050; border:1px solid #5a1a1a;"
+        "border-radius:3px; padding:4px 8px; font-size:12px;}"
+        "QPushButton:hover{background:#3a1414; border-color:#a02828;}"
+        "QPushButton:disabled{color:#445566; border-color:#2d3340;}";
 
     m_addBtn     = new QPushButton("新增");
     m_editBtn    = new QPushButton("修改");
@@ -438,31 +461,42 @@ void TaskWidget::setupUI()
     m_editBtn->setEnabled(false);
     m_deleteBtn->setEnabled(false);
 
-    m_addBtn->setStyleSheet(S_BTN_PRIMARY);
-    m_editBtn->setStyleSheet(S_BTN);
-    m_deleteBtn->setStyleSheet(S_BTN_STOP);
-    m_refreshBtn->setStyleSheet(S_BTN);
+    m_addBtn->setStyleSheet(S_BTN_PRIMARY_COMPACT);
+    m_editBtn->setStyleSheet(S_BTN_COMPACT);
+    m_deleteBtn->setStyleSheet(S_BTN_STOP_COMPACT);
+    m_refreshBtn->setStyleSheet(S_BTN_COMPACT);
+
+    // 设置最小宽度防止文字被截断
+    for (auto *btn : {m_addBtn, m_editBtn, m_deleteBtn, m_refreshBtn}) {
+        btn->setMinimumWidth(48);
+        btn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    }
 
     connect(m_addBtn,     &QPushButton::clicked, this, &TaskWidget::onAdd);
     connect(m_editBtn,    &QPushButton::clicked, this, &TaskWidget::onEdit);
     connect(m_deleteBtn,  &QPushButton::clicked, this, &TaskWidget::onDelete);
     connect(m_refreshBtn, &QPushButton::clicked, this, &TaskWidget::onRefresh);
 
-    toolbar->addWidget(m_addBtn);
-    toolbar->addWidget(m_editBtn);
-    toolbar->addWidget(m_deleteBtn);
-    toolbar->addStretch();
-    toolbar->addWidget(m_refreshBtn);
+    toolbar->addWidget(m_addBtn, 1);
+    toolbar->addWidget(m_editBtn, 1);
+    toolbar->addWidget(m_deleteBtn, 1);
+    toolbar->addWidget(m_refreshBtn, 1);
     rightLayout->addWidget(tbWidget);
 
-    // 任务表格
+    // 任务表格：自适应列宽
     m_table = new QTableWidget;
     m_table->setStyleSheet(S_TABLE);
     m_table->setColumnCount(6);
     m_table->setHorizontalHeaderLabels({"任务编号","执行设备","任务名称","状态","描述","创建时间"});
-    m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    m_table->horizontalHeader()->setStretchLastSection(true);
-    m_table->horizontalHeader()->setMinimumSectionSize(50);
+    // 按列设置不同的缩放模式：编号/设备/状态用 ResizeToContents，名称/描述/时间用 Stretch
+    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setStretchLastSection(false);
+    m_table->horizontalHeader()->setMinimumSectionSize(40);
     m_table->verticalHeader()->setVisible(false);
     m_table->setShowGrid(false);
     m_table->setFrameShape(QFrame::NoFrame);
@@ -470,6 +504,7 @@ void TaskWidget::setupUI()
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setAlternatingRowColors(false);
+    m_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     connect(m_table, &QTableWidget::itemSelectionChanged, this, &TaskWidget::onTableSelectionChanged);
     connect(m_table, &QTableWidget::itemSelectionChanged, this, &TaskWidget::onTaskSelectionChanged);
     rightLayout->addWidget(m_table);
@@ -1326,6 +1361,14 @@ void TaskWidget::onWebSocketNotification(const QJsonObject &msg)
     m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
     updateTaskButtons();
 
+    // 与轮询定时器同步: WebSocket 报告执行中(0)时确保轮询运行，
+    // 报告终态/暂停(1/2/3)时停止轮询
+    if (status == "0") {
+        if (!m_taskPollTimer->isActive()) startTaskPolling();
+    } else if (status == "1" || status == "2" || status == "3") {
+        stopTaskPolling();
+    }
+
     // 防抖刷新任务列表
     m_refreshDebounce->start();
 }
@@ -1347,6 +1390,7 @@ void TaskWidget::loadCurrentTask()
         if (dataVal.isUndefined() || dataVal.isNull() || !dataVal.isObject()) {
             m_currentTask = QJsonObject();
             m_currentTaskLabel->setText("无任务");
+            stopTaskPolling();
         } else {
             QJsonObject taskData   = dataVal.toObject();
             QJsonObject statusData = data.value("taskInfo_data").toObject();
@@ -1387,6 +1431,73 @@ void TaskWidget::updateTaskButtons()
     m_continueTaskBtn->setEnabled(hasTask && status == "3");
     m_stopTaskBtn->setEnabled(hasTask && (status == "0" || status == "3"));
     m_removeTaskBtn->setEnabled(hasTask && (status == "1" || status == "2" || status == "4"));
+}
+
+// ── 任务状态轮询 ──────────────────────────────────────────────────────────────
+
+void TaskWidget::startTaskPolling()
+{
+    if (!m_taskPollTimer) return;
+    m_taskPollTimer->start(1000);   // 1Hz
+}
+
+void TaskWidget::stopTaskPolling()
+{
+    if (!m_taskPollTimer) return;
+    m_taskPollTimer->stop();
+    m_taskPolling = false;
+}
+
+void TaskWidget::onTaskPollTimeout()
+{
+    // 防止重入: 上一次轮询请求尚未返回时不发起新请求
+    if (m_taskPolling) return;
+    if (m_currentCarId.isEmpty()) { stopTaskPolling(); return; }
+
+    m_taskPolling = true;
+    QJsonObject query;
+    query["carId"] = m_currentCarId;
+    if (!m_currentMapId.isEmpty()) query["mapId"] = m_currentMapId;
+
+    ApiService::instance().getCurrentTask(query, [this](int code, const QJsonObject &data) {
+        m_taskPolling = false;
+
+        if (code != 200) return;
+        QJsonValue dataVal = data.value("data");
+        if (dataVal.isUndefined() || dataVal.isNull() || !dataVal.isObject()) {
+            // API 返回无当前任务 → 任务已结束/被移除，停止轮询
+            m_currentTask = QJsonObject();
+            m_currentTaskLabel->setText("无任务");
+            updateTaskButtons();
+            stopTaskPolling();
+            return;
+        }
+
+        QJsonObject taskData   = dataVal.toObject();
+        QJsonObject statusData = data.value("taskInfo_data").toObject();
+        m_currentTask = taskData;
+        for (auto it = statusData.begin(); it != statusData.end(); ++it)
+            m_currentTask[it.key()] = it.value();
+
+        QString taskName = taskData.value("taskName").toString();
+        QString status = jsonIdStr(m_currentTask.value("status"));
+        // API status 编码: 0=执行中 1=已完成 2=失败 3=暂停 4=未开始
+        QString statusText;
+        if      (status == "0") statusText = "执行中";
+        else if (status == "1") statusText = "已完成";
+        else if (status == "2") statusText = "失败";
+        else if (status == "3") statusText = "暂停";
+        else if (status == "4") statusText = "未开始";
+        else statusText = status;
+        m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
+        updateTaskButtons();
+
+        // 状态为暂停(3)或终态(1已完成/2失败)时停止轮询
+        // 执行中(0)继续轮询；未开始(4)也给一点时间让设备启动后继续轮询
+        if (status == "1" || status == "2" || status == "3") {
+            stopTaskPolling();
+        }
+    });
 }
 
 void TaskWidget::onLoadTask()
@@ -1461,7 +1572,9 @@ void TaskWidget::doLoadTaskRequest(LoadingDialog *loading, bool allowRetry)
         loading->deleteLater();
         if (code == 200) {
             Toast::success(this, "任务加载成功");
+            // 加载任务后立即拉取一次状态并启动轮询
             loadCurrentTask();
+            startTaskPolling();
         } else {
             // 不再把"任务已失效/无法载入"原文展示给用户，统一提示重试
             QMessageBox::warning(this, "错误",
@@ -1485,7 +1598,8 @@ void TaskWidget::onStartTask()
         loading->deleteLater();
         if (code == 200) {
             Toast::success(this, "任务已开始执行");
-            loadCurrentTask();
+            // 执行成功后启动1Hz轮询，持续读取任务状态直到暂停或结束
+            startTaskPolling();
         } else {
             QString msg = resp.value("msg").toString();
             QMessageBox::warning(this, "错误", msg.isEmpty() ? "执行任务失败" : msg);
@@ -1507,16 +1621,16 @@ void TaskWidget::sendNavCommand(const QString &command, const QString &loadingTe
         {"mapId", m_currentMapId},
         {"taskId", m_currentTaskId},
         {"params", params}
-    }, [this, loading, successText, failText](int code, const QJsonObject &resp) {
+    }, [this, loading, successText, failText, command](int code, const QJsonObject &resp) {
         loading->close();
         loading->deleteLater();
         if (code == 200) {
             Toast::success(this, successText);
-            // commandTask 只是确认指令已通过 MQTT 发给设备，设备真正把执行状态
-            // 更新到后台与此之间有延迟；立即刷新经常还读到旧状态(如暂停后仍是
-            // "0执行中")，导致继续/暂停按钮看起来卡在错误的可点击状态。与本文件
-            // 别处"等待设备完成地图切换"用的是同一类缓冲处理。
-            QTimer::singleShot(800, this, [this]{ loadCurrentTask(); });
+            // 继续(continue navigation)命令: 重新启动1Hz轮询
+            // 暂停/结束命令: 轮询循环会在下次检测到状态变为3/1时自动停止
+            if (command == "continue navigation") {
+                startTaskPolling();
+            }
         } else {
             QString msg = resp.value("msg").toString();
             QMessageBox::warning(this, "错误", msg.isEmpty() ? failText : msg);
@@ -1550,6 +1664,11 @@ void TaskWidget::onRemoveTask()
         loading->deleteLater();
         if (code == 200) {
             Toast::success(this, "任务已移除");
+            // 移除任务后停止轮询，并清除状态
+            stopTaskPolling();
+            m_currentTask = QJsonObject();
+            m_currentTaskLabel->setText("无任务");
+            updateTaskButtons();
             loadCurrentTask();
         } else {
             QString msg = resp.value("msg").toString();
@@ -1586,39 +1705,37 @@ void TaskWidget::onDelete()
     msgBox.exec();
     if (msgBox.clickedButton() == yesBtn) {
         // 如果该任务处于"被加载"状态(status==0执行中或status==3暂停)，
-        // 先执行"移除"操作，再删除
+        // 先尝试"移除"操作，无论移除是否成功都继续执行删除
         bool isLoaded = (jsonIdStr(task.value("status")) == "0" ||
                          jsonIdStr(task.value("status")) == "3" ||
                          taskId == m_currentTaskId);
         if (isLoaded) {
-            auto *loading = new LoadingDialog("正在移除任务并删除...", this);
+            auto *loading = new LoadingDialog("正在删除任务...", this);
             loading->show();
-            // 先移除
+            // 先尝试移除，失败也继续删除
             ApiService::instance().removeTask(QJsonObject{{"taskId", taskId}},
                 [this, taskId, loading](int code, const QJsonObject &resp) {
-                    if (code == 200) {
-                        // 移除成功后执行删除
-                        ApiService::instance().delTask(taskId, [this, taskId, loading](int code2, const QJsonObject &) {
-                            loading->close();
-                            loading->deleteLater();
-                            if (code2 == 200) {
-                                Toast::success(this, "删除成功");
-                                if (!m_currentTaskId.isEmpty() && m_currentTaskId == taskId) {
-                                    m_currentTaskId.clear();
-                                    m_currentTask = QJsonObject();
-                                    m_currentTaskLabel->setText("当前任务: 无");
-                                    updateTaskButtons();
-                                }
-                                getList();
-                                loadCurrentTask();
-                            }
-                        });
-                    } else {
+                    // 无论移除成功或失败，都执行删除
+                    Q_UNUSED(resp);
+                    ApiService::instance().delTask(taskId, [this, taskId, loading](int code2, const QJsonObject &data) {
                         loading->close();
                         loading->deleteLater();
-                        QString msg = resp.value("msg").toString();
-                        QMessageBox::warning(this, "错误", msg.isEmpty() ? "移除任务失败" : msg);
-                    }
+                        if (code2 == 200) {
+                            Toast::success(this, "删除成功");
+                            if (!m_currentTaskId.isEmpty() && m_currentTaskId == taskId) {
+                                m_currentTaskId.clear();
+                                m_currentTask = QJsonObject();
+                                m_currentTaskLabel->setText("当前任务: 无");
+                                updateTaskButtons();
+                                if (m_taskPollTimer) m_taskPollTimer->stop();
+                            }
+                            getList();
+                            loadCurrentTask();
+                        } else {
+                            QString msg = data.value("msg").toString();
+                            QMessageBox::warning(this, "错误", msg.isEmpty() ? "删除任务失败" : msg);
+                        }
+                    });
                 });
         } else {
             // 不在加载状态，直接删除
@@ -1626,6 +1743,9 @@ void TaskWidget::onDelete()
                 if (code == 200) {
                     Toast::success(this, "删除成功");
                     getList();
+                } else {
+                    QString msg = data.value("msg").toString();
+                    QMessageBox::warning(this, "错误", msg.isEmpty() ? "删除任务失败" : msg);
                 }
             });
         }

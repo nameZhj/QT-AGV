@@ -8,6 +8,7 @@
 #include <QGraphicsPolygonItem>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <functional>
 #include <QMap>
 #include <QTableWidget>
 #include <QComboBox>
@@ -28,6 +29,9 @@ public:
     explicit MapEditWidget(const QString &mapId, QWidget *parent = nullptr);
     ~MapEditWidget();
 
+    // 检查是否有未保存的修改，有则弹窗询问。返回 true 表示可以离开，false 表示用户取消
+    bool checkUnsavedChanges();
+
 signals:
     void goBack();
 
@@ -39,7 +43,7 @@ private slots:
 
 private:
     void setupUI();
-    void loadMapData();
+    void loadMapData(std::function<void()> onDone = nullptr);
     void loadRouteData();
     void renderMap();
     void fitView();
@@ -158,6 +162,7 @@ private:
     DrawStatus m_drawStatus    = Drag;
     bool       m_hasInitialFit = false;
     bool       m_tableVisible  = false;
+    bool       m_dirty         = false;   // 路网是否有未保存的修改
     QString    m_currentTable  = "point";
     QPointF    m_drawP1;
     QString    m_drawP1Id;               // snap ID of first draw point
@@ -195,6 +200,10 @@ private:
     QString               m_handleCurveId;
     int                   m_handleIndex      = -1;  // 0=P1, 1=ctrl, 2=P2
     bool                  m_isDraggingHandle = false;
+
+    // Manual pan state (替代 QGraphicsView::ScrollHandDrag，避免与手柄拖拽冲突)
+    bool    m_panning     = false;
+    QPoint  m_lastPanPos;
 
     // MQTT
     QJsonArray   m_carList;

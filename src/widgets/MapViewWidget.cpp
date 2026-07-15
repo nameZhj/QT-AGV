@@ -535,7 +535,8 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
         "<small style='color:#556677;'>"
         "左键单击: 设置初始位姿<br>"
         "Alt+拖拽 / 中键: 平移<br>"
-        "滚轮: 缩放"
+        "滚轮/触控板双指: 缩放<br>"
+        "Ctrl+滚轮/触控板: 旋转"
         "</small>");
     hint->setTextFormat(Qt::RichText);
     hint->setWordWrap(true);

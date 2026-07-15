@@ -75,8 +75,23 @@ QPointF MapCanvas::worldToScene(double wx, double wy) const
 
 void MapCanvas::wheelEvent(QWheelEvent *e)
 {
+    // 触摸板与鼠标兼容:
+    // - Ctrl + 垂直滚动(鼠标滚轮/触控板双指) → 旋转
+    // - Ctrl + 水平滚动(触控板双指水平) → 旋转
+    // - 无 Ctrl + 垂直滚动 → 缩放
+    // 触摸板的 pixelDelta() 提供更平滑的精度，优先使用
     if (e->modifiers() & Qt::ControlModifier) {
-        double deg = e->angleDelta().y() > 0 ? 5.0 : -5.0;
+        // 旋转: 优先使用 angleDelta, 触控板用 pixelDelta 补充
+        int dy = e->angleDelta().y();
+        int dx = e->angleDelta().x();
+        // 触控板水平滚动也用于旋转
+        int delta = (qAbs(dy) >= qAbs(dx)) ? dy : dx;
+        if (delta == 0 && !e->pixelDelta().isNull()) {
+            delta = (qAbs(e->pixelDelta().y()) >= qAbs(e->pixelDelta().x()))
+                    ? e->pixelDelta().y() : e->pixelDelta().x();
+            delta = delta * 2;   // pixelDelta 数值小，放大
+        }
+        double deg = delta > 0 ? 5.0 : -5.0;
         m_rotAngle += deg;
         setTransformationAnchor(QGraphicsView::AnchorViewCenter);
         rotate(deg);
@@ -84,9 +99,23 @@ void MapCanvas::wheelEvent(QWheelEvent *e)
         emit transformChanged();
         e->accept();
     } else {
-        double factor = e->angleDelta().y() > 0 ? 1.15 : 1.0/1.15;
-        scale(factor, factor);
-        emit transformChanged();
+        // 缩放: 鼠标滚轮用 angleDelta(离散15度单位)，触控板用 pixelDelta(连续像素)
+        int angleY = e->angleDelta().y();
+        if (angleY != 0) {
+            double factor = angleY > 0 ? 1.15 : 1.0/1.15;
+            scale(factor, factor);
+            emit transformChanged();
+        } else if (!e->pixelDelta().isNull()) {
+            // 触控板双指缩放: pixelDelta 连续值，转换为缩放因子
+            double py = e->pixelDelta().y();
+            if (qAbs(py) > 0.5) {
+                double factor = 1.0 + py * 0.01;
+                factor = qBound(0.5, factor, 2.0);
+                scale(factor, factor);
+                emit transformChanged();
+            }
+        }
+        e->accept();
     }
 }
 

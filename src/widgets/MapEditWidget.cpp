@@ -26,6 +26,7 @@
 #include <QPainterPath>
 #include <QWheelEvent>
 #include <QMouseEvent>
+#include <QScrollBar>
 #include <QJsonDocument>
 #include <QFormLayout>
 #include <QDialogButtonBox>
@@ -68,21 +69,21 @@ static const char *S_CARD =
     "QGroupBox{"
     "  font-weight:bold; font-size:11px; color:#4a7098;"
     "  border:1px solid rgba(255,255,255,0.07); border-radius:7px;"
-    "  margin-top:12px; padding-top:4px; background:#1a2638;"
+    "  margin-top:10px; padding:2px; background:#1a2638;"
     "}"
     "QGroupBox::title{"
-    "  subcontrol-origin:margin; left:10px;"
-    "  padding:0 5px; background:#16202e; color:#5888a8;"
+    "  subcontrol-origin:margin; left:8px;"
+    "  padding:0 3px; background:#16202e; color:#5888a8;"
     "}"
     "QLabel{background:transparent; color:#90b0cc; font-size:12px;}"
-    "QLineEdit,QComboBox{"
-    "  border:1px solid rgba(255,255,255,0.10); border-radius:4px;"
-    "  padding:4px 7px; background:#1e2d40; color:#b0c8e0; font-size:12px;"
+    "QLineEdit,QComboBox,QDoubleSpinBox{"
+    "  border:1px solid rgba(255,255,255,0.10); border-radius:3px;"
+    "  padding:2px 4px; background:#1e2d40; color:#b0c8e0; font-size:12px;"
     "}"
     "QComboBox QAbstractItemView{background:#1e2d40;color:#b0c8e0;selection-background-color:#2a4060;}"
     "QPushButton{"
-    "  border:1px solid rgba(255,255,255,0.10); border-radius:5px;"
-    "  padding:5px 10px; font-size:12px; background:#1e2d40; color:#90b0cc;"
+    "  border:1px solid rgba(255,255,255,0.10); border-radius:4px;"
+    "  padding:3px 6px; font-size:12px; background:#1e2d40; color:#90b0cc;"
     "}"
     "QPushButton:hover{background:#263850;}";
 
@@ -286,15 +287,36 @@ MapEditWidget::MapEditWidget(const QString &mapId, QWidget *parent)
     : QWidget(parent), m_mapId(mapId)
 {
     setupUI();
-    loadMapData();
-    loadRouteData();
-    loadReflectorData();
-    loadCarList();
+    // 先加载地图数据(含坐标系)，完成后再加载路网/反光柱/设备列表，
+    // 避免路网点在坐标系尚未建立时渲染导致显示混乱
+    loadMapData([this]() {
+        loadRouteData();
+        loadReflectorData();
+        loadCarList();
+    });
 }
 
 MapEditWidget::~MapEditWidget()
 {
     disconnectMqtt();
+}
+
+bool MapEditWidget::checkUnsavedChanges()
+{
+    if (!m_dirty) return true;
+    QMessageBox box(QMessageBox::Question, "未保存的修改",
+        "路网有未保存的修改，是否保存？", QMessageBox::NoButton, this);
+    QPushButton *saveBtn    = box.addButton("保存并退出", QMessageBox::AcceptRole);
+    QPushButton *discardBtn = box.addButton("放弃修改", QMessageBox::DestructiveRole);
+    box.addButton("取消", QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() == saveBtn) {
+        onSaveRoute();
+        return true;   // 保存是异步的，允许离开
+    } else if (box.clickedButton() == discardBtn) {
+        return true;   // 放弃修改，直接离开
+    }
+    return false;       // 取消，不离开
 }
 
 // ── UI Setup ──────────────────────────────────────────────────────────────────
@@ -336,7 +358,10 @@ void MapEditWidget::setupUI()
     };
 
     QPushButton *backBtn = topBtn("← 返回");
-    connect(backBtn, &QPushButton::clicked, this, &MapEditWidget::goBack);
+    connect(backBtn, &QPushButton::clicked, this, [this]() {
+        if (!checkUnsavedChanges()) return;
+        emit goBack();
+    });
     tl->addWidget(backBtn);
 
     QFrame *div = new QFrame; div->setFrameShape(QFrame::VLine);
@@ -358,10 +383,7 @@ void MapEditWidget::setupUI()
         "QPushButton{background:transparent;border:none;border-radius:5px;padding:0;}"
         "QPushButton:hover{background:rgba(255,255,255,12);}");
     connect(m_resetViewBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_mapView || !m_scene) return;
-        m_mapView->resetTransform();
-        m_mapView->fitInView(m_scene->sceneRect(), Qt::KeepAspectRatioByExpanding);
-        updateRulers();
+        fitView();
     });
     tl->addWidget(m_resetViewBtn);
 
@@ -510,10 +532,12 @@ void MapEditWidget::setupUI()
     m_mapView = new MapCanvas(m_scene, this);
     m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
     m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-    m_mapView->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_mapView->setAlignment(Qt::AlignCenter);
     m_mapView->setFrameStyle(QFrame::NoFrame);
     m_mapView->setBackgroundBrush(QColor("#0f1520"));
-    m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
+    // NoDrag: 平移由 MapCanvas(Ctrl+左键旋转/中键/Alt+左键平移)和 eventFilter 手动处理，
+    // 避免 ScrollHandDrag 拦截鼠标事件导致手柄拖拽失效
+    m_mapView->setDragMode(QGraphicsView::NoDrag);
     m_mapView->viewport()->installEventFilter(this);
     m_mapView->viewport()->setMouseTracking(true);
 
@@ -546,9 +570,10 @@ void MapEditWidget::setupUI()
     cl->addWidget(mapArea, 1);
 
     // ── Right panel ───────────────────────────────────────────────────────────
+    // 完全重构：不用 QGroupBox(边框/padding/margin 占宽度)，改用轻量容器
     QWidget *rightOuter = new QWidget;
-    rightOuter->setFixedWidth(230);
-    rightOuter->setStyleSheet(S_RIGHTPANEL);
+    rightOuter->setFixedWidth(260);
+    rightOuter->setStyleSheet("background:#16202e;");
 
     QScrollArea *sa = new QScrollArea;
     sa->setWidgetResizable(true);
@@ -562,7 +587,7 @@ void MapEditWidget::setupUI()
     QWidget *rc = new QWidget;
     rc->setStyleSheet("background:#16202e;");
     QVBoxLayout *rl = new QVBoxLayout(rc);
-    rl->setContentsMargins(8,8,8,8);
+    rl->setContentsMargins(6,6,6,6);
     rl->setSpacing(8);
     sa->setWidget(rc);
 
@@ -570,125 +595,139 @@ void MapEditWidget::setupUI()
     rol->setContentsMargins(0,0,0,0);
     rol->addWidget(sa);
 
+    // 轻量卡片容器(无边框，仅背景色+圆角+标题)
+    auto mkCard = [&](const QString &title) -> QPair<QWidget*, QVBoxLayout*> {
+        auto *container = new QWidget;
+        container->setStyleSheet("background:#1a2638; border-radius:6px;");
+        auto *l = new QVBoxLayout(container);
+        l->setContentsMargins(8,6,8,8);
+        l->setSpacing(4);
+        auto *lbl = new QLabel(title);
+        lbl->setStyleSheet("color:#5888a8; font-size:11px; font-weight:bold; background:transparent; border:none;");
+        l->addWidget(lbl);
+        return {container, l};
+    };
+
     // Map info
     {
-        auto *g = new QGroupBox("地图信息");
-        g->setStyleSheet(S_CARD);
-        auto *gl = new QVBoxLayout(g);
-        gl->setSpacing(4);
+        auto [card, l] = mkCard("地图信息");
         auto *idLbl = new QLabel("ID: " + m_mapId);
-        idLbl->setStyleSheet("color:#4a7098;font-size:11px;background:transparent;");
+        idLbl->setStyleSheet("color:#4a7098; font-size:11px; background:transparent; border:none;");
         idLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
         idLbl->setWordWrap(true);
-        gl->addWidget(idLbl);
-        rl->addWidget(g);
+        l->addWidget(idLbl);
+        rl->addWidget(card);
     }
 
-    // Device
+    // Device (hidden - kept for MQTT robot pose tracking, no UI panel)
     {
-        auto *g = new QGroupBox("MQTT 设备");
-        g->setStyleSheet(S_CARD);
-        auto *gl = new QVBoxLayout(g);
-        gl->setSpacing(5);
         m_carCombo = new QComboBox;
-        gl->addWidget(m_carCombo);
-        auto *conBtn = new QPushButton("发送继续导航");
-        conBtn->setStyleSheet(
-            "QPushButton{background:rgba(39,174,96,160);color:white;border:none;"
-            "border-radius:5px;padding:5px 10px;font-size:11px;}"
-            "QPushButton:hover{background:rgba(46,204,113,190);}");
-        connect(conBtn, &QPushButton::clicked, this, [this]() {
-            if (!m_currentCarId.isEmpty())
-                MqttService::instance().publish(
-                    QString("/rob/%1/navigationContinue").arg(m_currentCarId), "1");
-        });
-        gl->addWidget(conBtn);
-        rl->addWidget(g);
+        m_carCombo->hide();
     }
 
     // Properties (hidden until selection)
     {
-        m_propsPanel = new QGroupBox("选中要素");
-        m_propsPanel->setStyleSheet(S_CARD);
-        auto *pl = new QVBoxLayout(m_propsPanel);
-        pl->setSpacing(5);
+        auto [card, pl] = mkCard("选中要素");
 
         m_propTypeLabel = new QLabel("类型: -");
-        m_propTypeLabel->setStyleSheet("color:#4a7098;font-size:11px;background:transparent;");
+        m_propTypeLabel->setStyleSheet("color:#4a7098; font-size:11px; background:transparent; border:none;");
         pl->addWidget(m_propTypeLabel);
 
-        QFormLayout *form = new QFormLayout;
-        form->setSpacing(4);
-        form->setLabelAlignment(Qt::AlignRight);
+        // 编号/名称：标签在上、输入框在下(垂直排列，节省水平空间)
+        auto *idLbl = new QLabel("编号:");
+        idLbl->setStyleSheet("color:#4a6080; font-size:11px; background:transparent; border:none;");
+        pl->addWidget(idLbl);
         m_propIdEdit = new QLineEdit; m_propIdEdit->setReadOnly(true);
-        m_propIdEdit->setStyleSheet("background:#f8f9fc;color:#6a7888;");
-        m_propNameEdit = new QLineEdit;
-        form->addRow("编号:", m_propIdEdit);
-        form->addRow("名称:", m_propNameEdit);
-        pl->addLayout(form);
+        m_propIdEdit->setStyleSheet("background:#f8f9fc; color:#6a7888; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:2px 4px; font-size:12px;");
+        pl->addWidget(m_propIdEdit);
 
+        auto *nameLbl = new QLabel("名称:");
+        nameLbl->setStyleSheet("color:#4a6080; font-size:11px; background:transparent; border:none;");
+        pl->addWidget(nameLbl);
+        m_propNameEdit = new QLineEdit;
+        m_propNameEdit->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:2px 4px; font-size:12px;");
+        pl->addWidget(m_propNameEdit);
+
+        // 方向行
         m_propDirectRow = new QWidget;
+        m_propDirectRow->setStyleSheet("background:transparent;");
         auto *dl = new QHBoxLayout(m_propDirectRow);
-        dl->setContentsMargins(0,0,0,0);
+        dl->setContentsMargins(0,0,0,0); dl->setSpacing(4);
         auto *dLbl = new QLabel("方向:");
-        dLbl->setStyleSheet("color:#4a6080;font-size:12px;background:transparent;");
+        dLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
+        dLbl->setMinimumWidth(36); dLbl->setMaximumWidth(50);
         m_propDirectCombo = new QComboBox;
         m_propDirectCombo->addItem("单向 →", 100);
         m_propDirectCombo->addItem("双向 ↔", 10);
-        dl->addWidget(dLbl); dl->addWidget(m_propDirectCombo);
+        dl->addWidget(dLbl); dl->addWidget(m_propDirectCombo, 1);
         pl->addWidget(m_propDirectRow);
 
-        // 点类型切换行: 仅在选中点(普通/高精度/充电桩)时显示
+        // 点类型行
         m_propKindRow = new QWidget;
+        m_propKindRow->setStyleSheet("background:transparent;");
         auto *kl = new QHBoxLayout(m_propKindRow);
-        kl->setContentsMargins(0,0,0,0);
+        kl->setContentsMargins(0,0,0,0); kl->setSpacing(4);
         auto *kLbl = new QLabel("点类型:");
-        kLbl->setStyleSheet("color:#4a6080;font-size:12px;background:transparent;");
+        kLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
+        kLbl->setMinimumWidth(36); kLbl->setMaximumWidth(50);
         m_propKindCombo = new QComboBox;
         m_propKindCombo->addItem("普通点",   "point");
         m_propKindCombo->addItem("高精度点", "highPrecision");
         m_propKindCombo->addItem("充电桩",   "charge");
-        kl->addWidget(kLbl); kl->addWidget(m_propKindCombo);
+        kl->addWidget(kLbl); kl->addWidget(m_propKindCombo, 1);
         pl->addWidget(m_propKindRow);
 
-        // 点坐标编辑行: 仅在选中点(普通/高精度/充电桩)时显示
+        // 坐标行：X 和 Y 垂直排列，避免水平方向空间不足被裁切
         m_propCoordRow = new QWidget;
-        auto *cl = new QHBoxLayout(m_propCoordRow);
-        cl->setContentsMargins(0,0,0,0);
+        m_propCoordRow->setStyleSheet("background:transparent;");
+        auto *cl = new QVBoxLayout(m_propCoordRow);
+        cl->setContentsMargins(0,0,0,0); cl->setSpacing(2);
+        // X 行
+        auto *xRow = new QWidget; xRow->setStyleSheet("background:transparent;");
+        auto *xl = new QHBoxLayout(xRow); xl->setContentsMargins(0,0,0,0); xl->setSpacing(4);
         auto *xLbl = new QLabel("X:");
-        xLbl->setStyleSheet("color:#4a6080;font-size:12px;background:transparent;");
+        xLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
+        xLbl->setFixedWidth(20);
         m_propXSpin = new QDoubleSpinBox; m_propXSpin->setRange(-100000, 100000); m_propXSpin->setDecimals(3);
+        m_propXSpin->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:1px 3px; font-size:12px;");
+        xl->addWidget(xLbl); xl->addWidget(m_propXSpin, 1);
+        cl->addWidget(xRow);
+        // Y 行
+        auto *yRow = new QWidget; yRow->setStyleSheet("background:transparent;");
+        auto *yl = new QHBoxLayout(yRow); yl->setContentsMargins(0,0,0,0); yl->setSpacing(4);
         auto *yLbl = new QLabel("Y:");
-        yLbl->setStyleSheet("color:#4a6080;font-size:12px;background:transparent;");
+        yLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
+        yLbl->setFixedWidth(20);
         m_propYSpin = new QDoubleSpinBox; m_propYSpin->setRange(-100000, 100000); m_propYSpin->setDecimals(3);
-        cl->addWidget(xLbl); cl->addWidget(m_propXSpin);
-        cl->addWidget(yLbl); cl->addWidget(m_propYSpin);
+        m_propYSpin->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:1px 3px; font-size:12px;");
+        yl->addWidget(yLbl); yl->addWidget(m_propYSpin, 1);
+        cl->addWidget(yRow);
         pl->addWidget(m_propCoordRow);
 
+        // 按钮行
         QHBoxLayout *pb = new QHBoxLayout;
+        pb->setSpacing(4);
         auto *applyBtn = new QPushButton("应用");
         auto *delBtn   = new QPushButton("删除");
         applyBtn->setStyleSheet(
-            "QPushButton{background:rgba(36,113,163,180);color:white;border:none;border-radius:5px;padding:5px 10px;}"
+            "QPushButton{background:rgba(36,113,163,180);color:white;border:none;border-radius:4px;padding:5px;}"
             "QPushButton:hover{background:rgba(52,152,219,200);}");
         delBtn->setStyleSheet(
-            "QPushButton{background:rgba(192,57,43,160);color:white;border:none;border-radius:5px;padding:5px 10px;}"
+            "QPushButton{background:rgba(192,57,43,160);color:white;border:none;border-radius:4px;padding:5px;}"
             "QPushButton:hover{background:rgba(231,76,60,190);}");
         connect(applyBtn, &QPushButton::clicked, this, &MapEditWidget::applyPropsEdit);
         connect(delBtn,   &QPushButton::clicked, this, &MapEditWidget::deleteSelected);
-        pb->addWidget(applyBtn); pb->addWidget(delBtn);
+        pb->addWidget(applyBtn, 1); pb->addWidget(delBtn, 1);
         pl->addLayout(pb);
 
+        m_propsPanel = card;
         m_propsPanel->setVisible(false);
         rl->addWidget(m_propsPanel);
     }
 
     // Feature list (collapsible)
     {
-        m_tablePanel = new QGroupBox("要素列表");
-        m_tablePanel->setStyleSheet(S_CARD);
-        auto *tl2 = new QVBoxLayout(m_tablePanel);
-        tl2->setSpacing(4);
+        auto [card, tl2] = mkCard("要素列表");
 
         m_tableTypeCombo = new QComboBox;
         m_tableTypeCombo->addItem("节点",   "point");
@@ -696,6 +735,7 @@ void MapEditWidget::setupUI()
         m_tableTypeCombo->addItem("曲线",   "curve");
         m_tableTypeCombo->addItem("充电桩", "charge");
         m_tableTypeCombo->addItem("高精度", "highPrecision");
+        m_tableTypeCombo->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:2px 4px; font-size:12px;");
         connect(m_tableTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this]() {
             m_currentTable = m_tableTypeCombo->currentData().toString();
@@ -723,11 +763,12 @@ void MapEditWidget::setupUI()
         auto *delBtn = new QPushButton("删除选中");
         delBtn->setStyleSheet(
             "QPushButton{background:rgba(192,57,43,160);color:white;border:none;"
-            "border-radius:5px;padding:5px 10px;font-size:11px;}"
+            "border-radius:4px;padding:5px;font-size:11px;}"
             "QPushButton:hover{background:rgba(231,76,60,190);}");
         connect(delBtn, &QPushButton::clicked, this, &MapEditWidget::onDeleteFeature);
         tl2->addWidget(delBtn);
 
+        m_tablePanel = card;
         m_tablePanel->setVisible(false);
         rl->addWidget(m_tablePanel);
     }
@@ -885,7 +926,7 @@ void MapEditWidget::setDrawMode(int mode)
         for (auto *h : lst) if (h) h->setVisible(handles);
 
     if (mode == Drag) {
-        m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
+        m_mapView->setDragMode(QGraphicsView::NoDrag);
         m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
     } else {
         m_mapView->setDragMode(QGraphicsView::NoDrag);
@@ -906,10 +947,10 @@ void MapEditWidget::cancelDraw()
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
-void MapEditWidget::loadMapData()
+void MapEditWidget::loadMapData(std::function<void()> onDone)
 {
-    ApiService::instance().getMap(m_mapId, [this](int code, const QJsonObject &data) {
-        if (code != 200) return;
+    ApiService::instance().getMap(m_mapId, [this, onDone](int code, const QJsonObject &data) {
+        if (code != 200) { if (onDone) onDone(); return; }
         QJsonObject info = data.value("data").toObject(data);
         m_mapName = info.value("mapName").toString();
         m_mapInfoLabel->setText(QString("路网编辑  %1").arg(m_mapName));
@@ -954,23 +995,23 @@ void MapEditWidget::loadMapData()
         // 注意：后端生成瓦片金字塔时会把图片 padding 成 512*2^n 的正方形，这些字段是基于
         // padding 后画布派生的，并不是地图的真实物理尺寸与零点，因此只在 pgm/yaml 拉取失败
         // 时才使用（见下方主路径的说明）。
-        auto useThumbnailFallback = [this, thumbUrl, apiOriginX, apiOriginY, apiPhysW, apiPhysH]() {
+        auto useThumbnailFallback = [this, thumbUrl, apiOriginX, apiOriginY, apiPhysW, apiPhysH, onDone]() {
             debugLog(QString("[loadMapData] FALLBACK to thumbnail.png url=%1").arg(thumbUrl));
-            if (thumbUrl.isEmpty()) return;
+            if (thumbUrl.isEmpty()) { if (onDone) onDone(); return; }
             m_worldL = apiOriginX;
             m_worldB = apiOriginY;
             m_worldR = apiOriginX + apiPhysW;
             m_worldT = apiOriginY + apiPhysH;
-            ApiService::instance().downloadFile(thumbUrl, [this](bool ok, const QByteArray &raw) {
+            ApiService::instance().downloadFile(thumbUrl, [this, onDone](bool ok, const QByteArray &raw) {
                 debugLog(QString("[loadMapData] thumbnail download ok=%1 bytes=%2").arg(ok).arg(raw.size()));
-                if (!ok) return;
+                if (!ok) { if (onDone) onDone(); return; }
                 m_mapImage.loadFromData(raw);
                 m_imgW = m_mapImage.width();
                 m_imgH = m_mapImage.height();
                 debugLog(QString("[loadMapData] FINAL(thumbnail) imgW=%1 imgH=%2 worldL=%3 worldB=%4 worldR=%5 worldT=%6")
                     .arg(m_imgW).arg(m_imgH).arg(m_worldL).arg(m_worldB).arg(m_worldR).arg(m_worldT));
                 renderMap();
-                QTimer::singleShot(0, this, [this]{ fitView(); });
+                if (onDone) onDone();
             });
         };
 
@@ -985,7 +1026,7 @@ void MapEditWidget::loadMapData()
 
         debugLog(QString("[loadMapData] trying pgm path: yamlUrl=%1 pgmUrl=%2").arg(yamlUrl, pgmUrl));
         ApiService::instance().downloadFile(yamlUrl,
-            [this, pgmUrl, useThumbnailFallback](bool yamlOk, const QByteArray &yamlRaw) {
+            [this, pgmUrl, useThumbnailFallback, onDone](bool yamlOk, const QByteArray &yamlRaw) {
                 debugLog(QString("[loadMapData] yaml download ok=%1 bytes=%2 content=[%3]")
                     .arg(yamlOk).arg(yamlRaw.size()).arg(QString::fromUtf8(yamlRaw).left(500)));
                 if (!yamlOk) { useThumbnailFallback(); return; }
@@ -997,7 +1038,7 @@ void MapEditWidget::loadMapData()
                     useThumbnailFallback(); return;
                 }
                 ApiService::instance().downloadFile(pgmUrl,
-                    [this, resolution, originX, originY, negate, useThumbnailFallback]
+                    [this, resolution, originX, originY, negate, useThumbnailFallback, onDone]
                     (bool pgmOk, const QByteArray &pgmRaw) {
                         debugLog(QString("[loadMapData] pgm download ok=%1 bytes=%2").arg(pgmOk).arg(pgmRaw.size()));
                         if (!pgmOk) { useThumbnailFallback(); return; }
@@ -1018,7 +1059,8 @@ void MapEditWidget::loadMapData()
                         debugLog(QString("[loadMapData] FINAL(pgm) imgW=%1 imgH=%2 worldL=%3 worldB=%4 worldR=%5 worldT=%6")
                             .arg(m_imgW).arg(m_imgH).arg(m_worldL).arg(m_worldB).arg(m_worldR).arg(m_worldT));
                         renderMap();
-                        QTimer::singleShot(0, this, [this]{ fitView(); });
+                        // fitView 由 loadRouteData 完成后统一调用，避免多次 fitView 闪烁
+                        if (onDone) onDone();
                     });
             });
     });
@@ -1261,18 +1303,27 @@ void MapEditWidget::renderMap()
 void MapEditWidget::fitView()
 {
     QRectF r = m_scene->sceneRect();
-    if (!r.isEmpty()) {
-        m_mapView->fitInView(r, Qt::KeepAspectRatio);
-        m_hasInitialFit = true;
-        updateRulers();
-    }
+    if (r.isEmpty()) return;
+    // 手动计算缩放比例使短边铺满，再居中，避免 fitInView 的边距/margin 问题
+    m_mapView->resetTransform();
+    QRectF vr = m_mapView->viewport()->rect();
+    if (vr.isEmpty()) return;
+    double sx = vr.width()  / r.width();
+    double sy = vr.height() / r.height();
+    double s  = qMin(sx, sy);   // 短边铺满
+    m_mapView->scale(s, s);
+    // 居中: 将场景中心移到视口中心
+    QPointF center = r.center();
+    m_mapView->centerOn(center);
+    m_hasInitialFit = true;
+    updateRulers();
 }
 
 void MapEditWidget::resizeEvent(QResizeEvent *e)
 {
     QWidget::resizeEvent(e);
-    if (!m_hasInitialFit)
-        QTimer::singleShot(0, this, [this]{ fitView(); });
+    if (!m_hasInitialFit && m_imgW > 0 && m_imgH > 0)
+        QTimer::singleShot(50, this, [this]{ fitView(); });
 }
 
 // ── Bezier handle management ──────────────────────────────────────────────────
@@ -1424,6 +1475,7 @@ void MapEditWidget::addPoint(const QPointF &sp)
     pt["id"] = QString("p_%1").arg(n); pt["name"] = QString("P%1").arg(n);
     pt["x"] = w.x(); pt["y"] = w.y();
     m_points.append(pt);
+    m_dirty = true;
     renderMap();
     if (m_tableVisible && m_currentTable == "point") refreshTable();
 }
@@ -1436,6 +1488,7 @@ void MapEditWidget::addCharge(const QPointF &sp)
     ch["id"] = QString("c_%1").arg(n); ch["name"] = QString("充电%1").arg(n);
     ch["x"] = w.x(); ch["y"] = w.y();
     m_charges.append(ch);
+    m_dirty = true;
     renderMap();
     if (m_tableVisible && m_currentTable == "charge") refreshTable();
 }
@@ -1448,6 +1501,7 @@ void MapEditWidget::addHighPrecisionPoint(const QPointF &sp)
     hp["id"] = QString("hp_%1").arg(n); hp["name"] = QString("高精%1").arg(n);
     hp["x"] = w.x(); hp["y"] = w.y();
     m_highPrecisionPoints.append(hp);
+    m_dirty = true;
     renderMap();
     if (m_tableVisible && m_currentTable == "highPrecision") refreshTable();
 }
@@ -1462,6 +1516,7 @@ void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
     ln["x1"] = wa.x(); ln["y1"] = wa.y(); ln["x2"] = wb.x(); ln["y2"] = wb.y();
     ln["direct"] = 100; ln["startid"] = startId; ln["endid"] = endId;
     m_lines.append(ln);
+    m_dirty = true;
     renderMap();
     if (m_tableVisible && m_currentTable == "line") refreshTable();
 }
@@ -1481,6 +1536,7 @@ void MapEditWidget::addCurve(const QPointF &a, const QPointF &b,
     cv["x2"] = wb.x(); cv["y2"] = wb.y();
     cv["direct"] = 100; cv["startid"] = startId; cv["endid"] = endId;
     m_curves.append(cv);
+    m_dirty = true;
     renderMap();
     if (m_tableVisible && m_currentTable == "curve") refreshTable();
     // Stay in Curve mode for continuous drawing; right-click → Drag to adjust handles
@@ -1563,6 +1619,7 @@ void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
     }
 
     m_curves.append(cv);
+    m_dirty = true;
     renderMap();
     if (m_tableVisible && m_currentTable == "curve") refreshTable();
 }
@@ -1758,9 +1815,10 @@ void MapEditWidget::applyPropsEdit()
                 m_selId   = newId;
             }
             renderMap();
-            showFeatureProperties(m_selType, m_selId);
-            if (m_tableVisible) refreshTable();
-            return;
+                showFeatureProperties(m_selType, m_selId);
+                if (m_tableVisible) refreshTable();
+                m_dirty = true;
+                return;
         }
     }
 
@@ -1787,6 +1845,7 @@ void MapEditWidget::applyPropsEdit()
     renderMap();
     showFeatureProperties(m_selType, m_selId);
     if (m_tableVisible) refreshTable();
+    m_dirty = true;
 }
 
 void MapEditWidget::deleteSelected()
@@ -1804,6 +1863,7 @@ void MapEditWidget::deleteSelected()
     clearSelection();
     renderMap();
     if (m_tableVisible) refreshTable();
+    m_dirty = true;
 }
 
 // ── Table ─────────────────────────────────────────────────────────────────────
@@ -1833,6 +1893,7 @@ void MapEditWidget::onDeleteFeature()
     else if (m_currentTable == "highPrecision") del(m_highPrecisionPoints);
     renderMap();
     refreshTable();
+    m_dirty = true;
 }
 
 void MapEditWidget::refreshTable()
@@ -1866,26 +1927,36 @@ void MapEditWidget::onSaveRoute()
             if (cv.value("id").toString() != id) continue;
 
             // 更新 controlPoints 数组
+            // 注意: 端点手柄可能为 nullptr(已关联节点时由节点显示)，
+            // 需从曲线 JSON 取端点坐标，不能直接 lst[j]->pos()
+            auto handlePos = [&](int idx) -> QPointF {
+                if (lst[idx]) return lst[idx]->pos();
+                // 端点无手柄 → 从 JSON 取端点坐标
+                if (idx == 0)
+                    return worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
+                return worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+            };
             QJsonArray ctrlArr = cv.value("controlPoints").toArray();
             if (!ctrlArr.isEmpty() && lst.size() == ctrlArr.size()) {
                 // 多阶贝塞尔: 逐个更新控制点
                 for (int j = 0; j < lst.size(); ++j) {
-                    QPointF wp = sceneToWorld(lst[j]->pos().x(), lst[j]->pos().y());
+                    QPointF sp = handlePos(j);
+                    QPointF wp = sceneToWorld(sp.x(), sp.y());
                     QJsonObject pt = ctrlArr[j].toObject();
                     pt["x"] = wp.x(); pt["y"] = wp.y();
                     ctrlArr[j] = pt;
                 }
                 cv["controlPoints"] = ctrlArr;
                 // 同步起终点字段
-                QPointF wFirst = sceneToWorld(lst.first()->pos().x(), lst.first()->pos().y());
-                QPointF wLast  = sceneToWorld(lst.last()->pos().x(), lst.last()->pos().y());
+                QPointF wFirst = sceneToWorld(handlePos(0).x(), handlePos(0).y());
+                QPointF wLast  = sceneToWorld(handlePos(lst.size()-1).x(), handlePos(lst.size()-1).y());
                 cv["x1"] = wFirst.x(); cv["y1"] = wFirst.y();
                 cv["x2"] = wLast.x();  cv["y2"] = wLast.y();
             } else if (lst.size() == 3) {
                 // 兼容旧格式: 二次贝塞尔 cx/cy
-                QPointF w1 = sceneToWorld(lst[0]->pos().x(), lst[0]->pos().y());
-                QPointF wc = sceneToWorld(lst[1]->pos().x(), lst[1]->pos().y());
-                QPointF w2 = sceneToWorld(lst[2]->pos().x(), lst[2]->pos().y());
+                QPointF w1 = sceneToWorld(handlePos(0).x(), handlePos(0).y());
+                QPointF wc = sceneToWorld(handlePos(1).x(), handlePos(1).y());
+                QPointF w2 = sceneToWorld(handlePos(2).x(), handlePos(2).y());
                 cv["x1"]=w1.x(); cv["y1"]=w1.y(); cv["cx"]=wc.x();
                 cv["cy"]=wc.y(); cv["x2"]=w2.x(); cv["y2"]=w2.y();
             }
@@ -1969,6 +2040,7 @@ void MapEditWidget::onSaveRoute()
         m_saveBtn->setEnabled(true);
         if (code == 200) {
             Toast::success(this, "路网保存成功");
+            m_dirty = false;   // 保存成功，清除脏标记
             // 保存成功后立即刷新路网数据，保证显示与服务器一致
             loadRouteData();
         } else {
@@ -2027,8 +2099,36 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
 
     if (event->type() == QEvent::Wheel) {
         auto *we = static_cast<QWheelEvent*>(event);
-        double f = we->angleDelta().y() > 0 ? 1.18 : 1.0/1.18;
-        m_mapView->scale(f, f);
+        // Ctrl + 滚轮/触控板 → 旋转 (直接在事件过滤器中处理，不依赖 MapCanvas)
+        if (we->modifiers() & Qt::ControlModifier) {
+            int dy = we->angleDelta().y();
+            int dx = we->angleDelta().x();
+            int delta = (qAbs(dy) >= qAbs(dx)) ? dy : dx;
+            if (delta == 0 && !we->pixelDelta().isNull()) {
+                delta = (qAbs(we->pixelDelta().y()) >= qAbs(we->pixelDelta().x()))
+                        ? we->pixelDelta().y() : we->pixelDelta().x();
+                delta = delta * 2;
+            }
+            double deg = delta > 0 ? 5.0 : -5.0;
+            m_mapView->setTransformationAnchor(QGraphicsView::AnchorViewCenter);
+            m_mapView->rotate(deg);
+            m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+            updateRulers();
+            return true;
+        }
+        // 缩放: 鼠标滚轮用 angleDelta, 触控板用 pixelDelta
+        int angleY = we->angleDelta().y();
+        if (angleY != 0) {
+            double f = angleY > 0 ? 1.18 : 1.0/1.18;
+            m_mapView->scale(f, f);
+        } else if (!we->pixelDelta().isNull()) {
+            double py = we->pixelDelta().y();
+            if (qAbs(py) > 0.5) {
+                double f = 1.0 + py * 0.01;
+                f = qBound(0.5, f, 2.0);
+                m_mapView->scale(f, f);
+            }
+        }
         updateRulers();
         return true;
     }
@@ -2037,6 +2137,18 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
         auto *me = static_cast<QMouseEvent*>(event);
         QPointF sp = m_mapView->mapToScene(me->pos());
         updateCoordLabel(sp);
+
+        // 手动平移(中键/Alt+左键): 按像素增量滚动滚动条
+        if (m_panning) {
+            QPoint delta = me->pos() - m_lastPanPos;
+            m_lastPanPos = me->pos();
+            m_mapView->horizontalScrollBar()->setValue(
+                m_mapView->horizontalScrollBar()->value() - delta.x());
+            m_mapView->verticalScrollBar()->setValue(
+                m_mapView->verticalScrollBar()->value() - delta.y());
+            updateRulers();
+            return true;
+        }
 
         if (m_isDraggingHandle && m_activeHandle) {
             // 端点手柄(0=起点, 2=终点)拖拽时吸附到附近已有的点，使曲线端点与
@@ -2088,6 +2200,20 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             return true;
         }
 
+        // Ctrl + 左键 → 放行给 MapCanvas 处理拖拽旋转(不在 eventFilter 中消费)
+        if (me->button() == Qt::LeftButton && (me->modifiers() & Qt::ControlModifier)) {
+            return false;
+        }
+
+        // 中键 或 Alt+左键 → 手动平移(替代 ScrollHandDrag，避免与手柄拖拽冲突)
+        if (me->button() == Qt::MiddleButton ||
+            (me->button() == Qt::LeftButton && (me->modifiers() & Qt::AltModifier))) {
+            m_panning = true;
+            m_lastPanPos = me->pos();
+            m_mapView->viewport()->setCursor(Qt::ClosedHandCursor);
+            return true;
+        }
+
         if (me->button() != Qt::LeftButton) return false;
         QPointF sp = m_mapView->mapToScene(me->pos());
 
@@ -2104,14 +2230,13 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
                         m_handleCurveId    = lit.key();
                         m_handleIndex      = i;
                         m_isDraggingHandle = true;
-                        m_mapView->setDragMode(QGraphicsView::NoDrag);
                         m_mapView->viewport()->setCursor(Qt::ClosedHandCursor);
                         return true;
                     }
                 }
             }
             selectFeatureAt(sp);
-            return false;   // let QGraphicsView handle pan via ScrollHandDrag
+            return false;
         }
 
         // ─ Draw modes ─────────────────────────────────────────────────────────
@@ -2175,6 +2300,13 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
 
     if (event->type() == QEvent::MouseButtonRelease) {
         auto *me = static_cast<QMouseEvent*>(event);
+        // 手动平移释放
+        if (m_panning &&
+            (me->button() == Qt::MiddleButton || me->button() == Qt::LeftButton)) {
+            m_panning = false;
+            m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
+            return true;
+        }
         if (me->button() == Qt::LeftButton && m_isDraggingHandle) {
             // Commit to JSON: 支持任意阶贝塞尔曲线
             // 端点手柄可能为 nullptr(已关联节点时由节点显示)，其位置取自曲线 JSON 的
@@ -2234,8 +2366,9 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             }
             m_isDraggingHandle = false;
             m_activeHandle = nullptr;
-            m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
+            m_mapView->setDragMode(QGraphicsView::NoDrag);
             m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
+            m_dirty = true;   // 拖拽手柄修改了曲线
             return true;
         }
     }

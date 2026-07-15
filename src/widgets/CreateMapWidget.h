@@ -161,6 +161,10 @@ class CreateMapWidget : public QWidget
 public:
     explicit CreateMapWidget(QWidget *parent = nullptr);
 
+    // 建图中途退出时弹出保存提示，API 返回成功后才允许离开
+    // 返回 true 表示可以离开，false 表示用户取消或 API 调用中
+    bool tryExitMapping();
+
 signals:
     void goBack();
 

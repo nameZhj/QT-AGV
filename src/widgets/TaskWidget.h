@@ -82,6 +82,9 @@ private:
     void loadCurrentTask();
     void updateTaskButtons();
     void selectFirstTask();
+    void startTaskPolling();    // 启动1Hz轮询任务状态(执行中时)
+    void stopTaskPolling();     // 停止轮询
+    void onTaskPollTimeout();   // 轮询定时器超时回调
 
     // UI - 地图区域 (与 MapViewWidget 一致的标尺+网格布局)
     MapCanvas      *m_mapView      = nullptr;
@@ -158,6 +161,10 @@ private:
     QJsonObject m_currentTask;
     QString m_currentTaskId;
     QString m_currentCarId;
+
+    // 任务状态轮询定时器: 任务执行中以1Hz频率轮询API，直到暂停或结束
+    QTimer *m_taskPollTimer = nullptr;
+    bool m_taskPolling = false;       // 轮询是否活跃(防止重入)
 };
 
 #endif // TASKWIDGET_H

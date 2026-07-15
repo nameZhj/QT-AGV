@@ -554,6 +554,32 @@ void MainWindow::connectServices()
 
 void MainWindow::onSectionChanged(int index)
 {
+    // 检查当前页面是否有未保存的修改(如路网编辑/建图)
+    QWidget *cur = m_stack->currentWidget();
+    if (cur) {
+        bool canLeave = true;
+        auto *mapEdit = qobject_cast<MapEditWidget*>(cur);
+        if (mapEdit) canLeave = mapEdit->checkUnsavedChanges();
+
+        auto *createMap = qobject_cast<CreateMapWidget*>(cur);
+        if (createMap) canLeave = createMap->tryExitMapping();
+
+        if (!canLeave) {
+            // 用户取消或 API 调用中，恢复之前选中的菜单项
+            // 创建地图页面(index=2)没有对应的菜单项，其父级是"地图管理"(index=1)
+            int prevIdx = m_stack->currentIndex();
+            if (prevIdx == 2) prevIdx = 1;   // 创建地图 → 地图管理
+            for (QAction *act : m_secGroup->actions()) {
+                if (act->data().toInt() == prevIdx) {
+                    m_secGroup->blockSignals(true);
+                    act->setChecked(true);
+                    m_secGroup->blockSignals(false);
+                    break;
+                }
+            }
+            return;
+        }
+    }
     m_stack->setCurrentIndex(index);
     refreshCurrentPage(index);
 }
