@@ -583,8 +583,14 @@ bool CreateMapWidget::tryExitMapping()
 
     // 建图中途退出 → 弹出保存提示
     QMessageBox msgBox(this);
-    msgBox.setWindowTitle("保存地图");
-    msgBox.setText("是否保存当前建图地图？");
+    if (m_highMappingActive) {
+        msgBox.setWindowTitle("保存高阶地图");
+        msgBox.setText("是否保存当前高阶建图地图？");
+    } else {
+        msgBox.setWindowTitle("保存自适应地图");
+        msgBox.setText("是否保存当前自适应建图地图？");
+    }
+    
     QPushButton *saveBtn   = msgBox.addButton("保存地图", QMessageBox::YesRole);
     QPushButton *cancelBtn = msgBox.addButton("取消保存", QMessageBox::NoRole);
     QPushButton *abortBtn  = msgBox.addButton("返回", QMessageBox::RejectRole);
@@ -595,7 +601,8 @@ bool CreateMapWidget::tryExitMapping()
 
     if (clicked == saveBtn) {
         // 保存地图: 调用对应接口，成功后才允许离开
-        auto *loading = new LoadingDialog("正在保存地图，请稍候...", window(), Qt::ApplicationModal);
+        QString loadingText = m_highMappingActive ? "正在保存高阶地图，请稍候..." : "正在保存自适应地图，请稍候...";
+        auto *loading = new LoadingDialog(loadingText, window(), Qt::ApplicationModal);
         loading->show();
         if (m_highMappingActive) {
             ApiService::instance().stopReflectorMapping([this, loading](int code, const QJsonObject &) {
@@ -606,10 +613,10 @@ bool CreateMapWidget::tryExitMapping()
                     m_highMappingActive = false;
                     m_mapCanvas->setHighMappingActive(false);
                     updateToolbar();
-                    Toast::success(this, "地图保存成功");
+                    Toast::success(this, "高阶地图保存成功");
                     emit goBack();
                 } else {
-                    QMessageBox::warning(this, "错误", "保存地图失败，请重试");
+                    QMessageBox::warning(this, "错误", "保存高阶地图失败，请重试");
                 }
             });
         } else {
@@ -621,10 +628,10 @@ bool CreateMapWidget::tryExitMapping()
                     m_highMappingActive = false;
                     m_mapCanvas->setHighMappingActive(false);
                     updateToolbar();
-                    Toast::success(this, "地图保存成功");
+                    Toast::success(this, "自适应地图保存成功");
                     emit goBack();
                 } else {
-                    QMessageBox::warning(this, "错误", "保存地图失败，请重试");
+                    QMessageBox::warning(this, "错误", "保存自适应地图失败，请重试");
                 }
             });
         }
@@ -632,7 +639,8 @@ bool CreateMapWidget::tryExitMapping()
     }
 
     // 取消保存: 调用取消接口，成功后才允许离开
-    auto *loading = new LoadingDialog("正在取消建图，请稍候...", window(), Qt::ApplicationModal);
+    QString cancelText = m_highMappingActive ? "正在取消高阶建图，请稍候..." : "正在取消自适应建图，请稍候...";
+    auto *loading = new LoadingDialog(cancelText, window(), Qt::ApplicationModal);
     loading->show();
     if (m_highMappingActive) {
         ApiService::instance().cancelReflectorMapping([this, loading](int code, const QJsonObject &) {
@@ -643,10 +651,10 @@ bool CreateMapWidget::tryExitMapping()
                 m_highMappingActive = false;
                 m_mapCanvas->setHighMappingActive(false);
                 updateToolbar();
-                Toast::success(this, "建图已取消");
+                Toast::success(this, "高阶建图已取消");
                 emit goBack();
             } else {
-                QMessageBox::warning(this, "错误", "取消建图失败，请重试");
+                QMessageBox::warning(this, "错误", "取消高阶建图失败，请重试");
             }
         });
     } else {
@@ -658,10 +666,10 @@ bool CreateMapWidget::tryExitMapping()
                 m_highMappingActive = false;
                 m_mapCanvas->setHighMappingActive(false);
                 updateToolbar();
-                Toast::success(this, "建图已取消");
+                Toast::success(this, "自适应建图已取消");
                 emit goBack();
             } else {
-                QMessageBox::warning(this, "错误", "取消建图失败，请重试");
+                QMessageBox::warning(this, "错误", "取消自适应建图失败，请重试");
             }
         });
     }

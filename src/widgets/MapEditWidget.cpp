@@ -530,6 +530,7 @@ void MapEditWidget::setupUI()
     // ── Map view with ruler strips ────────────────────────────────────────────
     m_scene   = new QGraphicsScene(this);
     m_mapView = new MapCanvas(m_scene, this);
+    connect(m_mapView, &MapCanvas::transformChanged, this, [this]() { updateRulers(); });
     m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
     m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     m_mapView->setAlignment(Qt::AlignCenter);
@@ -1170,12 +1171,55 @@ void MapEditWidget::loadRouteData()
 void MapEditWidget::loadReflectorData()
 {
     ApiService::instance().getReflectorColumnInfo(m_mapId, [this](int code, const QJsonObject &data) {
-        if (code != 200) return;
-        QJsonObject geo = data.value("data").toObject(data);
-        m_reflectorPoles = geo.value("features").toArray();
+        debugLog(QString("[loadReflectorData] code=%1 fullResp=%2")
+            .arg(code)
+            .arg(QString::fromUtf8(QJsonDocument(data).toJson(QJsonDocument::Compact))));
+        if (code != 200) {
+            m_mapInfoLabel->setText(QString("路网编辑  %1 (反光柱加载失败)").arg(m_mapName));
+            return;
+        }
+        
+        QJsonValue dataVal = data.value("data");
+        QJsonArray features;
+        
+        if (dataVal.isArray()) {
+            features = dataVal.toArray();
+        } else if (dataVal.isObject()) {
+            QJsonObject geo = dataVal.toObject();
+            features = geo.value("features").toArray();
+            if (features.isEmpty() && geo.value("type").toString() == "Feature") {
+                features.append(geo);
+            }
+        } else if (dataVal.isString()) {
+            QJsonDocument doc = QJsonDocument::fromJson(dataVal.toString().toUtf8());
+            if (doc.isArray()) {
+                features = doc.array();
+            } else if (doc.isObject()) {
+                QJsonObject geo = doc.object();
+                features = geo.value("features").toArray();
+                if (features.isEmpty() && geo.value("type").toString() == "Feature") {
+                    features.append(geo);
+                }
+            }
+        }
+        
+        if (features.isEmpty()) {
+            features = data.value("features").toArray();
+        }
+        
+        m_reflectorPoles = features;
+        m_mapInfoLabel->setText(QString("路网编辑  %1 (反光柱: %2)").arg(m_mapName).arg(m_reflectorPoles.size()));
+        
+        debugLog(QString("[loadReflectorData] poles count=%1").arg(m_reflectorPoles.size()));
+        if (!m_reflectorPoles.isEmpty()) {
+            QJsonObject first = m_reflectorPoles[0].toObject();
+            debugLog(QString("[loadReflectorData] first feature=%2")
+                .arg(QString::fromUtf8(QJsonDocument(first).toJson(QJsonDocument::Compact))));
+        }
         if (m_showReflectors) renderMap();
     });
 }
+
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
@@ -1269,11 +1313,14 @@ void MapEditWidget::renderMap()
 
     // 反光柱：开关控制显示，标准 GeoJSON Feature 数组，geometry.coordinates=[x,y]
     if (m_showReflectors) {
+        auto toDbl = [](const QJsonValue &v) {
+            return v.isString() ? v.toString().toDouble() : v.toDouble();
+        };
         for (const auto &v : m_reflectorPoles) {
             QJsonObject f = v.toObject();
             QJsonArray coords = f.value("geometry").toObject().value("coordinates").toArray();
             if (coords.size() < 2) continue;
-            QPointF sp = worldToScene(coords[0].toDouble(), coords[1].toDouble());
+            QPointF sp = worldToScene(toDbl(coords[0]), toDbl(coords[1]));
             auto *e = m_scene->addEllipse(-5, -5, 10, 10,
                 QPen(QColor("#caa020"), 1.5), QBrush(QColor("#f0c040")));
             e->setPos(sp);
@@ -1467,10 +1514,25 @@ void MapEditWidget::clearPreview()
 
 // ── Feature addition ──────────────────────────────────────────────────────────
 
+// 从数组中找出前缀匹配的最大数字编号，返回 max+1，保证不重复
+int MapEditWidget::nextIdNum(const QJsonArray &arr, const QString &prefix)
+{
+    int maxN = 0;
+    for (const auto &v : arr) {
+        QString id = v.toObject().value("id").toString();
+        if (id.startsWith(prefix)) {
+            bool ok = false;
+            int n = id.mid(prefix.length()).toInt(&ok);
+            if (ok && n > maxN) maxN = n;
+        }
+    }
+    return maxN + 1;
+}
+
 void MapEditWidget::addPoint(const QPointF &sp)
 {
     QPointF w = sceneToWorld(sp.x(), sp.y());
-    int n = m_points.size() + 1;
+    int n = nextIdNum(m_points, "p_");
     QJsonObject pt;
     pt["id"] = QString("p_%1").arg(n); pt["name"] = QString("P%1").arg(n);
     pt["x"] = w.x(); pt["y"] = w.y();
@@ -1483,7 +1545,7 @@ void MapEditWidget::addPoint(const QPointF &sp)
 void MapEditWidget::addCharge(const QPointF &sp)
 {
     QPointF w = sceneToWorld(sp.x(), sp.y());
-    int n = m_charges.size() + 1;
+    int n = nextIdNum(m_charges, "c_");
     QJsonObject ch;
     ch["id"] = QString("c_%1").arg(n); ch["name"] = QString("充电%1").arg(n);
     ch["x"] = w.x(); ch["y"] = w.y();
@@ -1496,7 +1558,7 @@ void MapEditWidget::addCharge(const QPointF &sp)
 void MapEditWidget::addHighPrecisionPoint(const QPointF &sp)
 {
     QPointF w = sceneToWorld(sp.x(), sp.y());
-    int n = m_highPrecisionPoints.size() + 1;
+    int n = nextIdNum(m_highPrecisionPoints, "hp_");
     QJsonObject hp;
     hp["id"] = QString("hp_%1").arg(n); hp["name"] = QString("高精%1").arg(n);
     hp["x"] = w.x(); hp["y"] = w.y();
@@ -1510,7 +1572,7 @@ void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
                             const QString &startId, const QString &endId)
 {
     QPointF wa = sceneToWorld(a.x(), a.y()), wb = sceneToWorld(b.x(), b.y());
-    int n = m_lines.size() + 1;
+    int n = nextIdNum(m_lines, "l_");
     QJsonObject ln;
     ln["id"] = QString("l_%1").arg(n); ln["name"] = QString("线%1").arg(n);
     ln["x1"] = wa.x(); ln["y1"] = wa.y(); ln["x2"] = wb.x(); ln["y2"] = wb.y();
@@ -1528,7 +1590,7 @@ void MapEditWidget::addCurve(const QPointF &a, const QPointF &b,
     QPointF wa   = sceneToWorld(a.x(), a.y());
     QPointF wc   = sceneToWorld(mid.x(), mid.y());
     QPointF wb   = sceneToWorld(b.x(), b.y());
-    int n = m_curves.size() + 1;
+    int n = nextIdNum(m_curves, "b_");
     QJsonObject cv;
     cv["id"] = QString("b_%1").arg(n); cv["name"] = QString("曲%1").arg(n);
     cv["x1"] = wa.x(); cv["y1"] = wa.y();
@@ -1582,7 +1644,7 @@ void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
                                    const QList<QString> &snapIds)
 {
     if (scenePts.size() < 2) return;
-    int n = m_curves.size() + 1;
+    int n = nextIdNum(m_curves, "b_");
     QJsonObject cv;
     cv["id"]   = QString("b_%1").arg(n);
     cv["name"] = QString("曲%1").arg(n);
@@ -1796,9 +1858,9 @@ void MapEditWidget::applyPropsEdit()
             if (!pointObj.isEmpty()) {
                 // 生成新类型对应的 ID 与默认名称
                 QString newId, defaultName;
-                if      (newKind == "point")         { newId = QString("p_%1").arg(m_points.size() + 1);              defaultName = QString("P%1").arg(m_points.size() + 1); }
-                else if (newKind == "charge")        { newId = QString("c_%1").arg(m_charges.size() + 1);             defaultName = QString("充电%1").arg(m_charges.size() + 1); }
-                else                                  { newId = QString("hp_%1").arg(m_highPrecisionPoints.size() + 1); defaultName = QString("高精%1").arg(m_highPrecisionPoints.size() + 1); }
+                if      (newKind == "point")         { int nn = nextIdNum(m_points, "p_");              newId = QString("p_%1").arg(nn);  defaultName = QString("P%1").arg(nn); }
+                else if (newKind == "charge")        { int nn = nextIdNum(m_charges, "c_");             newId = QString("c_%1").arg(nn);  defaultName = QString("充电%1").arg(nn); }
+                else                                  { int nn = nextIdNum(m_highPrecisionPoints, "hp_"); newId = QString("hp_%1").arg(nn); defaultName = QString("高精%1").arg(nn); }
 
                 pointObj["id"]   = newId;
                 if (newName.isEmpty()) pointObj["name"] = defaultName;
@@ -2098,39 +2160,7 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
         return QWidget::eventFilter(obj, event);
 
     if (event->type() == QEvent::Wheel) {
-        auto *we = static_cast<QWheelEvent*>(event);
-        // Ctrl + 滚轮/触控板 → 旋转 (直接在事件过滤器中处理，不依赖 MapCanvas)
-        if (we->modifiers() & Qt::ControlModifier) {
-            int dy = we->angleDelta().y();
-            int dx = we->angleDelta().x();
-            int delta = (qAbs(dy) >= qAbs(dx)) ? dy : dx;
-            if (delta == 0 && !we->pixelDelta().isNull()) {
-                delta = (qAbs(we->pixelDelta().y()) >= qAbs(we->pixelDelta().x()))
-                        ? we->pixelDelta().y() : we->pixelDelta().x();
-                delta = delta * 2;
-            }
-            double deg = delta > 0 ? 5.0 : -5.0;
-            m_mapView->setTransformationAnchor(QGraphicsView::AnchorViewCenter);
-            m_mapView->rotate(deg);
-            m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-            updateRulers();
-            return true;
-        }
-        // 缩放: 鼠标滚轮用 angleDelta, 触控板用 pixelDelta
-        int angleY = we->angleDelta().y();
-        if (angleY != 0) {
-            double f = angleY > 0 ? 1.18 : 1.0/1.18;
-            m_mapView->scale(f, f);
-        } else if (!we->pixelDelta().isNull()) {
-            double py = we->pixelDelta().y();
-            if (qAbs(py) > 0.5) {
-                double f = 1.0 + py * 0.01;
-                f = qBound(0.5, f, 2.0);
-                m_mapView->scale(f, f);
-            }
-        }
-        updateRulers();
-        return true;
+        return false;
     }
 
     if (event->type() == QEvent::MouseMove) {
@@ -2458,12 +2488,15 @@ void MapEditWidget::initMqtt()
             QJsonObject d = doc.object();
             // 与 Vue edit.vue::handleCarInfoMessage 一致：car 的位姿只在它当前所在地图
             // 与本页编辑的地图一致时才采用，否则坐标来自另一张地图，毫无意义。
+            // 使用整数比对，避免类型不匹配或 map_id 为 "0" / 空 时的误判。
             QJsonValue mapIdV = d.contains("map_id") ? d.value("map_id") : d.value("mapId");
-            bool mapIdMismatch = !mapIdV.isUndefined() && mapIdV.toVariant().toString() != m_mapId;
+            int msgMapId = mapIdV.toVariant().toInt();
+            int curMapId = m_mapId.toInt();
+            bool mapIdMismatch = (msgMapId > 0 && curMapId > 0 && msgMapId != curMapId);
             if (logCount < 5) {
                 debugLog(QString("[/info msg #%1] raw=[%2]").arg(logCount).arg(QString::fromUtf8(payload).left(400)));
-                debugLog(QString("[/info msg #%1] msg.map_id=%2 m_mapId=%3 mismatch=%4")
-                    .arg(logCount).arg(mapIdV.toVariant().toString(), m_mapId).arg(mapIdMismatch));
+                debugLog(QString("[/info msg #%1] msg.map_id=%2 (%3) m_mapId=%4 (%5) mismatch=%6")
+                    .arg(logCount).arg(mapIdV.toVariant().toString()).arg(msgMapId).arg(m_mapId).arg(curMapId).arg(mapIdMismatch));
             }
             if (mapIdMismatch) { logCount++; return; }
 

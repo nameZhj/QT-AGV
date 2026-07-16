@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include "MapCanvas.h"
+#include "core/ToggleSwitch.h"
 #include <QGraphicsScene>
 #include <QGraphicsItem>
 #include <QSet>
@@ -80,6 +81,8 @@ private:
     void initMqtt();
     void disconnectMqtt();
     void loadCurrentTask();
+    void checkAndRemoveInvalidLoaded();   // 检测已失效且已加载的任务并移除加载状态
+    void loadReflectorData(const QString &mapId);
     void updateTaskButtons();
     void selectFirstTask();
     void startTaskPolling();    // 启动1Hz轮询任务状态(执行中时)
@@ -94,6 +97,7 @@ private:
     RulerWidget *m_topRuler = nullptr;
     RulerWidget *m_leftRuler = nullptr;
     QToolButton *m_gridBtn = nullptr;
+    ToggleSwitch *m_reflectorBtn = nullptr;
     bool m_showGrid = false;
     bool m_hasInitialFit = false;
     QPixmap m_robotPixmap;
@@ -136,6 +140,10 @@ private:
     QJsonArray m_charges;
     QJsonArray m_highPrecisionPoints;
     QJsonArray m_targets;
+
+    // 反光柱（开关控制显示，默认隐藏）
+    bool       m_showReflectors = false;
+    QJsonArray m_reflectorPoles;
 
     // 坐标转换参数 (world extent + thumbnail size)
     double m_worldL = 0, m_worldB = 0, m_worldR = 0, m_worldT = 0;

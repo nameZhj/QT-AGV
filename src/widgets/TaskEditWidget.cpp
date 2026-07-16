@@ -372,6 +372,19 @@ void TaskEditWidget::setupUI()
     connect(m_gridBtn, &QPushButton::toggled, this, [this](bool on){ m_showGrid=on; renderMap(); });
     toolbarLayout->addWidget(m_gridBtn, 0, Qt::AlignHCenter);
 
+    // 反光柱开关
+    auto *reflectorLabel = new QLabel("反光柱");
+    reflectorLabel->setStyleSheet("color:#9ab8d8;font-size:10px;");
+    reflectorLabel->setAlignment(Qt::AlignHCenter);
+    toolbarLayout->addWidget(reflectorLabel, 0, Qt::AlignHCenter);
+    m_reflectorBtn = new ToggleSwitch;
+    m_reflectorBtn->setToolTip("切换反光柱显示");
+    connect(m_reflectorBtn, &ToggleSwitch::toggled, this, [this](bool on) {
+        m_showReflectors = on;
+        renderMap();
+    });
+    toolbarLayout->addWidget(m_reflectorBtn, 0, Qt::AlignHCenter);
+
     toolbarLayout->addStretch();
 
     auto *sep2 = new QFrame; sep2->setFrameShape(QFrame::HLine);
@@ -392,6 +405,7 @@ void TaskEditWidget::setupUI()
     // 地图视图 + 刻度尺
     m_scene = new QGraphicsScene(this);
     m_mapView = new MapCanvas(m_scene, this);
+    connect(m_mapView, &MapCanvas::transformChanged, this, [this]() { updateRulers(); });
     m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
     m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
     m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
@@ -747,9 +761,11 @@ void TaskEditWidget::onMapComboChanged(int /*index*/)
     m_points = QJsonArray();
     m_lines  = QJsonArray();
     m_curves = QJsonArray();
+    m_reflectorPoles = QJsonArray();
     m_hasInitialFit = false;
     loadMapData();
     loadRouteData();
+    loadReflectorData();
 }
 
 void TaskEditWidget::loadCarList()
@@ -782,9 +798,11 @@ void TaskEditWidget::loadCarList()
                 m_points = QJsonArray();
                 m_lines = QJsonArray();
                 m_curves = QJsonArray();
+                m_reflectorPoles = QJsonArray();
                 m_hasInitialFit = false;
                 loadMapData();
                 loadRouteData();
+                loadReflectorData();
             });
         }
     });
@@ -857,6 +875,7 @@ void TaskEditWidget::loadTaskData()
             if (!m_mapId.isEmpty()) {
                 loadMapData();
                 loadRouteData();
+                loadReflectorData();
             }
         });
     });
@@ -1060,6 +1079,49 @@ void TaskEditWidget::loadRouteData()
     });
 }
 
+void TaskEditWidget::loadReflectorData()
+{
+    if (m_mapId.isEmpty()) return;
+    ApiService::instance().getReflectorColumnInfo(m_mapId, [this](int code, const QJsonObject &data) {
+        if (code != 200) {
+            m_mapInfoLabel->setText(QString("%1 [%2] (反光柱加载失败)").arg(m_mapName, m_mapId));
+            return;
+        }
+        
+        QJsonValue dataVal = data.value("data");
+        QJsonArray features;
+        
+        if (dataVal.isArray()) {
+            features = dataVal.toArray();
+        } else if (dataVal.isObject()) {
+            QJsonObject geo = dataVal.toObject();
+            features = geo.value("features").toArray();
+            if (features.isEmpty() && geo.value("type").toString() == "Feature") {
+                features.append(geo);
+            }
+        } else if (dataVal.isString()) {
+            QJsonDocument doc = QJsonDocument::fromJson(dataVal.toString().toUtf8());
+            if (doc.isArray()) {
+                features = doc.array();
+            } else if (doc.isObject()) {
+                QJsonObject geo = doc.object();
+                features = geo.value("features").toArray();
+                if (features.isEmpty() && geo.value("type").toString() == "Feature") {
+                    features.append(geo);
+                }
+            }
+        }
+        
+        if (features.isEmpty()) {
+            features = data.value("features").toArray();
+        }
+        
+        m_reflectorPoles = features;
+        m_mapInfoLabel->setText(QString("%1 [%2] (反光柱: %3)").arg(m_mapName).arg(m_mapId).arg(m_reflectorPoles.size()));
+        if (m_showReflectors) renderMap();
+    });
+}
+
 void TaskEditWidget::fitView()
 {
     QRectF r = m_scene->sceneRect();
@@ -1243,6 +1305,23 @@ void TaskEditWidget::renderMap()
         for (double wy=std::ceil(yMin/gs)*gs; wy<=yMax+1e-9; wy+=gs) {
             QPointF a=worldToScene(xMin,wy),b=worldToScene(xMax,wy);
             m_scene->addLine(a.x(),a.y(),b.x(),b.y(), std::abs(wy)<1e-6?ag:gp)->setZValue(-50);
+        }
+    }
+
+    // 反光柱：开关控制显示，标准 GeoJSON Feature 数组，geometry.coordinates=[x,y]
+    if (m_showReflectors) {
+        auto toDbl = [](const QJsonValue &v) {
+            return v.isString() ? v.toString().toDouble() : v.toDouble();
+        };
+        for (const auto &v : m_reflectorPoles) {
+            QJsonObject f = v.toObject();
+            QJsonArray coords = f.value("geometry").toObject().value("coordinates").toArray();
+            if (coords.size() < 2) continue;
+            QPointF sp = worldToScene(toDbl(coords[0]), toDbl(coords[1]));
+            auto *e = m_scene->addEllipse(-5, -5, 10, 10,
+                QPen(QColor("#caa020"), 1.5), QBrush(QColor("#f0c040")));
+            e->setPos(sp);
+            e->setZValue(8);
         }
     }
 
@@ -1741,11 +1820,7 @@ bool TaskEditWidget::eventFilter(QObject *obj, QEvent *event)
         return QWidget::eventFilter(obj, event);
 
     if (event->type() == QEvent::Wheel) {
-        QWheelEvent *we = static_cast<QWheelEvent *>(event);
-        double factor = we->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
-        m_mapView->scale(factor, factor);
-        updateRulers();
-        return true;
+        return false;
     }
 
     if (event->type() == QEvent::MouseMove) {

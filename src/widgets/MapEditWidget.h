@@ -110,6 +110,11 @@ private:
     bool eventFilter(QObject *obj, QEvent *event) override;
     void resizeEvent(QResizeEvent *e) override;
 
+    // 从已有数组中找出指定前缀的 ID 里最大的数字编号，返回 max+1
+    // 保证删除再新增时不产生重复 ID
+    static int nextIdNum(const QJsonArray &arr, const QString &prefix);
+
+
     enum DrawStatus { Drag=0, Point=1, Line=2, Curve=3, Charge=4, HighPrecision=5 };
 
     // Map view

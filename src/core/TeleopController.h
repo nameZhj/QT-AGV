@@ -50,6 +50,7 @@ private:
 
     bool handleKeyEvent(class QKeyEvent *event, bool pressed);
     bool isTeleopKey(int key) const;
+    bool isMovementKey(int key) const;   // 上下左右/空格(始终拦截)
     bool focusIsTextInput() const;
 
     void onTick();

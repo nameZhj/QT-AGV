@@ -47,6 +47,8 @@ protected:
     void mouseMoveEvent(QMouseEvent *e) override;
     void mouseReleaseEvent(QMouseEvent *e) override;
     void resizeEvent(QResizeEvent *e) override;
+    bool viewportEvent(QEvent *event) override;
+    bool event(QEvent *e) override;   // 处理 QNativeGestureEvent (捏合缩放/旋转)
 
 private slots:
     void onMqttMessage(const QString &topic, const QByteArray &payload);
@@ -56,6 +58,8 @@ private:
     QPointF worldToScene(double wx, double wy) const;
     void initMqtt();
     void disconnectMqtt();
+    void pinchTriggered(class QPinchGesture *gesture);
+    void handleNativeGesture(class QNativeGestureEvent *e);   // 原生手势分发
 
 private:
     bool   m_panning = false;
@@ -77,6 +81,11 @@ private:
     QString m_trackedCarId;
     QMap<QString, RobotInfo> m_carInfos;
     QPixmap m_robotPixmap;
+
+    // Trackpad gestures state
+    bool m_justPinched = false;
+    bool m_gestureZoomActive = false;   // 原生捏合缩放手势进行中
+    bool m_gestureRotateActive = false; // 原生旋转手势进行中
 };
 
 #endif // MAPCANVAS_H

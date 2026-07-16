@@ -4,10 +4,14 @@
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QScrollBar>
+#include <QNativeGestureEvent>
 #include <cmath>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QDebug>
+#include <QGestureEvent>
+#include <QPinchGesture>
+#include <QTimer>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -27,6 +31,10 @@ MapCanvas::MapCanvas(QGraphicsScene *scene, QWidget *parent)
     setCursor(Qt::CrossCursor);
 
     m_robotPixmap.load(":/ic-robot.svg");
+    
+    setAttribute(Qt::WA_AcceptTouchEvents);
+    viewport()->setAttribute(Qt::WA_AcceptTouchEvents);
+    viewport()->grabGesture(Qt::PinchGesture);
 }
 
 MapCanvas::~MapCanvas()
@@ -75,47 +83,193 @@ QPointF MapCanvas::worldToScene(double wx, double wy) const
 
 void MapCanvas::wheelEvent(QWheelEvent *e)
 {
-    // 触摸板与鼠标兼容:
-    // - Ctrl + 垂直滚动(鼠标滚轮/触控板双指) → 旋转
-    // - Ctrl + 水平滚动(触控板双指水平) → 旋转
-    // - 无 Ctrl + 垂直滚动 → 缩放
-    // 触摸板的 pixelDelta() 提供更平滑的精度，优先使用
-    if (e->modifiers() & Qt::ControlModifier) {
-        // 旋转: 优先使用 angleDelta, 触控板用 pixelDelta 补充
-        int dy = e->angleDelta().y();
-        int dx = e->angleDelta().x();
-        // 触控板水平滚动也用于旋转
-        int delta = (qAbs(dy) >= qAbs(dx)) ? dy : dx;
-        if (delta == 0 && !e->pixelDelta().isNull()) {
-            delta = (qAbs(e->pixelDelta().y()) >= qAbs(e->pixelDelta().x()))
-                    ? e->pixelDelta().y() : e->pixelDelta().x();
-            delta = delta * 2;   // pixelDelta 数值小，放大
-        }
-        double deg = delta > 0 ? 5.0 : -5.0;
-        m_rotAngle += deg;
-        setTransformationAnchor(QGraphicsView::AnchorViewCenter);
-        rotate(deg);
-        setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-        emit transformChanged();
-        e->accept();
-    } else {
-        // 缩放: 鼠标滚轮用 angleDelta(离散15度单位)，触控板用 pixelDelta(连续像素)
-        int angleY = e->angleDelta().y();
-        if (angleY != 0) {
-            double factor = angleY > 0 ? 1.15 : 1.0/1.15;
-            scale(factor, factor);
-            emit transformChanged();
-        } else if (!e->pixelDelta().isNull()) {
-            // 触控板双指缩放: pixelDelta 连续值，转换为缩放因子
-            double py = e->pixelDelta().y();
-            if (qAbs(py) > 0.5) {
-                double factor = 1.0 + py * 0.01;
-                factor = qBound(0.5, factor, 2.0);
+    // =========================================================================
+    // Windows 触控板 WheelEvent 事件特征（实测）：
+    //
+    // ① 双指捏合/扩大 → 系统发出的 WheelEvent 特征：
+    //      - source() 可能是 SynthesizedBySystem，也可能是 NotSynthesized（取决于驱动）
+    //      - modifiers() 包含 Qt::ControlModifier（系统注入）
+    //      - angleDelta().y() 是 120 的整数倍（每步 ±120）
+    //      - pixelDelta() 为 null（捏合是离散步长，不是连续滑动）
+    //   → 处理为：缩放地图
+    //
+    // ② 双指在触控板上滑动（无 Ctrl）→ WheelEvent 特征：
+    //      - angleDelta 通常不是 120 的整数倍（小数值，连续）
+    //        OR pixelDelta 有值（精确触控板驱动）
+    //      - modifiers() 无 ControlModifier
+    //   → 处理为：平移地图
+    //
+    // ③ Ctrl + 双指滑动 → WheelEvent 特征：
+    //      - pixelDelta 有值，且值连续（精确触控板）
+    //        OR angleDelta 不是 120 的整数倍
+    //      - modifiers() 包含 ControlModifier
+    //   → 处理为：旋转地图
+    //
+    // ④ 鼠标滚轮 → WheelEvent 特征：
+    //      - angleDelta 是 120 的整数倍
+    //      - pixelDelta 为 null
+    //      - modifiers() 通常无 Ctrl（除非用户手动按 Ctrl）
+    //   → 处理为：缩放（无Ctrl）或旋转（有Ctrl）
+    //
+    // 关键区分逻辑：
+    //   捏合 vs Ctrl+滑动：pixelDelta 是否有值
+    //   - 捏合：pixelDelta 为 null，angleDelta = ±120 倍数
+    //   - Ctrl+滑动：pixelDelta 有值（连续小数值），angleDelta 非 120 倍数
+    // =========================================================================
+
+    bool hasCtrl = (e->modifiers() & Qt::ControlModifier);
+    bool hasPixelDelta = !e->pixelDelta().isNull();
+    int  angleY = e->angleDelta().y();
+    int  angleX = e->angleDelta().x();
+
+    // 判断是否为精确触控板连续滑动（非离散步长）
+    // 精确触控板：pixelDelta 有值，或 angleDelta 不是 120 的整数倍
+    bool isContinuousScroll = hasPixelDelta ||
+                              (angleX != 0 && (angleX % 120) != 0) ||
+                              (angleY != 0 && (angleY % 120) != 0);
+
+    if (hasCtrl) {
+        if (isContinuousScroll) {
+            // ③ Ctrl + 触控板滑动 → 旋转地图（线性，温和）
+            double dx = hasPixelDelta ? e->pixelDelta().x() : (angleX * 0.3);
+            double dy = hasPixelDelta ? e->pixelDelta().y() : (angleY * 0.3);
+            double delta = (qAbs(dx) > qAbs(dy)) ? dx : dy;
+            if (qAbs(delta) > 0.05) {
+                const double kRotateDeg = 0.04;
+                double deg = delta * kRotateDeg;
+                m_rotAngle += deg;
+                setTransformationAnchor(QGraphicsView::AnchorViewCenter);
+                rotate(deg);
+                setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+                emit transformChanged();
+            }
+            e->accept();
+        } else {
+            // ① 双指捏合/扩大（离散步长 Ctrl+Wheel）OR ④ Ctrl+鼠标滚轮 → 缩放
+            int delta = (qAbs(angleY) >= qAbs(angleX)) ? angleY : angleX;
+            if (delta != 0) {
+                // 触控板捏合：温和缩放；鼠标：正常缩放
+                double factor = delta > 0 ? 1.12 : (1.0 / 1.12);
+                setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
                 scale(factor, factor);
                 emit transformChanged();
             }
+            e->accept();
         }
-        e->accept();
+    } else {
+        if (isContinuousScroll) {
+            // ② 触控板双指滑动（无 Ctrl）→ 平移地图（线性，温和）
+            double dx = hasPixelDelta ? e->pixelDelta().x() : (angleX * 0.3);
+            double dy = hasPixelDelta ? e->pixelDelta().y() : (angleY * 0.3);
+            const double kPanDamp = 0.5;
+            dx *= kPanDamp;
+            dy *= kPanDamp;
+            if (qAbs(dx) > 0.05 || qAbs(dy) > 0.05) {
+                horizontalScrollBar()->setValue(horizontalScrollBar()->value() - dx);
+                verticalScrollBar()->setValue(verticalScrollBar()->value() - dy);
+                emit transformChanged();
+            }
+            e->accept();
+        } else {
+            // ④ 鼠标滚轮（无 Ctrl）→ 缩放地图
+            if (angleY != 0) {
+                double factor = angleY > 0 ? 1.15 : (1.0 / 1.15);
+                setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+                scale(factor, factor);
+                emit transformChanged();
+            }
+            e->accept();
+        }
+    }
+}
+
+
+bool MapCanvas::viewportEvent(QEvent *event)
+{
+    if (event->type() == QEvent::Gesture) {
+        QGestureEvent *ge = static_cast<QGestureEvent*>(event);
+        if (QGesture *pinch = ge->gesture(Qt::PinchGesture)) {
+            pinchTriggered(static_cast<QPinchGesture*>(pinch));
+            return true;
+        }
+    }
+    return QGraphicsView::viewportEvent(event);
+}
+
+void MapCanvas::pinchTriggered(QPinchGesture *gesture)
+{
+    QPinchGesture::ChangeFlags changeFlags = gesture->changeFlags();
+    if (changeFlags & QPinchGesture::ScaleFactorChanged) {
+        double factor = gesture->scaleFactor();
+        // (1) 双指捏合扩大：缩放地图 (线性且温和)
+        double sensitiveFactor = 1.0 + (factor - 1.0) * 0.35;
+        sensitiveFactor = qBound(0.95, sensitiveFactor, 1.05);
+        scale(sensitiveFactor, sensitiveFactor);
+        emit transformChanged();
+
+        m_justPinched = true;
+        QTimer::singleShot(200, this, [this]() { m_justPinched = false; });
+    }
+}
+
+bool MapCanvas::event(QEvent *e)
+{
+    // 处理原生手势事件(Windows 触控板捏合/旋转)
+    if (e->type() == QEvent::NativeGesture) {
+        auto *nge = static_cast<QNativeGestureEvent*>(e);
+        handleNativeGesture(nge);
+        return true;
+    }
+    return QGraphicsView::event(e);
+}
+
+void MapCanvas::handleNativeGesture(QNativeGestureEvent *e)
+{
+    switch (e->gestureType()) {
+    case Qt::BeginNativeGesture:
+        // 手势开始，重置状态
+        m_gestureZoomActive = false;
+        m_gestureRotateActive = false;
+        break;
+    case Qt::EndNativeGesture:
+        // 手势结束
+        m_gestureZoomActive = false;
+        m_gestureRotateActive = false;
+        break;
+    case Qt::ZoomNativeGesture: {
+        // (1) 双指捏合扩大/缩小：缩放地图
+        // value > 0 = 放大(手指分开), value < 0 = 缩小(手指捏合)
+        double value = e->value();
+        if (qAbs(value) < 1e-6) break;
+        // 线性缩放，value 通常在 [-0.1, 0.1] 范围
+        double factor = 1.0 + value * 1.5;
+        factor = qBound(0.95, factor, 1.05);
+        setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+        scale(factor, factor);
+        setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+        emit transformChanged();
+        m_gestureZoomActive = true;
+        m_justPinched = true;
+        QTimer::singleShot(200, this, [this]() { m_justPinched = false; });
+        break;
+    }
+    case Qt::RotateNativeGesture: {
+        // 双指旋转手势 - 不响应(用户要求用 Ctrl+单指滑动旋转)
+        // 忽略此手势，避免与 Ctrl+单指滑动旋转冲突
+        break;
+    }
+    case Qt::PanNativeGesture: {
+        // 三指/四指平移手势 - 不处理(系统级手势)
+        break;
+    }
+    case Qt::SmartZoomNativeGesture:
+        // 智能缩放(双击双指) - 不处理
+        break;
+    case Qt::SwipeNativeGesture:
+        // 滑动手势 - 不处理
+        break;
+    default:
+        break;
     }
 }
 

@@ -64,27 +64,56 @@ bool TeleopController::eventFilter(QObject *obj, QEvent *event)
 {
     if (!m_active) return QObject::eventFilter(obj, event);
 
-    // 只在遥控启用时拦截键盘事件
+    // 遥控启用时，拦截上下左右/空格的 ShortcutOverride，防止组件通过快捷键系统消费
+    if (event->type() == QEvent::ShortcutOverride) {
+        QKeyEvent *ke = static_cast<QKeyEvent *>(event);
+        if (isMovementKey(ke->key())) {
+            ke->accept();
+            return true;
+        }
+    }
+
+    // 拦截键盘事件
     if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
         QKeyEvent *ke = static_cast<QKeyEvent *>(event);
-        // 自动重复事件不处理（交给底层控件默认行为，避免重复触发）
-        if (ke->isAutoRepeat()) {
-            return QObject::eventFilter(obj, event);
-        }
         int key = ke->key();
-        if (!isTeleopKey(key)) {
-            return QObject::eventFilter(obj, event);
+
+        // 上下左右/空格：遥控启用时始终拦截，无论焦点在哪
+        if (isMovementKey(key)) {
+            if (ke->isAutoRepeat()) {
+                return true;   // 拦截自动重复事件，不往下传递给其它组件
+            }
+            bool pressed = (event->type() == QEvent::KeyPress);
+            handleKeyEvent(ke, pressed);
+            return true;   // 始终拦截，不再传递给任何组件
         }
-        // 焦点位于文本输入控件时放行，避免影响输入（如 QLineEdit 中按 P/L/Space）
-        if (focusIsTextInput()) {
-            return QObject::eventFilter(obj, event);
-        }
-        bool pressed = (event->type() == QEvent::KeyPress);
-        if (handleKeyEvent(ke, pressed)) {
-            return true;   // 拦截事件，不再传递给目标控件 → 遥控键优先级最高
+
+        // P/L 升降键：文本输入时不拦截（允许正常输入字母）
+        if (isTeleopKey(key) && !focusIsTextInput()) {
+            if (ke->isAutoRepeat()) {
+                return true;
+            }
+            bool pressed = (event->type() == QEvent::KeyPress);
+            if (handleKeyEvent(ke, pressed)) {
+                return true;
+            }
         }
     }
     return QObject::eventFilter(obj, event);
+}
+
+bool TeleopController::isMovementKey(int key) const
+{
+    switch (key) {
+    case Qt::Key_Up:
+    case Qt::Key_Down:
+    case Qt::Key_Left:
+    case Qt::Key_Right:
+    case Qt::Key_Space:
+        return true;
+    default:
+        return false;
+    }
 }
 
 bool TeleopController::isTeleopKey(int key) const

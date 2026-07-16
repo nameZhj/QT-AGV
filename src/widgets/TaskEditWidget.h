@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include "MapCanvas.h"
+#include "core/ToggleSwitch.h"
 #include <QGraphicsScene>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -54,6 +55,7 @@ private:
     void loadTaskData();
     void loadMapData();
     void loadRouteData();
+    void loadReflectorData();
     void renderMap();
     void fitView();
     void updateRulers();
@@ -87,7 +89,7 @@ private:
     enum DrawStatus { Drag = 0, Target = 1 };
 
     // UI - 地图
-    QGraphicsView  *m_mapView    = nullptr;
+    MapCanvas      *m_mapView    = nullptr;
     QGraphicsScene *m_scene      = nullptr;
     QLabel         *m_coordLabel = nullptr;
     QLabel         *m_mapInfoLabel = nullptr;
@@ -98,6 +100,7 @@ private:
     QPushButton  *m_saveBtn          = nullptr;
     QPushButton  *m_taskSettingsBtn  = nullptr;
     QPushButton  *m_gridBtn          = nullptr;
+    ToggleSwitch *m_reflectorBtn     = nullptr;
     QComboBox    *m_targetTableCombo = nullptr;
     QTableWidget *m_targetTable      = nullptr;
     QWidget      *m_tablePanel       = nullptr;
@@ -144,10 +147,14 @@ private:
     double m_worldL = 0, m_worldB = 0, m_worldR = 0, m_worldT = 0;
     double m_imgW   = 0, m_imgH   = 0;
 
-    DrawStatus m_drawStatus    = Drag;
-    bool       m_tableVisible  = false;
-    bool       m_hasInitialFit = false;
-    bool       m_showGrid      = false;
+    DrawStatus m_drawStatus      = Drag;
+    bool       m_tableVisible    = false;
+    bool       m_hasInitialFit   = false;
+    bool       m_showGrid        = false;
+
+    // 反光柱（开关控制显示，默认隐藏）
+    bool       m_showReflectors  = false;
+    QJsonArray m_reflectorPoles;
 
     // 图元映射
     QMap<QString, QGraphicsItem *> m_targetItems;

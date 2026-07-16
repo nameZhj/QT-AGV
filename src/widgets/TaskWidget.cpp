@@ -338,6 +338,20 @@ void TaskWidget::setupUI()
     });
     navBar->addWidget(m_gridBtn);
 
+    // 反光柱开关
+    auto *sepReflector = new QFrame; sepReflector->setFrameShape(QFrame::VLine);
+    sepReflector->setStyleSheet("color:#2d3340;"); navBar->addWidget(sepReflector);
+    auto *reflectorLabel = new QLabel("反光柱");
+    reflectorLabel->setStyleSheet("color:#9ab8d8;font-size:11px;padding:0 2px;");
+    navBar->addWidget(reflectorLabel);
+    m_reflectorBtn = new ToggleSwitch;
+    m_reflectorBtn->setToolTip("切换反光柱显示");
+    connect(m_reflectorBtn, &ToggleSwitch::toggled, this, [this](bool on) {
+        m_showReflectors = on;
+        renderMap();
+    });
+    navBar->addWidget(m_reflectorBtn);
+
     m_resetViewBtn = mkNavBtn("reset", "重置视图", QColor("#c8d0d8"));
     m_resetViewBtn->setStyleSheet(S_TOOLBTN);
     connect(m_resetViewBtn, &QToolButton::clicked, this, [this]() {
@@ -383,6 +397,7 @@ void TaskWidget::setupUI()
 
     m_scene = new QGraphicsScene(this);
     m_mapView = new MapCanvas(m_scene, this);
+    connect(m_mapView, &MapCanvas::transformChanged, this, [this]() { updateRulers(); });
     m_mapView->setStyleSheet(S_MAPVIEW);
     m_mapView->setDragMode(QGraphicsView::ScrollHandDrag);
     m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
@@ -621,6 +636,8 @@ void TaskWidget::loadTaskValidity()
             m_invalidTaskIds.insert(jsonIdStr(v.toObject().value("taskId")));
         applyTaskValidityStyle();
         onTaskSelectionChanged();
+        // 失效任务列表更新后，检查当前设备加载的任务是否已失效
+        checkAndRemoveInvalidLoaded();
     });
 }
 
@@ -705,6 +722,7 @@ void TaskWidget::loadMapForTask(const QString &mapId)
     m_points = QJsonArray();
     m_lines = QJsonArray();
     m_curves = QJsonArray();
+    m_reflectorPoles = QJsonArray();
     m_hasInitialFit = false;
 
     ApiService::instance().getMap(mapId, [this](int code, const QJsonObject &data) {
@@ -800,6 +818,7 @@ void TaskWidget::loadMapForTask(const QString &mapId)
 
         // 加载路网数据
         loadRouteData(m_currentMapId);
+        loadReflectorData(m_currentMapId);
     });
 }
 
@@ -896,6 +915,49 @@ void TaskWidget::loadRouteData(const QString &mapId)
     });
 }
 
+void TaskWidget::loadReflectorData(const QString &mapId)
+{
+    if (mapId.isEmpty()) return;
+    ApiService::instance().getReflectorColumnInfo(mapId, [this](int code, const QJsonObject &data) {
+        if (code != 200) {
+            m_mapInfoLabel->setText(QString("地图: %1 [%2] (反光柱加载失败)").arg(m_currentMapName, m_currentMapId));
+            return;
+        }
+        
+        QJsonValue dataVal = data.value("data");
+        QJsonArray features;
+        
+        if (dataVal.isArray()) {
+            features = dataVal.toArray();
+        } else if (dataVal.isObject()) {
+            QJsonObject geo = dataVal.toObject();
+            features = geo.value("features").toArray();
+            if (features.isEmpty() && geo.value("type").toString() == "Feature") {
+                features.append(geo);
+            }
+        } else if (dataVal.isString()) {
+            QJsonDocument doc = QJsonDocument::fromJson(dataVal.toString().toUtf8());
+            if (doc.isArray()) {
+                features = doc.array();
+            } else if (doc.isObject()) {
+                QJsonObject geo = doc.object();
+                features = geo.value("features").toArray();
+                if (features.isEmpty() && geo.value("type").toString() == "Feature") {
+                    features.append(geo);
+                }
+            }
+        }
+        
+        if (features.isEmpty()) {
+            features = data.value("features").toArray();
+        }
+        
+        m_reflectorPoles = features;
+        m_mapInfoLabel->setText(QString("地图: %1 [%2] (反光柱: %3)").arg(m_currentMapName, m_currentMapId).arg(m_reflectorPoles.size()));
+        if (m_showReflectors) renderMap();
+    });
+}
+
 void TaskWidget::loadTaskTargets(const QString &taskId)
 {
     if (taskId.isEmpty()) {
@@ -967,11 +1029,7 @@ bool TaskWidget::eventFilter(QObject *obj, QEvent *event)
         return QWidget::eventFilter(obj, event);
 
     if (event->type() == QEvent::Wheel) {
-        QWheelEvent *we = static_cast<QWheelEvent *>(event);
-        double factor = we->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
-        m_mapView->scale(factor, factor);
-        updateRulers();
-        return true;
+        return false;
     }
 
     if (event->type() == QEvent::MouseMove) {
@@ -1188,8 +1246,25 @@ void TaskWidget::renderMap()
         }
     }
 
+    // 反光柱：开关控制显示，标准 GeoJSON Feature 数组，geometry.coordinates=[x,y]
+    if (m_showReflectors) {
+        auto toDbl = [](const QJsonValue &v) {
+            return v.isString() ? v.toString().toDouble() : v.toDouble();
+        };
+        for (const auto &v : m_reflectorPoles) {
+            QJsonObject f = v.toObject();
+            QJsonArray coords = f.value("geometry").toObject().value("coordinates").toArray();
+            if (coords.size() < 2) continue;
+            QPointF sp = worldToScene(toDbl(coords[0]), toDbl(coords[1]));
+            auto *e = m_scene->addEllipse(sp.x()-5, sp.y()-5, 10, 10,
+                QPen(QColor("#caa020"), 1.5), QBrush(QColor("#f0c040")));
+            e->setZValue(8);
+        }
+    }
+
     m_scene->setSceneRect(0, 0, m_imgW, m_imgH);
 }
+
 
 void TaskWidget::updateCarPosition(const QString &carId, double x, double y, double angle)
 {
@@ -1411,6 +1486,41 @@ void TaskWidget::loadCurrentTask()
             m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
         }
         updateTaskButtons();
+    });
+}
+
+void TaskWidget::checkAndRemoveInvalidLoaded()
+{
+    QString agvId = AppConfig::instance().agvId();
+    if (agvId.isEmpty() || m_invalidTaskIds.isEmpty()) return;
+
+    // 查询设备当前加载的任务，如果该任务已失效则调用移除接口
+    QJsonObject query;
+    query["carId"] = agvId;
+    ApiService::instance().getCurrentTask(query, [this](int code, const QJsonObject &data) {
+        if (code != 200) return;
+        QJsonValue dataVal = data.value("data");
+        if (dataVal.isUndefined() || dataVal.isNull() || !dataVal.isObject()) return;
+
+        QJsonObject taskData = dataVal.toObject();
+        QString taskId = jsonIdStr(taskData.value("taskId"));
+        if (taskId.isEmpty() || !m_invalidTaskIds.contains(taskId)) return;
+
+        // 任务已失效且仍处于加载状态，调用移除接口
+        QJsonObject statusData = data.value("taskInfo_data").toObject();
+        QString execStatus = jsonIdStr(statusData.value("status"));
+        // 仅移除非执行中的任务(1=已完成 2=失败 4=未开始)，执行中(0)/暂停(3)不自动移除
+        if (execStatus != "1" && execStatus != "2" && execStatus != "4") return;
+
+        ApiService::instance().removeTask(QJsonObject{{"taskId", taskId}},
+            [this, taskId](int /*code*/, const QJsonObject &/*resp*/) {
+                // 移除后刷新当前任务状态和列表
+                m_currentTask = QJsonObject();
+                m_currentTaskLabel->setText("当前任务: 无");
+                updateTaskButtons();
+                stopTaskPolling();
+                loadCurrentTask();
+            });
     });
 }
 
