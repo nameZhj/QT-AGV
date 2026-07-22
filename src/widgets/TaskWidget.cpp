@@ -501,15 +501,15 @@ void TaskWidget::setupUI()
     // 任务表格：自适应列宽
     m_table = new QTableWidget;
     m_table->setStyleSheet(S_TABLE);
-    m_table->setColumnCount(6);
-    m_table->setHorizontalHeaderLabels({"任务编号","执行设备","任务名称","状态","描述","创建时间"});
-    // 按列设置不同的缩放模式：编号/设备/状态用 ResizeToContents，名称/描述/时间用 Stretch
-    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_table->setColumnCount(5);
+    m_table->setHorizontalHeaderLabels({"任务编号","执行设备","任务名称","状态","创建时间"});
+    // 按列设置缩放模式：任务编号使用 75px 窄列，任务名称 Stretch 自动调宽
+    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
+    m_table->setColumnWidth(0, 75);
     m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     m_table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
-    m_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setStretchLastSection(false);
     m_table->horizontalHeader()->setMinimumSectionSize(40);
     m_table->verticalHeader()->setVisible(false);
@@ -533,8 +533,8 @@ void TaskWidget::refreshList()
     getList();
     // 重新初始化 MQTT 订阅，确保设备切换后能收到新设备的位置更新
     initMqtt();
-    // 不调用 loadCurrentTask: MQTT navigation 已直接更新 m_currentTask，
-    // loadCurrentTask 会覆盖用户手动选中的行
+    // 启动 1Hz 定时访问 API 接口 (getCurrentTask) 的轮询，持续拉取任务最新状态
+    startTaskPolling();
 }
 
 void TaskWidget::getList()
@@ -564,8 +564,7 @@ void TaskWidget::getList()
             statusItem->setForeground(QColor("#7a889b"));
             m_table->setItem(i, 3, statusItem);
 
-            m_table->setItem(i, 4, new QTableWidgetItem(task.value("remark").toString()));
-            m_table->setItem(i, 5, new QTableWidgetItem(task.value("createTime").toString()));
+            m_table->setItem(i, 4, new QTableWidgetItem(task.value("createTime").toString()));
         }
 
         applyTaskValidityStyle();
@@ -633,17 +632,57 @@ void TaskWidget::loadTaskValidity()
 
 void TaskWidget::applyTaskValidityStyle()
 {
+    QString activeTaskId = jsonIdStr(m_currentTask.value("taskId"));
+    QString execStatus   = jsonIdStr(m_currentTask.value("status"));
+
     for (int i = 0; i < m_taskList.size(); ++i) {
         QJsonObject task = m_taskList[i].toObject();
-        QString taskId = jsonIdStr(task.value("taskId"));
+        QString taskId   = jsonIdStr(task.value("taskId"));
         QString taskName = task.value("taskName").toString();
-        bool invalid = m_invalidTaskIds.contains(taskId);
+        bool invalid     = m_invalidTaskIds.contains(taskId);
 
-        auto *item = m_table->item(i, 2);
-        if (!item) continue;
-        item->setText(invalid ? taskName + " (待切换地图)" : taskName);
-        item->setForeground(invalid ? QColor("#c8a430") : QColor("#c8d0d8"));
-        item->setToolTip(invalid ? "该任务地图与设备当前地图不一致，加载时将自动切换地图" : QString());
+        // 1) 任务名称列 (第 2 列)
+        auto *nameItem = m_table->item(i, 2);
+        if (nameItem) {
+            nameItem->setText(taskName);
+            nameItem->setForeground(invalid ? QColor("#c8a430") : QColor("#c8d0d8"));
+            nameItem->setToolTip(invalid ? "该任务地图与设备当前地图不一致，加载时将自动切换地图" : QString());
+        }
+
+        // 2) 任务当前执行状态列 (第 3 列): 已失效任务显示 "已失效"；其余显示 已加载 / 执行中 / 暂停 / 已结束 / 未加载
+        auto *statusItem = m_table->item(i, 3);
+        if (statusItem) {
+            QString statusText;
+            QColor  statusColor;
+
+            if (invalid) {
+                statusText  = "已失效";
+                statusColor = QColor("#c8a430"); // 黄色
+            } else if (!activeTaskId.isEmpty() && activeTaskId == taskId) {
+                if (execStatus == "0") {
+                    statusText  = "执行中";
+                    statusColor = QColor("#4caf7a"); // 亮绿
+                } else if (execStatus == "3") {
+                    statusText  = "暂停";
+                    statusColor = QColor("#c8a430"); // 黄色
+                } else if (execStatus == "4") {
+                    statusText  = "已加载";
+                    statusColor = QColor("#3ab8cc"); // 蓝青
+                } else if (execStatus == "1" || execStatus == "2") {
+                    statusText  = "已结束";
+                    statusColor = QColor("#a8c0d8"); // 浅灰蓝
+                } else {
+                    statusText  = "已加载";
+                    statusColor = QColor("#3ab8cc");
+                }
+            } else {
+                statusText  = "未加载";
+                statusColor = QColor("#7a889b"); // 哑光灰
+            }
+
+            statusItem->setText(statusText);
+            statusItem->setForeground(statusColor);
+        }
     }
 }
 
@@ -1433,13 +1472,6 @@ void TaskWidget::onWebSocketNotification(const QJsonObject &msg)
     m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
     updateTaskButtons();
     applyTaskValidityStyle();
-    // 与轮询定时器同步: WebSocket 报告执行中(0)时确保轮询运行，
-    // 报告终态/暂停(1/2/3)时停止轮询
-    if (status == "0") {
-        if (!m_taskPollTimer->isActive()) startTaskPolling();
-    } else if (status == "1" || status == "2" || status == "3") {
-        stopTaskPolling();
-    }
 
     // 防抖刷新任务列表
     m_refreshDebounce->start();
@@ -1504,20 +1536,15 @@ void TaskWidget::checkAndRemoveInvalidLoaded()
         QString taskId = jsonIdStr(taskData.value("taskId"));
         if (taskId.isEmpty() || !m_invalidTaskIds.contains(taskId)) return;
 
-        // 任务已失效且仍处于加载状态，调用移除接口
-        QJsonObject statusData = data.value("taskInfo_data").toObject();
-        QString execStatus = jsonIdStr(statusData.value("status"));
-        // 仅移除非执行中的任务(1=已完成 2=失败 4=未开始)，执行中(0)/暂停(3)不自动移除
-        if (execStatus != "1" && execStatus != "2" && execStatus != "4") return;
-
+        // 任务已失效且属于已加载状态，自动调用移除接口
         ApiService::instance().removeTask(QJsonObject{{"taskId", taskId}},
-            [this, taskId](int /*code*/, const QJsonObject &/*resp*/) {
+            [this](int /*code*/, const QJsonObject &/*resp*/) {
                 // 移除后刷新当前任务状态和列表
                 m_currentTask = QJsonObject();
                 m_currentTaskLabel->setText("当前任务: 无");
                 updateTaskButtons();
                 stopTaskPolling();
-                loadCurrentTask();
+                applyTaskValidityStyle();
             });
     });
 }
@@ -1560,7 +1587,7 @@ void TaskWidget::onTaskPollTimeout()
 {
     // 防止重入: 上一次轮询请求尚未返回时不发起新请求
     if (m_taskPolling) return;
-    if (m_currentCarId.isEmpty()) { stopTaskPolling(); return; }
+    if (m_currentCarId.isEmpty()) return;
 
     m_taskPolling = true;
     QJsonObject query;
@@ -1573,11 +1600,12 @@ void TaskWidget::onTaskPollTimeout()
         if (code != 200) return;
         QJsonValue dataVal = data.value("data");
         if (dataVal.isUndefined() || dataVal.isNull() || !dataVal.isObject()) {
-            // API 返回无当前任务 → 任务已结束/被移除，停止轮询
+            // API 返回无当前任务 → 任务已被移除或已被彻底清除，重置当前任务状态并刷新表格
             m_currentTask = QJsonObject();
+            m_currentTaskId.clear();
             m_currentTaskLabel->setText("无任务");
             updateTaskButtons();
-            stopTaskPolling();
+            applyTaskValidityStyle();
             return;
         }
 
@@ -1589,22 +1617,18 @@ void TaskWidget::onTaskPollTimeout()
 
         QString taskName = taskData.value("taskName").toString();
         QString status = jsonIdStr(m_currentTask.value("status"));
-        // API status 编码: 0=执行中 1=已完成 2=失败 3=暂停 4=未开始
+        // API status 编码: 0=执行中 1=已完成 2=失败 3=暂停 4=已加载
         QString statusText;
         if      (status == "0") statusText = "执行中";
         else if (status == "1") statusText = "已完成";
         else if (status == "2") statusText = "失败";
         else if (status == "3") statusText = "暂停";
-        else if (status == "4") statusText = "未开始";
+        else if (status == "4") statusText = "已加载";
         else statusText = status;
+
         m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
         updateTaskButtons();
-
-        // 状态为暂停(3)或终态(1已完成/2失败)时停止轮询
-        // 执行中(0)继续轮询；未开始(4)也给一点时间让设备启动后继续轮询
-        if (status == "1" || status == "2" || status == "3") {
-            stopTaskPolling();
-        }
+        applyTaskValidityStyle();
     });
 }
 
