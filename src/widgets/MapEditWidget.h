@@ -49,8 +49,11 @@ private:
     void fitView();
 
     void addPoint(const QPointF &sp);
-    void addCharge(const QPointF &sp);
-    void addHighPrecisionPoint(const QPointF &sp);
+    void addCharge(const QPointF &sp, double epcX = 0, double epcY = 0, double epcTheta = 0, double yaw = 0, double theta = 0);
+    void addHighPrecisionPoint(const QPointF &sp, double epcX = 0, double epcY = 0, double epcTheta = 0, double yaw = 0, double theta = 0);
+    // 设备打点: 通过设备相对定位(epc)添加充电桩/高精度点
+    // type: "charge" 或 "highPrecision"
+    void addDevicePoint(const QString &type);
     void addLine(const QPointF &a, const QPointF &b,
                  const QString &startId = {}, const QString &endId = {});
     void addCurve(const QPointF &a, const QPointF &b,
@@ -151,8 +154,13 @@ private:
     QWidget   *m_propKindRow     = nullptr;   // 点类型切换行(普通点/高精度点/充电桩)
     QComboBox *m_propKindCombo   = nullptr;   // 点类型下拉框
     QWidget   *m_propCoordRow    = nullptr;   // 坐标编辑行(仅点类型显示)
-    QDoubleSpinBox *m_propXSpin = nullptr;   // 点的 X 坐标(可编辑)
-    QDoubleSpinBox *m_propYSpin = nullptr;   // 点的 Y 坐标(可编辑)
+    QDoubleSpinBox *m_propXSpin = nullptr;   // 点的 X 坐标(普通点可编辑;充电椒/高精度点只读)
+    QDoubleSpinBox *m_propYSpin = nullptr;   // 点的 Y 坐标(普通点可编辑;充电椒/高精度点只读)
+    QWidget        *m_propYawRow  = nullptr;  // Yaw 显示行(充电椒/高精度点专属)
+    QLabel         *m_propYawLabel = nullptr; // Yaw 值显示（只读）
+    QWidget        *m_propEpcRow  = nullptr;  // epc_x/epc_y 显示行(充电桩/高精度点专属，只读)
+    QLabel         *m_propEpcXLabel = nullptr;
+    QLabel         *m_propEpcYLabel = nullptr;
 
     // Data
     QString    m_mapId, m_mapName;
@@ -218,8 +226,13 @@ private:
     // 实时设备位置标记（开关控制显示）
     bool                   m_showRobotPosition = false;
     QGraphicsPolygonItem  *m_robotItem         = nullptr;
-    double                 m_carX = 0, m_carY = 0, m_carYaw = 0;
+    double                 m_carX = 0, m_carY = 0, m_carYaw = 0, m_carTheta = 0;
     bool                   m_hasCarPose        = false;
+    // 设备相对定位末端坐标(epc): 由 /rob/{id}/info 推送，用于充电桩/高精度点打点
+    double                 m_epcX = 0, m_epcY = 0, m_epcTheta = 0;
+    bool                   m_hasEpcPose        = false;
+    // 设备打点进行中标志(防止重复触发)
+    bool                   m_devicePointPending = false;
 };
 
 #endif // MAPEDITWIDGET_H

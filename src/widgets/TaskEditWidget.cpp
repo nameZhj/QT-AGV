@@ -1020,10 +1020,20 @@ void TaskEditWidget::loadRouteData()
                 pt["x"]    = coords[0].toDouble();
                 pt["y"]    = coords[1].toDouble();
                 pt["name"] = props.value("name").toString();
+                // 充电桩/高精度点: 保留所有 properties(epc_x/epc_y/epc_theta/yaw/yawFix/theta 等)
+                // 与 Vue loadFeaturesFromJson 行为一致，避免任务保存时丢失 epc 等定位参数
+                if (id.startsWith("c_") || id.startsWith("hp_")) {
+                    for (auto it = props.begin(); it != props.end(); ++it) {
+                        const QString &k = it.key();
+                        if (k == "id" || k == "name") continue;  // 已设置
+                        pt[k] = it.value();
+                    }
+                    if (id.startsWith("hp_"))
+                        pt["visible"] = props.value("visible").toBool(true);
+                }
                 if (id.startsWith("c_"))
                     m_charges.append(pt);
                 else if (id.startsWith("hp_")) {
-                    pt["visible"] = props.value("visible").toBool(true);
                     m_highPrecisionPoints.append(pt);
                 } else
                     m_points.append(pt);
@@ -1367,16 +1377,41 @@ void TaskEditWidget::addTargetPoint(const QPointF &scenePos)
     if (!snap.valid) return;   // 路网为空，无法吸附
     QPointF world = snap.worldPos;
 
-    // 与 Vue 一致: 打点模式下总是添加新点，允许在同一位置或已有点周围重复打点
+    // 查找所吸附的地图节点（普通节点 / 充电桩 / 高精度节点）
+    QJsonObject sourcePt;
+    if (snap.type == "charge") {
+        for (const auto &v : m_charges) {
+            if (v.toObject().value("id").toString() == snap.id) {
+                sourcePt = v.toObject();
+                break;
+            }
+        }
+    } else if (snap.type == "highPrecision") {
+        for (const auto &v : m_highPrecisionPoints) {
+            if (v.toObject().value("id").toString() == snap.id) {
+                sourcePt = v.toObject();
+                break;
+            }
+        }
+    } else if (snap.type == "point") {
+        for (const auto &v : m_points) {
+            if (v.toObject().value("id").toString() == snap.id) {
+                sourcePt = v.toObject();
+                break;
+            }
+        }
+    }
 
     QJsonObject target;
-    int newNum = m_targets.size() + 1;
+    // targetNumber 从 0 开始，与 Vue addTargetExtraProps 保持一致
+    int newIdx = m_targets.size();          // 0-based index
+    int newNum = newIdx + 1;               // 1-based for id/name display
     QString id = QString("t_%1").arg(newNum);
     target["id"]                  = id;
     target["name"]                = QString("T%1").arg(newNum);
-    target["targetNumber"]        = newNum;
-    target["x"]                   = world.x();
-    target["y"]                   = world.y();
+    target["targetNumber"]        = newIdx;  // Vue: 0-based
+    target["x"]                   = QString::number(world.x(), 'f', 3).toDouble();
+    target["y"]                   = QString::number(world.y(), 'f', 3).toDouble();
     target["action"]              = "None";
     target["targetFunctionality"] = QJsonArray();
     target["roll"]                = 0.0;
@@ -1387,6 +1422,19 @@ void TaskEditWidget::addTargetPoint(const QPointF &scenePos)
     target["taskid"]              = 0;
     target["robotYaw"]            = 0.0;
     target["actions"]             = QJsonArray();
+
+    // 与 Vue addTargetExtraProps 保持一致：任务目标点本身不存 epc 字段。
+    // 设备端通过坐标匹配路网节点来获取 epc 定位参数，不需要目标点自带 epc 字段。
+    // 仅继承 robotYaw 供用户在属性面板查看和编辑方向。
+    if (!sourcePt.isEmpty()) {
+        double yawVal = 0.0;
+        if (sourcePt.contains("yaw")) {
+            yawVal = sourcePt.value("yaw").toDouble();
+        }
+        // 更新 robotYaw 供 UI 展示；yaw 保持 0.0 与 Vue 一致
+        target["robotYaw"] = yawVal;
+    }
+
     m_targets.append(target);
     renderMap();
     refreshTargetTable();
@@ -1542,10 +1590,10 @@ void TaskEditWidget::onDeleteTarget()
     int row = m_targetTable->currentRow();
     if (row < 0) return;
     m_targets.removeAt(row);
-    // 重新编号
+    // 重新编号: targetNumber 从 0 开始 (与 Vue 一致)
     for (int i = 0; i < m_targets.size(); ++i) {
         QJsonObject target = m_targets[i].toObject();
-        target["targetNumber"] = i + 1;
+        target["targetNumber"] = i;   // 0-based
         m_targets[i] = target;
     }
     renderMap();
@@ -1559,10 +1607,10 @@ void TaskEditWidget::onMoveTargetUp()
     QJsonValue tmp = m_targets[row];
     m_targets[row] = m_targets[row - 1];
     m_targets[row - 1] = tmp;
-    // 重新编号
+    // 重新编号: targetNumber 从 0 开始 (与 Vue 一致)
     for (int i = 0; i < m_targets.size(); ++i) {
         QJsonObject target = m_targets[i].toObject();
-        target["targetNumber"] = i + 1;
+        target["targetNumber"] = i;   // 0-based
         m_targets[i] = target;
     }
     renderMap();
@@ -1577,9 +1625,10 @@ void TaskEditWidget::onMoveTargetDown()
     QJsonValue tmp = m_targets[row];
     m_targets[row] = m_targets[row + 1];
     m_targets[row + 1] = tmp;
+    // 重新编号: targetNumber 从 0 开始 (与 Vue 一致)
     for (int i = 0; i < m_targets.size(); ++i) {
         QJsonObject target = m_targets[i].toObject();
-        target["targetNumber"] = i + 1;
+        target["targetNumber"] = i;   // 0-based
         m_targets[i] = target;
     }
     renderMap();
@@ -1704,9 +1753,10 @@ void TaskEditWidget::onApplyTargetProps()
 
     QJsonObject target = m_targets[row].toObject();
     target["name"]     = m_targetNameEdit->text();
-    target["x"]         = m_targetXSpin->value();
-    target["y"]         = m_targetYSpin->value();
+    target["x"]        = m_targetXSpin->value();
+    target["y"]        = m_targetYSpin->value();
     target["robotYaw"] = m_targetYawSpin->value();
+    target["yaw"]      = m_targetYawSpin->value();
     m_targets[row] = target;
 
     renderMap();
@@ -1763,7 +1813,7 @@ TaskEditWidget::SnapResult TaskEditWidget::findNearestRoadSnap(const QPointF &sc
     SnapResult best;
     double bestDist = std::numeric_limits<double>::max();
 
-    auto consider = [&](const QPointF &candidateScene, const QString &type, const QString &id) {
+    auto consider = [&](const QPointF &candidateScene, const QString &type, const QString &id, const QPointF &world) {
         double d = std::hypot(scenePos.x() - candidateScene.x(),
                               scenePos.y() - candidateScene.y());
         if (d < bestDist) {
@@ -1772,7 +1822,7 @@ TaskEditWidget::SnapResult TaskEditWidget::findNearestRoadSnap(const QPointF &sc
             best.type  = type;
             best.id    = id;
             best.scenePos = candidateScene;
-            best.worldPos = sceneToWorld(candidateScene.x(), candidateScene.y());
+            best.worldPos = world;   // 直接使用源点的原始 world 坐标，避免 round-trip 浮点误差
         }
     };
 
@@ -1780,8 +1830,10 @@ TaskEditWidget::SnapResult TaskEditWidget::findNearestRoadSnap(const QPointF &sc
     auto checkPoints = [&](const QJsonArray &arr, const QString &type) {
         for (const auto &v : arr) {
             QJsonObject o = v.toObject();
-            QPointF sp = worldToScene(o.value("x").toDouble(), o.value("y").toDouble());
-            consider(sp, type, o.value("id").toString());
+            double wx = o.value("x").toDouble();
+            double wy = o.value("y").toDouble();
+            QPointF sp = worldToScene(wx, wy);
+            consider(sp, type, o.value("id").toString(), QPointF(wx, wy));
         }
     };
     checkPoints(m_points, "point");

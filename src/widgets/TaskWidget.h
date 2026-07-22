@@ -123,7 +123,7 @@ private:
     QJsonArray m_taskList;
     QSet<QString> m_invalidTaskIds;   // 服务器标记为"已失效"的任务 (与 Vue 下拉框禁用逻辑一致)
     int m_pageNum = 1;
-    int m_pageSize = 10;
+    int m_pageSize = 9999;   // 一次性加载所有任务，表格自身滚动显示
     int m_total = 0;
     QString m_lastSelectedTaskId;      // 刷新前列表选中的 taskId，刷新后恢复选中
     QTimer *m_refreshDebounce = nullptr;  // 合并频繁的 WebSocket 触发的刷新请求

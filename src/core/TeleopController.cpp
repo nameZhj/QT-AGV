@@ -77,13 +77,20 @@ bool TeleopController::eventFilter(QObject *obj, QEvent *event)
     if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
         QKeyEvent *ke = static_cast<QKeyEvent *>(event);
         int key = ke->key();
+        bool pressed = (event->type() == QEvent::KeyPress);
+
+        // 显式追踪 Ctrl 键状态（不拦截，仅记录）——避免定时器回调里读到过时状态
+        if (key == Qt::Key_Control) {
+            m_ctrlHeld = pressed;
+            // 不拦截，让系统正常处理 Ctrl
+            return QObject::eventFilter(obj, event);
+        }
 
         // 上下左右/空格：遥控启用时始终拦截，无论焦点在哪
         if (isMovementKey(key)) {
             if (ke->isAutoRepeat()) {
                 return true;   // 拦截自动重复事件，不往下传递给其它组件
             }
-            bool pressed = (event->type() == QEvent::KeyPress);
             handleKeyEvent(ke, pressed);
             return true;   // 始终拦截，不再传递给任何组件
         }
@@ -93,7 +100,6 @@ bool TeleopController::eventFilter(QObject *obj, QEvent *event)
             if (ke->isAutoRepeat()) {
                 return true;
             }
-            bool pressed = (event->type() == QEvent::KeyPress);
             if (handleKeyEvent(ke, pressed)) {
                 return true;
             }
@@ -174,6 +180,15 @@ bool TeleopController::handleKeyEvent(QKeyEvent *event, bool pressed)
 
 void TeleopController::onTick()
 {
+    // Ctrl 线性加速渐增速率：每 tick 向最大倍率渐进一步，松开立即重置
+    // 参考 Vue TeleopControls/index.vue 的 boostMultiplier 逻辑
+    constexpr int kBoostMaxTicks = 10;  // 10 × 100ms = 1秒内线性到达最大倍率
+    if (m_ctrlHeld) {
+        m_ctrlHeldTicks = qMin(m_ctrlHeldTicks + 1, kBoostMaxTicks);
+    } else {
+        m_ctrlHeldTicks = 0;  // 松开立即重置
+    }
+
     updateMotion();
 
     // 升降：按住期间持续发送（与速度去重逻辑无关）
@@ -206,10 +221,13 @@ void TeleopController::updateMotion()
         return;
     }
 
-    // 加速倍率：通过当前应用级键盘修饰状态检测
-    // 注意：Ctrl 本身不被 TeleopController 拦截，因此 Ctrl+方向键 触发加速
-    Qt::KeyboardModifiers mods = qApp->keyboardModifiers();
-    const double mult = (mods & Qt::ControlModifier) ? 2.0 : 1.0;
+    // Ctrl 线性加速倍率：
+    //   不按 Ctrl： mult = 1.0 （基础速度）
+    //   按住 Ctrl： mult 从 1.0 线性增长到 2.0，在 kBoostMaxTicks × 100ms 内达到最大
+    //   参考 Vue TeleopControls baseSpeed=0.5, boostMultiplier=2.0
+    constexpr int    kBoostMaxTicks = 10;   // 1秒内线性到达最大倍率
+    constexpr double kMaxMult       = 2.0;  // 最大加速倍率（对应 Vue boostMultiplier）
+    const double mult = 1.0 + (double(m_ctrlHeldTicks) / kBoostMaxTicks) * (kMaxMult - 1.0);
 
     constexpr double kBase = 0.5;
     constexpr double kAngBase = 0.3;
@@ -221,8 +239,8 @@ void TeleopController::updateMotion()
     if (m_keyLeft)     angular =  kAngBase * mult;
     if (m_keyRight)    angular = -kAngBase * mult;
 
-    const double linRounded = qRound(linear * 100.0) / 100.0;
-    const double angRounded = qRound(angular * 100.0) / 100.0;
+    const double linRounded = qRound(linear * 1000.0) / 1000.0;  // 3位小数精度，捕捉渐变过程
+    const double angRounded = qRound(angular * 1000.0) / 1000.0;
 
     if (!m_hasPublishedLinear || linRounded != m_lastPublishedLinear) {
         MqttService::instance().publish(
@@ -246,6 +264,8 @@ void TeleopController::resetKeyStates()
 {
     m_keyForward = m_keyBack = m_keyLeft = m_keyRight = false;
     m_keyBrake = m_keyHoistUp = m_keyHoistDown = false;
+    m_ctrlHeld = false;   // 停用遥控时清除 Ctrl 状态
+    m_ctrlHeldTicks = 0;  // 重置线性加速计数
     m_hasPublishedLinear = m_hasPublishedAngular = false;
     m_lastPublishedLinear = 0.0;
     m_lastPublishedAngular = 0.0;

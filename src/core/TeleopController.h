@@ -16,7 +16,7 @@
 //       /rob/{agvId}/hoisting_status "1"/"0"   (P/L 升降)
 //   - 启用/停用时发布 /rob/{agvId}/teleop_enable "1"/"0"
 //   - 速度按"值变化"去重发送，避免持续发 0；Space 刹车期间每 tick 强制发 0。
-//   - Ctrl 加速倍率通过 event->modifiers() 检测，不拦截 Ctrl 本身，
+//   - Ctrl 加速倍率通过显式追踪 Ctrl 键状态实现（m_ctrlHeld），不拦截 Ctrl 本身，
 //     不影响 Ctrl+C / Ctrl+V 等组合键。
 //   - 焦点位于文本输入控件（QLineEdit/QTextEdit/QPlainTextEdit/QComboBox 可编辑）
 //     时放行所有按键，避免影响用户输入。
@@ -69,6 +69,8 @@ private:
     bool m_keyBrake     = false;
     bool m_keyHoistUp   = false;
     bool m_keyHoistDown = false;
+    bool m_ctrlHeld     = false;   // Ctrl 加速键状态（事件过滤器显式追踪）
+    int  m_ctrlHeldTicks = 0;      // Ctrl 持续按住的 tick 数，用于线性渐增倒率
 
     // 速度去重
     double m_lastPublishedLinear  = 0.0;

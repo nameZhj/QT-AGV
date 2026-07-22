@@ -520,9 +520,10 @@ void TaskWidget::setupUI()
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setAlternatingRowColors(false);
     m_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     connect(m_table, &QTableWidget::itemSelectionChanged, this, &TaskWidget::onTableSelectionChanged);
     connect(m_table, &QTableWidget::itemSelectionChanged, this, &TaskWidget::onTaskSelectionChanged);
-    rightLayout->addWidget(m_table);
+    rightLayout->addWidget(m_table, 1);
 
     mainLayout->addWidget(rightPanel, 3);
 }
@@ -559,19 +560,8 @@ void TaskWidget::getList()
             m_table->setItem(i, 1, new QTableWidgetItem(task.value("carName").toString()));
             m_table->setItem(i, 2, new QTableWidgetItem(task.value("taskName").toString()));
 
-            // 这里的 status 是任务实体本身的有效性状态(字典 sys_task_status：
-            // 0正常 1路网失效 2地图失效)，跟 m_currentTask/loadCurrentTask() 里
-            // 设备实时执行状态(0执行中/1已完成/2失败/3暂停/4未开始)是完全不同的
-            // 两个字段，之前误用了执行状态的文案，与任务列表页要展示的内容不符。
-            QString status = jsonIdStr(task.value("status"));
-            QString statusText;
-            QColor  statusColor;
-            if      (status == "0") { statusText = "正常";   statusColor = QColor("#4caf7a"); }
-            else if (status == "1") { statusText = "路网失效"; statusColor = QColor("#c0392b"); }
-            else if (status == "2") { statusText = "地图失效"; statusColor = QColor("#c0392b"); }
-            else                    { statusText = status;   statusColor = QColor("#a8c0d8"); }
-            auto *statusItem = new QTableWidgetItem(statusText);
-            statusItem->setForeground(statusColor);
+            auto *statusItem = new QTableWidgetItem("未加载");
+            statusItem->setForeground(QColor("#7a889b"));
             m_table->setItem(i, 3, statusItem);
 
             m_table->setItem(i, 4, new QTableWidgetItem(task.value("remark").toString()));
@@ -868,6 +858,13 @@ void TaskWidget::loadRouteData(const QString &mapId)
                 pt["x"]    = coords[0].toDouble();
                 pt["y"]    = coords[1].toDouble();
                 pt["name"] = props.value("name").toString();
+                if (id.startsWith("c_") || id.startsWith("hp_")) {
+                    for (auto it = props.begin(); it != props.end(); ++it) {
+                        const QString &k = it.key();
+                        if (k == "id" || k == "name") continue;
+                        pt[k] = it.value();
+                    }
+                }
                 if (id.startsWith("c_"))
                     m_charges.append(pt);
                 else if (id.startsWith("hp_")) {
@@ -1435,7 +1432,7 @@ void TaskWidget::onWebSocketNotification(const QJsonObject &msg)
     QString taskName = msg.value("task_name").toString();
     m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
     updateTaskButtons();
-
+    applyTaskValidityStyle();
     // 与轮询定时器同步: WebSocket 报告执行中(0)时确保轮询运行，
     // 报告终态/暂停(1/2/3)时停止轮询
     if (status == "0") {
@@ -1486,6 +1483,7 @@ void TaskWidget::loadCurrentTask()
             m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
         }
         updateTaskButtons();
+        applyTaskValidityStyle();
     });
 }
 

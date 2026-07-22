@@ -783,6 +783,14 @@ void MapViewWidget::loadRoute()
                         pt["x"]    = coords[0].toDouble();
                         pt["y"]    = coords[1].toDouble();
                         pt["name"] = props.value("name").toString();
+                        // 充电桩/高精度点: 保留所有 properties(epc_x/epc_y/epc_theta/yaw/yawFix/theta 等)
+                        if (id.startsWith("c_") || id.startsWith("hp_")) {
+                            for (auto it = props.begin(); it != props.end(); ++it) {
+                                const QString &k = it.key();
+                                if (k == "id" || k == "name") continue;
+                                pt[k] = it.value();
+                            }
+                        }
                         if (id.startsWith("c_"))
                             m_charges.append(pt);
                         else if (id.startsWith("hp_"))

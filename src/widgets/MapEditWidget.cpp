@@ -37,6 +37,9 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QMenu>
+#include <QAction>
+#include <QProgressDialog>
 #include <cmath>
 #include <QPainter>
 #include <QToolTip>
@@ -463,9 +466,10 @@ void MapEditWidget::setupUI()
         {Point,         "point",        "节点",   "点击放置普通路网节点"},
         {Line,          "line",         "线段",   "点击起点 → 再点终点"},
         {Curve,         "curve",        "曲线",   "点击两点自动生成曲线\n拖动橙色控制手柄微调"},
-        {Charge,        "charge",       "充电桩", "点击放置充电节点"},
-        {HighPrecision, "highprecision","高精度", "点击放置高精度节点"},
+        {-1,            "",             "",        ""},
         {-2,            "devicepoint",  "设备打点","添加设备当前位置为普通节点"},
+        {-3,            "charge",       "充电桩打点","通过设备相对定位添加充电桩点\n(等待设备返回 epc 坐标)"},
+        {-4,            "highprecision","高精度打点","通过设备相对定位添加高精度点\n(等待设备返回 epc 坐标)"},
     };
 
     m_toolBtns.clear();
@@ -480,7 +484,7 @@ void MapEditWidget::setupUI()
         auto *b = new QPushButton;
         b->setIcon(makeToolIcon(t.icon));
         b->setIconSize(QSize(22, 22));
-        b->setCheckable(t.mode != -2);   // 设备打点是动作按钮，不需要 checkable
+        b->setCheckable(t.mode >= 0);   // 动作按钮(mode<0)不需要 checkable
         b->setFixedSize(40, 40);
         b->setStyleSheet(S_TOOLBTN);
         b->setToolTip(ttHtml(t.tip, t.detail));
@@ -497,12 +501,18 @@ void MapEditWidget::setupUI()
                 addPoint(sp);
                 Toast::success(this, QString("已在设备位置(%1, %2)添加节点").arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2));
             });
+        } else if (t.mode == -3) {
+            // 充电桩打点: 通过设备相对定位获取
+            connect(b, &QPushButton::clicked, this, [this]() { addDevicePoint("charge"); });
+        } else if (t.mode == -4) {
+            // 高精度打点: 通过设备相对定位获取
+            connect(b, &QPushButton::clicked, this, [this]() { addDevicePoint("highPrecision"); });
         } else {
             int mode = t.mode;
             connect(b, &QPushButton::clicked, this, [this, mode]() { setDrawMode(mode); });
         }
         tbLayout->addWidget(b, 0, Qt::AlignHCenter);
-        if (t.mode != -2) m_toolBtns[t.mode] = b;
+        if (t.mode >= 0) m_toolBtns[t.mode] = b;
     }
 
     tbLayout->addStretch();
@@ -703,6 +713,34 @@ void MapEditWidget::setupUI()
         m_propYSpin->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:1px 3px; font-size:12px;");
         yl->addWidget(yLbl); yl->addWidget(m_propYSpin, 1);
         cl->addWidget(yRow);
+        // Yaw 行 (充电桩/高精度点专属，只读显示 epc_theta)
+        m_propYawRow = new QWidget; m_propYawRow->setStyleSheet("background:transparent;");
+        auto *wl = new QHBoxLayout(m_propYawRow); wl->setContentsMargins(0,0,0,0); wl->setSpacing(4);
+        auto *wLbl = new QLabel("Yaw:");
+        wLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
+        wLbl->setFixedWidth(30);
+        m_propYawLabel = new QLabel("--");
+        m_propYawLabel->setStyleSheet("background:#141e2a; color:#7ab0d8; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:2px 6px; font-size:12px;");
+        wl->addWidget(wLbl); wl->addWidget(m_propYawLabel, 1);
+        cl->addWidget(m_propYawRow);
+        m_propYawRow->setVisible(false);
+        // Epc X/Y 行(充电桩/高精度点专属，只读显示 epc_x/epc_y)
+        m_propEpcRow = new QWidget; m_propEpcRow->setStyleSheet("background:transparent;");
+        auto *el = new QHBoxLayout(m_propEpcRow); el->setContentsMargins(0,0,0,0); el->setSpacing(4);
+        auto *exLbl = new QLabel("epc X:");
+        exLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
+        exLbl->setFixedWidth(40);
+        m_propEpcXLabel = new QLabel("--");
+        m_propEpcXLabel->setStyleSheet("background:#141e2a; color:#7ab0d8; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:2px 6px; font-size:12px;");
+        auto *eyLbl = new QLabel("epc Y:");
+        eyLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
+        eyLbl->setFixedWidth(40);
+        m_propEpcYLabel = new QLabel("--");
+        m_propEpcYLabel->setStyleSheet("background:#141e2a; color:#7ab0d8; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:2px 6px; font-size:12px;");
+        el->addWidget(exLbl); el->addWidget(m_propEpcXLabel, 1);
+        el->addWidget(eyLbl); el->addWidget(m_propEpcYLabel, 1);
+        cl->addWidget(m_propEpcRow);
+        m_propEpcRow->setVisible(false);
         pl->addWidget(m_propCoordRow);
 
         // 按钮行
@@ -1542,30 +1580,144 @@ void MapEditWidget::addPoint(const QPointF &sp)
     if (m_tableVisible && m_currentTable == "point") refreshTable();
 }
 
-void MapEditWidget::addCharge(const QPointF &sp)
+void MapEditWidget::addCharge(const QPointF &sp, double epcX, double epcY, double epcTheta, double yaw, double theta)
 {
     QPointF w = sceneToWorld(sp.x(), sp.y());
     int n = nextIdNum(m_charges, "c_");
     QJsonObject ch;
     ch["id"] = QString("c_%1").arg(n); ch["name"] = QString("充电%1").arg(n);
     ch["x"] = w.x(); ch["y"] = w.y();
+    // 充电桩的设备相对定位末端坐标(end-effector position coordinates)
+    ch["epc_x"] = epcX;
+    ch["epc_y"] = epcY;
+    ch["epc_theta"] = epcTheta;
+    ch["epcX"] = epcX;
+    ch["epcY"] = epcY;
+    ch["epcTheta"] = epcTheta;
+    ch["yaw"] = yaw;            // Vue charge.js: yaw 存设备打点时的绝对姿态角 carYaw (弧度制)
+    ch["theta"] = theta;        // Vue charge.js: theta 存设备打点时的角度制朝向角 (如 180°/0°)
+    ch["roll"] = 0.0;
+    ch["pitch"] = 0.0;
+    ch["offset"] = 0.0;
+    ch["isyawfix"] = false;
+    // Vue charge.js addChargeExtraProps: robotYaw 始终为 0
+    ch["robotYaw"] = 0.0;
     m_charges.append(ch);
     m_dirty = true;
     renderMap();
     if (m_tableVisible && m_currentTable == "charge") refreshTable();
 }
 
-void MapEditWidget::addHighPrecisionPoint(const QPointF &sp)
+void MapEditWidget::addHighPrecisionPoint(const QPointF &sp, double epcX, double epcY, double epcTheta, double yaw, double theta)
 {
     QPointF w = sceneToWorld(sp.x(), sp.y());
     int n = nextIdNum(m_highPrecisionPoints, "hp_");
     QJsonObject hp;
     hp["id"] = QString("hp_%1").arg(n); hp["name"] = QString("高精%1").arg(n);
     hp["x"] = w.x(); hp["y"] = w.y();
+    // 高精度点的设备相对定位末端坐标(end-effector position coordinates)
+    hp["epc_x"] = epcX;
+    hp["epc_y"] = epcY;
+    hp["epc_theta"] = epcTheta;
+    hp["epcX"] = epcX;
+    hp["epcY"] = epcY;
+    hp["epcTheta"] = epcTheta;
+    hp["yaw"] = yaw;            // Vue highPrecision.js: yaw 存设备打点时的绝对姿态角 carYaw (弧度制)
+    hp["theta"] = theta;        // Vue highPrecision.js: theta 存设备打点时的角度制朝向角 (如 180°/0°)
+    hp["roll"] = 0.0;
+    hp["pitch"] = 0.0;
+    hp["offset"] = 0.0;
+    hp["isyawfix"] = false;
+    // Vue highPrecision.js addHighPrecisionExtraProps: robotYaw 始终为 0
+    hp["robotYaw"] = 0.0;
     m_highPrecisionPoints.append(hp);
     m_dirty = true;
     renderMap();
     if (m_tableVisible && m_currentTable == "highPrecision") refreshTable();
+}
+
+// 设备打点: 通过设备相对定位(epc)添加充电桩/高精度点
+// 参考 Vue edit.vue submitPointForm():
+//   1. MQTT 发布 /rob/{id}/pointType 让设备记录当前相对位置
+//   2. 等待 1500ms 让设备更新 epc_x/epc_y/epc_theta 到 /rob/{id}/info
+//   3. 用设备当前位置(carX, carY) + epc 坐标添加点
+void MapEditWidget::addDevicePoint(const QString &type)
+{
+    if (m_devicePointPending) {
+        Toast::info(this, "上一次设备打点尚未完成，请稍候");
+        return;
+    }
+    if (!m_hasCarPose) {
+        Toast::info(this, "未收到设备位置信息，无法打点");
+        return;
+    }
+    if (m_currentCarId.isEmpty()) {
+        Toast::info(this, "未选择设备，无法打点");
+        return;
+    }
+
+    m_devicePointPending = true;
+    QString carId = m_currentCarId;
+
+    // 1. 发布 /rob/{id}/pointType 命令让设备记录当前相对位置
+    QJsonObject data;
+    data["point_type"] = (type == "charge") ? "charge" : "highPrecision";
+    data["sender"] = "Web";
+    MqttService::instance().publish(
+        QString("/rob/%1/pointType").arg(carId),
+        QJsonDocument(data).toJson(QJsonDocument::Compact));
+
+    // 2. 阻塞式进度条：等待 3s 让设备更新 epc 坐标
+    //    QProgressDialog 模态阻塞 UI，QTimer 每 100ms 推进进度
+    const int kWaitMs = 3000;
+    const int kStepMs = 100;
+    auto *prog = new QProgressDialog(
+        QString("正在获取设备相对定位 (epc)...\n剩余 %1 秒").arg(kWaitMs / 1000),
+        QString(), 0, kWaitMs / kStepMs, this);
+    prog->setWindowTitle("设备打点");
+    prog->setWindowModality(Qt::WindowModal);
+    prog->setMinimumDuration(0);   // 立即显示
+    prog->setAutoClose(false);
+    prog->setAutoReset(false);
+    prog->setValue(0);
+    prog->setCancelButton(nullptr);  // 不允许取消
+
+    auto *tick = new QTimer(prog);
+    tick->setInterval(kStepMs);
+    int elapsed = 0;
+    QObject::connect(tick, &QTimer::timeout, this, [prog, tick, kStepMs, kWaitMs, &elapsed, type, this]() {
+        elapsed += kStepMs;
+        int remainSec = (kWaitMs - elapsed + 999) / 1000;
+        prog->setLabelText(QString("正在获取设备相对定位 (epc)...\n剩余 %1 秒").arg(remainSec));
+        prog->setValue(elapsed / kStepMs);
+
+        if (elapsed >= kWaitMs) {
+            tick->stop();
+            prog->accept();
+
+            m_devicePointPending = false;
+            if (!m_hasCarPose) {
+                Toast::error(this, "设备位置信息丢失，打点失败");
+                return;
+            }
+
+            QPointF sp = worldToScene(m_carX, m_carY);
+            if (type == "charge") {
+                addCharge(sp, m_epcX, m_epcY, m_epcTheta, m_carYaw, m_carTheta);
+                Toast::success(this, QString("已在设备位置(%1, %2)添加充电桩点\nepc(%3, %4)")
+                    .arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2)
+                    .arg(m_epcX, 0, 'f', 2).arg(m_epcY, 0, 'f', 2));
+            } else if (type == "highPrecision") {
+                addHighPrecisionPoint(sp, m_epcX, m_epcY, m_epcTheta, m_carYaw, m_carTheta);
+                Toast::success(this, QString("已在设备位置(%1, %2)添加高精度点\nepc(%3, %4)")
+                    .arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2)
+                    .arg(m_epcX, 0, 'f', 2).arg(m_epcY, 0, 'f', 2));
+            }
+        }
+    });
+    tick->start();
+    prog->exec();
+    prog->deleteLater();
 }
 
 void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
@@ -1781,15 +1933,22 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
         return QJsonObject{};
     };
     QJsonObject obj;
-    if      (type == "point")         obj = find(m_points);
-    else if (type == "line")          obj = find(m_lines);
-    else if (type == "curve")         obj = find(m_curves);
-    else if (type == "charge")        obj = find(m_charges);
-    else if (type == "highPrecision") obj = find(m_highPrecisionPoints);
+    QString realType = type;   // 实际点类型(点击 epc 点时映射回父类型)
+    QString realId   = id;
+    // 点击 epc 点 → 选中对应的父点(charge/highPrecision)
+    if (type == "chargeEpc" || type == "highPrecisionEpc") {
+        // epc 点的 id 与父点相同，只是 type 不同
+        realType = (type == "chargeEpc") ? "charge" : "highPrecision";
+    }
+    if      (realType == "point")         obj = find(m_points);
+    else if (realType == "line")          obj = find(m_lines);
+    else if (realType == "curve")         obj = find(m_curves);
+    else if (realType == "charge")        obj = find(m_charges);
+    else if (realType == "highPrecision") obj = find(m_highPrecisionPoints);
     if (obj.isEmpty()) return;
 
-    m_selType = type; m_selId = id;
-    QGraphicsItem *newSel = m_featureItems.value(type + "_" + id);
+    m_selType = realType; m_selId = realId;
+    QGraphicsItem *newSel = m_featureItems.value(realType + "_" + realId);
     if (m_selItem && m_selItem != newSel) clearSelectColor(m_selItem);
     m_selItem = newSel;
     applySelectColor(m_selItem);
@@ -1798,33 +1957,64 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
         {"point","普通节点"},{"line","线段"},{"curve","贝塞尔曲线"},
         {"charge","充电桩"},{"highPrecision","高精度节点"}
     };
-    m_propTypeLabel->setText("类型: " + names.value(type, type));
-    m_propIdEdit->setText(id);
+    m_propTypeLabel->setText("类型: " + names.value(realType, realType));
+    m_propIdEdit->setText(realId);
     m_propNameEdit->setText(obj.value("name").toString());
-    bool hasDir = (type == "line" || type == "curve");
+    bool hasDir = (realType == "line" || realType == "curve");
     m_propDirectRow->setVisible(hasDir);
     if (hasDir) m_propDirectCombo->setCurrentIndex(obj.value("direct").toInt(100) == 10 ? 1 : 0);
 
     // 点类型切换: 仅当选中的是点(普通/高精度/充电桩)时显示
-    bool isPointKind = (type == "point" || type == "highPrecision" || type == "charge");
+    bool isPointKind = (realType == "point" || realType == "highPrecision" || realType == "charge");
     m_propKindRow->setVisible(isPointKind);
     m_propCoordRow->setVisible(isPointKind);
     if (isPointKind) {
-        int idx = m_propKindCombo->findData(type);
+        int idx = m_propKindCombo->findData(realType);
         if (idx >= 0) m_propKindCombo->setCurrentIndex(idx);
         m_propXSpin->setValue(obj.value("x").toDouble());
         m_propYSpin->setValue(obj.value("y").toDouble());
+
+        // 充电桩/高精度点: X/Y 只读 + 显示 yaw (epc_theta) + 显示 epc_x/epc_y
+        bool isDevicePoint = (realType == "charge" || realType == "highPrecision");
+        m_propXSpin->setReadOnly(isDevicePoint);
+        m_propYSpin->setReadOnly(isDevicePoint);
+        // 只读时用灰色背景区分，可编辑时恢复正常
+        QString roStyle = "background:#141e2a; color:#6a8898; border:1px solid rgba(255,255,255,0.06); border-radius:3px; padding:1px 3px; font-size:12px;";
+        QString rwStyle = "background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:1px 3px; font-size:12px;";
+        m_propXSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
+        m_propYSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
+
+        if (isDevicePoint) {
+            // 兼容 Vue 保存的 camelCase 和 Qt 保存的 snake_case 两种格式
+            double theta = obj.contains("epc_theta") ? obj.value("epc_theta").toDouble()
+                                                      : obj.value("epcTheta").toDouble();
+            m_propYawLabel->setText(QString::number(theta, 'f', 4) + " rad");
+            m_propYawRow->setVisible(true);
+            double epcX = obj.contains("epc_x") ? obj.value("epc_x").toDouble()
+                                                 : obj.value("epcX").toDouble();
+            double epcY = obj.contains("epc_y") ? obj.value("epc_y").toDouble()
+                                                 : obj.value("epcY").toDouble();
+            m_propEpcXLabel->setText(QString::number(epcX, 'f', 4));
+            m_propEpcYLabel->setText(QString::number(epcY, 'f', 4));
+            m_propEpcRow->setVisible(true);
+        } else {
+            m_propYawRow->setVisible(false);
+            m_propEpcRow->setVisible(false);
+        }
+    } else {
+        m_propYawRow->setVisible(false);
+        m_propEpcRow->setVisible(false);
     }
 
     m_propsPanel->setVisible(true);
 
     if (m_tableVisible) {
-        int idx = m_tableTypeCombo->findData(type);
+        int idx = m_tableTypeCombo->findData(realType);
         if (idx >= 0 && m_tableTypeCombo->currentIndex() != idx)
             m_tableTypeCombo->setCurrentIndex(idx);
         for (int r = 0; r < m_featureTable->rowCount(); ++r) {
             auto *it = m_featureTable->item(r, 0);
-            if (it && it->text() == id) { m_featureTable->selectRow(r); break; }
+            if (it && it->text() == realId) { m_featureTable->selectRow(r); break; }
         }
     }
 }
@@ -2279,14 +2469,6 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             if (hasOverlap(sp)) { selectFeatureAt(sp); }  // too close → select
             else { addPoint(sp); }
             break;
-        case Charge:
-            if (hasOverlap(sp)) { selectFeatureAt(sp); }
-            else { addCharge(sp); }
-            break;
-        case HighPrecision:
-            if (hasOverlap(sp)) { selectFeatureAt(sp); }
-            else { addHighPrecisionPoint(sp); }
-            break;
         case Line:
             if (!m_drawHasP1) {
                 // 起点: 优先吸附到已有点，附近无点则直接使用点击位置(不创建新点)
@@ -2500,10 +2682,18 @@ void MapEditWidget::initMqtt()
             }
             if (mapIdMismatch) { logCount++; return; }
 
-            m_carX   = d.value("carX").toDouble(d.value("car_x").toDouble());
-            m_carY   = d.value("carY").toDouble(d.value("car_y").toDouble());
-            m_carYaw = d.value("carYaw").toDouble(d.value("car_yaw").toDouble());
+            m_carX     = d.value("carX").toDouble(d.value("car_x").toDouble());
+            m_carY     = d.value("carY").toDouble(d.value("car_y").toDouble());
+            m_carYaw   = d.value("carYaw").toDouble(d.value("car_yaw").toDouble());
+            m_carTheta = d.value("theta").toDouble(d.value("car_theta").toDouble(qRadiansToDegrees(m_carYaw)));
             m_hasCarPose = true;
+            // 设备相对定位末端坐标(epc): 用于充电桩/高精度点打点
+            if (d.contains("epc_x") || d.contains("epc_y")) {
+                m_epcX     = d.value("epc_x").toDouble(0);
+                m_epcY     = d.value("epc_y").toDouble(0);
+                m_epcTheta = d.value("epc_theta").toDouble(d.value("epc_Theta").toDouble(0));
+                m_hasEpcPose = true;
+            }
             if (logCount < 5) {
                 QPointF sp = worldToScene(m_carX, m_carY);
                 debugLog(QString("[/info msg #%1] carX=%2 carY=%3 carYaw=%4 -> scene=(%5,%6)  world=[L%7 B%8 R%9 T%10] img=%11x%12")
@@ -2521,6 +2711,8 @@ void MapEditWidget::disconnectMqtt()
         MqttService::instance().unsubscribeTopic(
             QString("/rob/%1/info").arg(m_currentCarId));
     m_hasCarPose = false;
+    m_hasEpcPose = false;
+    m_devicePointPending = false;
     updateRobotMarker();
 }
 

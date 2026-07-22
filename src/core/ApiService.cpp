@@ -285,8 +285,10 @@ void ApiService::listCarAll(const QJsonObject &query, const Callback &cb)
     QString url = "/robot/car/listAll";
     if (!query.isEmpty()) {
         QUrlQuery q;
-        for (auto it = query.begin(); it != query.end(); ++it)
-            q.addQueryItem(it.key(), it.value().toString());
+        for (auto it = query.begin(); it != query.end(); ++it) {
+            QString valStr = it.value().isString() ? it.value().toString() : it.value().toVariant().toString();
+            q.addQueryItem(it.key(), valStr);
+        }
         url += "?" + q.toString();
     }
     get(url, cb);
@@ -297,8 +299,10 @@ void ApiService::listCar(const QJsonObject &query, const Callback &cb)
     QString url = "/robot/car/list";
     if (!query.isEmpty()) {
         QUrlQuery q;
-        for (auto it = query.begin(); it != query.end(); ++it)
-            q.addQueryItem(it.key(), it.value().toString());
+        for (auto it = query.begin(); it != query.end(); ++it) {
+            QString valStr = it.value().isString() ? it.value().toString() : it.value().toVariant().toString();
+            q.addQueryItem(it.key(), valStr);
+        }
         url += "?" + q.toString();
     }
     get(url, cb);
@@ -357,8 +361,10 @@ void ApiService::listMapAll(const QJsonObject &query, const Callback &cb)
     QString url = "/robot/map/listAll";
     if (!query.isEmpty()) {
         QUrlQuery q;
-        for (auto it = query.begin(); it != query.end(); ++it)
-            q.addQueryItem(it.key(), it.value().toString());
+        for (auto it = query.begin(); it != query.end(); ++it) {
+            QString valStr = it.value().isString() ? it.value().toString() : it.value().toVariant().toString();
+            q.addQueryItem(it.key(), valStr);
+        }
         url += "?" + q.toString();
     }
     get(url, cb);
@@ -369,8 +375,10 @@ void ApiService::listMap(const QJsonObject &query, const Callback &cb)
     QString url = "/robot/map/list";
     if (!query.isEmpty()) {
         QUrlQuery q;
-        for (auto it = query.begin(); it != query.end(); ++it)
-            q.addQueryItem(it.key(), it.value().toString());
+        for (auto it = query.begin(); it != query.end(); ++it) {
+            QString valStr = it.value().isString() ? it.value().toString() : it.value().toVariant().toString();
+            q.addQueryItem(it.key(), valStr);
+        }
         url += "?" + q.toString();
     }
     get(url, cb);
@@ -397,8 +405,10 @@ void ApiService::downloadPcd(const QJsonObject &query, const Callback &cb)
     QString url = "/common/download/resourcePCDpath";
     if (!query.isEmpty()) {
         QUrlQuery q;
-        for (auto it = query.begin(); it != query.end(); ++it)
-            q.addQueryItem(it.key(), it.value().toString());
+        for (auto it = query.begin(); it != query.end(); ++it) {
+            QString valStr = it.value().isString() ? it.value().toString() : it.value().toVariant().toString();
+            q.addQueryItem(it.key(), valStr);
+        }
         url += "?" + q.toString();
     }
     get(url, cb);
@@ -445,8 +455,10 @@ void ApiService::listTask(const QJsonObject &query, const Callback &cb)
     QString url = "/robot/task/list";
     if (!query.isEmpty()) {
         QUrlQuery q;
-        for (auto it = query.begin(); it != query.end(); ++it)
-            q.addQueryItem(it.key(), it.value().toString());
+        for (auto it = query.begin(); it != query.end(); ++it) {
+            QString valStr = it.value().isString() ? it.value().toString() : it.value().toVariant().toString();
+            q.addQueryItem(it.key(), valStr);
+        }
         url += "?" + q.toString();
     }
     get(url, cb);
@@ -487,8 +499,10 @@ void ApiService::getCurrentTask(const QJsonObject &query, const Callback &cb)
     QString url = "/robot/navigation/currentTask";
     if (!query.isEmpty()) {
         QUrlQuery q;
-        for (auto it = query.begin(); it != query.end(); ++it)
-            q.addQueryItem(it.key(), it.value().toString());
+        for (auto it = query.begin(); it != query.end(); ++it) {
+            QString valStr = it.value().isString() ? it.value().toString() : it.value().toVariant().toString();
+            q.addQueryItem(it.key(), valStr);
+        }
         url += "?" + q.toString();
     }
     get(url, cb);
@@ -520,8 +534,10 @@ void ApiService::listTasklog(const QJsonObject &query, const Callback &cb)
     QString url = "/robot/tasklog/list";
     if (!query.isEmpty()) {
         QUrlQuery q;
-        for (auto it = query.begin(); it != query.end(); ++it)
-            q.addQueryItem(it.key(), it.value().toString());
+        for (auto it = query.begin(); it != query.end(); ++it) {
+            QString valStr = it.value().isString() ? it.value().toString() : it.value().toVariant().toString();
+            q.addQueryItem(it.key(), valStr);
+        }
         url += "?" + q.toString();
     }
     get(url, cb);
