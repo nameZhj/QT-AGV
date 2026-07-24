@@ -370,9 +370,20 @@ MainWindow::MainWindow(QWidget *parent)
     setupGlobalStyle();
     setupHeaderBar();
     setupContentArea();
+    connectServices();
     initPages();
     setupStatusBar();
-    connectServices();
+}
+
+void MainWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    // 主窗口显示后，强制刷新首屏（地图管理 - 地图预览）的数据与设备信息
+    QTimer::singleShot(50, this, [this]() {
+        if (m_mapPage) {
+            m_mapPage->refreshData();
+        }
+    });
 }
 
 void MainWindow::setupGlobalStyle()
@@ -483,7 +494,16 @@ void MainWindow::initPages()
             this, &MainWindow::onNavigateRequested);
     connect(m_createMapPage, &CreateMapWidget::goBack, this, [this]() {
         m_stack->setCurrentWidget(m_mapPage);
+        m_mapPage->refreshData();
         highlightTabForPageIndex(1);
+    });
+
+    connect(m_stack, &QStackedWidget::currentChanged, this, [this](int idx) {
+        if (m_stack->widget(idx) == m_mapPage) {
+            m_mapPage->refreshData();
+        } else if (m_stack->widget(idx) == m_taskPage) {
+            m_taskPage->refreshData();
+        }
     });
 
     m_stack->setCurrentIndex(1);
@@ -686,7 +706,7 @@ void MainWindow::onNavigateRequested(const QString &target, const QString &id)
             TaskEditWidget *w = new TaskEditWidget(id);
             connect(w, &TaskEditWidget::goBack, this, [this, key]() {
                 m_stack->setCurrentWidget(m_taskPage);
-                m_taskPage->refreshList();
+                m_taskPage->refreshData();
                 QWidget *p = m_dynamicPages.take(key);
                 if (p) { m_stack->removeWidget(p); p->deleteLater(); }
             });

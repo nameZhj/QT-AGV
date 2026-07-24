@@ -548,24 +548,21 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
 
 void MapViewWidget::refreshData()
 {
-    if (m_mapId.isEmpty())
-        loadCurrentCarMap();
-    else
-        loadMapById(m_mapId);
+    // 每次页面展示（菜单切换/从下级编辑页返回/首次打开）全量刷新设备数据与地图/路网
+    loadCurrentCarMap();
+    initMqtt();
 }
 
 void MapViewWidget::showEvent(QShowEvent *e)
 {
     QWidget::showEvent(e);
-    if (m_mapId.isEmpty())
-        loadCurrentCarMap();
-    initMqtt();
+    refreshData();
 }
 
 void MapViewWidget::hideEvent(QHideEvent *e)
 {
     QWidget::hideEvent(e);
-    disconnectMqtt();
+    // 保持 MQTT 全局持续监听，不再在隐藏时断开订阅
 }
 
 // ── Data loading ─────────────────────────────────────────────────────────────

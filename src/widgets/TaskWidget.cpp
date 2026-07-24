@@ -528,13 +528,25 @@ void TaskWidget::setupUI()
     mainLayout->addWidget(rightPanel, 3);
 }
 
-void TaskWidget::refreshList()
+void TaskWidget::refreshData()
 {
     getList();
-    // 重新初始化 MQTT 订阅，确保设备切换后能收到新设备的位置更新
+    loadTaskValidity();
+    loadCurrentTask();
+    if (!m_currentMapId.isEmpty()) {
+        loadRouteData(m_currentMapId);
+    }
+    if (!m_currentTaskId.isEmpty()) {
+        loadTaskTargets(m_currentTaskId);
+    }
+    onTaskSelectionChanged();
     initMqtt();
-    // 启动 1Hz 定时访问 API 接口 (getCurrentTask) 的轮询，持续拉取任务最新状态
     startTaskPolling();
+}
+
+void TaskWidget::refreshList()
+{
+    refreshData();
 }
 
 void TaskWidget::getList()
@@ -1086,15 +1098,11 @@ void TaskWidget::resizeEvent(QResizeEvent *e)
 void TaskWidget::showEvent(QShowEvent *e)
 {
     QWidget::showEvent(e);
-    // 该页面在 QStackedWidget 中处于隐藏状态时就已经异步加载了地图/任务数据，
-    // 此时视图尚未获得真实尺寸，fitInView 会按错误的视口大小计算，导致地图
-    // 没有居中铺满。每次页面真正显示出来时都重新 fit 一次，确保按正确尺寸缩放。
+    // 每次页面真正显示出来时都重新 fit 一次，确保按正确尺寸缩放。
     QTimer::singleShot(0, this, [this]{ fitView(); });
 
-    // 路网可能在"地图编辑"页被修改后才切回本页，本页是常驻的 QStackedWidget
-    // 页面、不会重新构造，因此每次显示时都要重新拉取一次路网数据，否则地图
-    // 预览里的路网会停留在第一次加载时的旧版本，不会动态更新。
-    if (!m_currentMapId.isEmpty()) loadRouteData(m_currentMapId);
+    // 统一全量刷新任务列表、设备任务状态、地图路网与选中的任务目标点预览
+    refreshData();
 }
 
 void TaskWidget::renderAxesAndGrid()

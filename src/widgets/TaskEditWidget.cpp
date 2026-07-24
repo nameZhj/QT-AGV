@@ -1544,8 +1544,10 @@ void TaskEditWidget::onSaveDraw()
             m_saveBtn->setEnabled(true);
             if (code == 200) {
                 Toast::success(this, "保存成功");
-                // 保存成功后重新加载任务数据，保证显示与服务器一致
-                loadTaskData();
+                // 保持最新编辑状态渲染，并返回任务列表
+                refreshTargetTable();
+                renderMap();
+                emit goBack();
             } else {
                 QMessageBox::warning(this, "错误", "保存失败");
             }

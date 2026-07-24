@@ -13,6 +13,10 @@
 #include "core/AppConfig.h"
 #include "core/ButtonClickEffect.h"
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 static QFile *g_logFile = nullptr;
 
 void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
@@ -41,6 +45,14 @@ void messageHandler(QtMsgType type, const QMessageLogContext &context, const QSt
 
 int main(int argc, char *argv[])
 {
+#if defined(Q_OS_WIN) && defined(QT_DEBUG)
+    // 仅在调试环境(Debug)下在运行 .exe 时分配/附着控制台窗口
+    if (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole()) {
+        freopen("CONOUT$", "w", stdout);
+        freopen("CONOUT$", "w", stderr);
+    }
+#endif
+
     QApplication app(argc, argv);
     app.setApplicationName("QT-AGV");
     app.setOrganizationName("AGV");

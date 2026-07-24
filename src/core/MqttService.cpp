@@ -1,4 +1,4 @@
-﻿#include "MqttService.h"
+#include "MqttService.h"
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QDebug>
@@ -101,22 +101,23 @@ void MqttService::unsubscribeTopic(const QString &topic)
 void MqttService::publish(const QString &topic, const QByteArray &payload, int qos)
 {
     if (!isConnected()) {
-        qWarning() << "MQTT not connected, cannot publish to" << topic;
+        qWarning().noquote() << "[MQTT PUB FAIL] Not connected, topic:" << topic;
         return;
     }
+    qDebug().noquote() << QString("[MQTT PUB] Topic: %1 | Payload: %2").arg(topic, QString::fromUtf8(payload).left(300));
     m_client->publish(topic, payload, qos);
 }
 
 void MqttService::onConnected()
 {
-    qDebug() << "MQTT connected";
+    qDebug().noquote() << "[MQTT Connected] Connected to broker";
     resubscribeAll();
     emit connected();
 }
 
 void MqttService::onDisconnected()
 {
-    qDebug() << "MQTT disconnected";
+    qDebug().noquote() << "[MQTT Disconnected] Disconnected from broker";
     emit disconnected();
 }
 
@@ -137,14 +138,15 @@ void MqttService::onErrorChanged(QMqttClient::ClientError error)
     case QMqttClient::Mqtt5SpecificError:     errorStr = "Mqtt5SpecificError"; break;
     default: errorStr = QString("Unknown(%1)").arg(static_cast<int>(error)); break;
     }
-    qWarning() << "MQTT error:" << errorStr << "| client state:" << m_client->state()
-               << "| hostname:" << m_client->hostname() << "| port:" << m_client->port();
+    qWarning().noquote() << QString("[MQTT ERROR] %1 | state: %2 | host: %3:%4")
+                            .arg(errorStr).arg(m_client->state()).arg(m_client->hostname()).arg(m_client->port());
     emit errorChanged(errorStr);
 }
 
 void MqttService::onMessageReceived(const QByteArray &message, const QMqttTopicName &topic)
 {
     QString topicStr = topic.name();
+    qDebug().noquote() << QString("[MQTT RECV] Topic: %1 | Payload: %2").arg(topicStr, QString::fromUtf8(message).left(300));
     if (!m_topics.contains(topicStr)) return;
 
     const auto &config = m_topics[topicStr];

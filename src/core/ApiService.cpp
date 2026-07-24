@@ -45,12 +45,14 @@ void ApiService::handleReply(QNetworkReply *reply, const Callback &cb)
 {
     connect(reply, &QNetworkReply::finished, this, [reply, cb]() {
         reply->deleteLater();
+        QString urlStr = reply->url().toString();
         if (reply->error() != QNetworkReply::NoError) {
-            qWarning() << "API error:" << reply->errorString();
+            qWarning().noquote() << QString("[HTTP ERROR] %1 -> %2").arg(urlStr, reply->errorString());
             cb(500, QJsonObject{{"msg", reply->errorString()}});
             return;
         }
         QByteArray data = reply->readAll();
+        qDebug().noquote() << QString("[HTTP IN] %1 -> %2").arg(urlStr, QString::fromUtf8(data).left(500));
         QJsonParseError err;
         QJsonDocument doc = QJsonDocument::fromJson(data, &err);
         if (err.error != QJsonParseError::NoError) {
@@ -67,11 +69,14 @@ void ApiService::handleRawReply(QNetworkReply *reply, const RawCallback &cb)
 {
     connect(reply, &QNetworkReply::finished, this, [reply, cb]() {
         reply->deleteLater();
+        QString urlStr = reply->url().toString();
         if (reply->error() != QNetworkReply::NoError) {
+            qWarning().noquote() << QString("[HTTP RAW ERROR] %1 -> %2").arg(urlStr, reply->errorString());
             cb(500, QByteArray());
             return;
         }
         QByteArray data = reply->readAll();
+        qDebug().noquote() << QString("[HTTP RAW IN] %1 -> (bytes: %2)").arg(urlStr).arg(data.size());
         cb(200, data);
     });
 }
@@ -80,11 +85,14 @@ void ApiService::handleFileReply(QNetworkReply *reply, const FileCallback &cb)
 {
     connect(reply, &QNetworkReply::finished, this, [reply, cb]() {
         reply->deleteLater();
+        QString urlStr = reply->url().toString();
         if (reply->error() != QNetworkReply::NoError) {
+            qWarning().noquote() << QString("[HTTP FILE ERROR] %1 -> %2").arg(urlStr, reply->errorString());
             cb(false, QByteArray());
             return;
         }
         QByteArray data = reply->readAll();
+        qDebug().noquote() << QString("[HTTP FILE IN] %1 -> (size: %2 bytes)").arg(urlStr).arg(data.size());
         cb(true, data);
     });
 }
@@ -98,28 +106,38 @@ void ApiService::get(const QString &url, const Callback &cb, int port, bool with
     } else {
         finalUrl += "?t=" + QString::number(QDateTime::currentMSecsSinceEpoch());
     }
-    QNetworkRequest req = buildRequest(buildUrl(finalUrl, port), withToken);
+    QString requestUrl = buildUrl(finalUrl, port);
+    qDebug().noquote() << QString("[HTTP GET] %1").arg(requestUrl);
+    QNetworkRequest req = buildRequest(requestUrl, withToken);
     QNetworkReply *reply = m_manager->get(req);
     handleReply(reply, cb);
 }
 
 void ApiService::post(const QString &url, const QJsonObject &data, const Callback &cb, int port, bool withToken)
 {
-    QNetworkRequest req = buildRequest(buildUrl(url, port), withToken);
-    QNetworkReply *reply = m_manager->post(req, QJsonDocument(data).toJson());
+    QString requestUrl = buildUrl(url, port);
+    QByteArray body = QJsonDocument(data).toJson(QJsonDocument::Compact);
+    qDebug().noquote() << QString("[HTTP POST] %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
+    QNetworkRequest req = buildRequest(requestUrl, withToken);
+    QNetworkReply *reply = m_manager->post(req, body);
     handleReply(reply, cb);
 }
 
 void ApiService::put(const QString &url, const QJsonObject &data, const Callback &cb, int port, bool withToken)
 {
-    QNetworkRequest req = buildRequest(buildUrl(url, port), withToken);
-    QNetworkReply *reply = m_manager->put(req, QJsonDocument(data).toJson());
+    QString requestUrl = buildUrl(url, port);
+    QByteArray body = QJsonDocument(data).toJson(QJsonDocument::Compact);
+    qDebug().noquote() << QString("[HTTP PUT] %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
+    QNetworkRequest req = buildRequest(requestUrl, withToken);
+    QNetworkReply *reply = m_manager->put(req, body);
     handleReply(reply, cb);
 }
 
 void ApiService::del(const QString &url, const Callback &cb, int port, bool withToken)
 {
-    QNetworkRequest req = buildRequest(buildUrl(url, port), withToken);
+    QString requestUrl = buildUrl(url, port);
+    qDebug().noquote() << QString("[HTTP DELETE] %1").arg(requestUrl);
+    QNetworkRequest req = buildRequest(requestUrl, withToken);
     QNetworkReply *reply = m_manager->deleteResource(req);
     handleReply(reply, cb);
 }

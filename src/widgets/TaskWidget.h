@@ -31,6 +31,7 @@ class TaskWidget : public QWidget
 public:
     explicit TaskWidget(QWidget *parent = nullptr);
     void refreshList();
+    void refreshData();
 
 signals:
     void navigateRequested(const QString &target, const QString &id);

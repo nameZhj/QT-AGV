@@ -48,6 +48,7 @@ private:
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
     void switchToPage(const QString &pageKey);
     void highlightTabForPageIndex(int pageIndex);
