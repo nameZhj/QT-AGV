@@ -15,9 +15,47 @@
 #include <QSplitter>
 #include <QVBoxLayout>
 
+#include <QStyledItemDelegate>
+#include <QTimer>
+
 // ── Toolbar icon helpers：图标在上、文字在下 (Qt::ToolButtonTextUnderIcon)，
 // 与 MapViewWidget/TaskWidget 工具栏按钮风格保持一致 ─────────────────────────
 namespace {
+
+class ParamItemDelegate : public QStyledItemDelegate
+{
+public:
+    explicit ParamItemDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
+
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QWidget *editor = QStyledItemDelegate::createEditor(parent, option, index);
+        if (QLineEdit *lineEdit = qobject_cast<QLineEdit*>(editor)) {
+            lineEdit->setStyleSheet("QLineEdit { background: #1a2330; border: 1.5px solid #4a9eff; border-radius: 4px; color: #ffffff; padding: 4px 8px; font-size: 13px; selection-background-color: #1e4080; }");
+            // 进入编辑模式时自动全选原有文本，方便直接键盘录入新值
+            QTimer::singleShot(0, lineEdit, &QLineEdit::selectAll);
+        }
+        return editor;
+    }
+
+    void setEditorData(QWidget *editor, const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::setEditorData(editor, index);
+        if (QLineEdit *lineEdit = qobject_cast<QLineEdit*>(editor)) {
+            lineEdit->selectAll();
+        }
+    }
+
+    void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const override
+    {
+        if (QLineEdit *lineEdit = qobject_cast<QLineEdit*>(editor)) {
+            QString text = lineEdit->text().trimmed();
+            model->setData(index, text, Qt::EditRole);
+        } else {
+            QStyledItemDelegate::setModelData(editor, model, index);
+        }
+    }
+};
 
 QPixmap drawCfgToolIcon(const QString &name, const QColor &col, int sz = 20) {
   QPixmap pm(sz, sz);
@@ -160,6 +198,8 @@ void EditConfigWidget::setupUI() {
   m_paramTable->horizontalHeader()->setStretchLastSection(true);
   m_paramTable->setColumnWidth(0, 220);
   m_paramTable->setColumnWidth(1, 300);
+  m_paramTable->setItemDelegateForColumn(1, new ParamItemDelegate(m_paramTable));
+  m_paramTable->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::SelectedClicked | QAbstractItemView::EditKeyPressed);
   // 默认行高偏矮，叠加 stylesheet 的 item padding 后，Qt 不会重新计算行高，
   // 导致编辑值时内嵌的输入框被裁切、显示不全。这里显式加大行高留出余量。
   m_paramTable->verticalHeader()->setDefaultSectionSize(40);
@@ -548,6 +588,19 @@ QString EditConfigWidget::basename(const QString &path) const {
 }
 
 void EditConfigWidget::onSave() {
+  // 强行使焦点离开输入框和表格，清除当前选中索引，促使 Qt 自动提交正在编辑的输入框数据
+  if (QWidget *fw = focusWidget()) {
+      fw->clearFocus();
+  }
+  m_paramTable->clearFocus();
+  m_paramTable->setCurrentIndex(QModelIndex());
+
+  // 兜底强行更新当前行
+  int curRow = m_paramTable->currentRow();
+  if (curRow >= 0 && curRow < m_paramTable->rowCount()) {
+      onParamCellChanged(curRow, 1);
+  }
+
   QJsonObject payload;
   for (const auto &item : m_configs) {
     QJsonObject entry = item.toObject();
