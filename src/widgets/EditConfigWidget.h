@@ -37,6 +37,7 @@ private:
                       const QString &prefix, const QString &filter);
     QString determineProfile(const QJsonObject &entry) const;
     QString getProfileName(const QString &key) const;
+    QString getChildDisplayName(const QJsonObject &entry) const;
     QString basename(const QString &path) const;
     static QPair<QString,QString> fieldMetaFor(const QString &key);
 
