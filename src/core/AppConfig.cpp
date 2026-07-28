@@ -29,6 +29,7 @@ QList<DeviceProfile> AppConfig::deviceList() const
         p.carId         = m_settings.value("carId").toString();
         p.token         = m_settings.value("token").toString();
         p.lastConnected = m_settings.value("lastConnected").toDateTime();
+        p.linkStatus    = m_settings.value("linkStatus").toString();
         list.append(p);
     }
     m_settings.endArray();
@@ -46,6 +47,7 @@ void AppConfig::saveDeviceList(const QList<DeviceProfile> &list)
         m_settings.setValue("carId",         p.carId);
         m_settings.setValue("token",         p.token);
         m_settings.setValue("lastConnected", p.lastConnected);
+        m_settings.setValue("linkStatus",    p.linkStatus);
     }
     m_settings.endArray();
     m_settings.sync();

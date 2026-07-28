@@ -21,6 +21,31 @@
 #include <QPainter>
 #include <QFrame>
 
+// 检查 API 返回是否报错: msg 值为 "failed" (字符串) 或 false (布尔) 时表示失败
+// 返回 error_info 字段中的错误信息, 如果没有则返回空字符串
+// 参考 Vue: 后端返回 {code: 200, msg: "failed"/false, error_info: "..."}
+static QString checkApiError(const QJsonObject &res)
+{
+    QJsonValue msgVal = res.value("msg");
+    bool isFailed = false;
+    if (msgVal.isString())
+        isFailed = (msgVal.toString().compare("failed", Qt::CaseInsensitive) == 0);
+    else if (msgVal.isBool())
+        isFailed = !msgVal.toBool();   // false 表示失败
+
+    if (!isFailed) return QString();
+
+    // 从 error_info 获取错误信息
+    QJsonValue errVal = res.value("error_info");
+    if (errVal.isString()) return errVal.toString();
+    if (errVal.isBool())   return errVal.toBool() ? "true" : "false";
+    // error_info 可能在 data 对象内
+    QJsonObject data = res.value("data").toObject();
+    QJsonValue dataErr = data.value("error_info");
+    if (dataErr.isString()) return dataErr.toString();
+    return QStringLiteral("操作失败");
+}
+
 // ── Style constants (secondary-page header, matches MapEditWidget/TaskEditWidget) ──
 static const char *S_TOPBAR =
     "background:#1e2d3d; border-bottom:1px solid rgba(255,255,255,0.06);";
@@ -388,10 +413,15 @@ void CreateMapWidget::onStartAdaptiveClick()
     }
     auto *loading = new LoadingDialog("正在启动建图，请稍候...", window(), Qt::ApplicationModal);
     loading->show();
-    ApiService::instance().startMapping(name.trimmed(), [this, loading](int code, const QJsonObject &) {
+    ApiService::instance().startMapping(name.trimmed(), [this, loading](int code, const QJsonObject &res) {
         loading->close();
         loading->deleteLater();
         if (code == 200) {
+            QString err = checkApiError(res);
+            if (!err.isEmpty()) {
+                QMessageBox::warning(this, "错误", err);
+                return;
+            }
             m_mappingActive = true;
             updateToolbar();
             Toast::success(this, "建图已启动");
@@ -416,10 +446,15 @@ void CreateMapWidget::onStopAdaptiveClick()
     if (clicked == saveBtn) {
         auto *loading = new LoadingDialog("正在保存地图，请稍候...", window(), Qt::ApplicationModal);
         loading->show();
-        ApiService::instance().saveMap([this, loading](int code, const QJsonObject &) {
+        ApiService::instance().saveMap([this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {
+                QString err = checkApiError(res);
+                if (!err.isEmpty()) {
+                    QMessageBox::warning(this, "错误", err);
+                    return;
+                }
                 m_mappingActive = false;
                 m_highMappingActive = false;
                 m_mapCanvas->setHighMappingActive(false);
@@ -432,10 +467,15 @@ void CreateMapWidget::onStopAdaptiveClick()
     } else {
         auto *loading = new LoadingDialog("正在取消建图，请稍候...", window(), Qt::ApplicationModal);
         loading->show();
-        ApiService::instance().cancelMapping([this, loading](int code, const QJsonObject &) {
+        ApiService::instance().cancelMapping([this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {
+                QString err = checkApiError(res);
+                if (!err.isEmpty()) {
+                    QMessageBox::warning(this, "错误", err);
+                    return;
+                }
                 m_mappingActive = false;
                 m_highMappingActive = false;
                 m_mapCanvas->setHighMappingActive(false);
@@ -460,10 +500,15 @@ void CreateMapWidget::onStartHighClick()
 
     auto *loading = new LoadingDialog("正在启动高阶建图，请稍候...", window(), Qt::ApplicationModal);
     loading->show();
-    ApiService::instance().startReflectorMapping([this, loading](int code, const QJsonObject &) {
+    ApiService::instance().startReflectorMapping([this, loading](int code, const QJsonObject &res) {
         loading->close();
         loading->deleteLater();
         if (code == 200) {
+            QString err = checkApiError(res);
+            if (!err.isEmpty()) {
+                QMessageBox::warning(this, "错误", err);
+                return;
+            }
             m_highMappingActive = true;
             m_mapCanvas->setHighMappingActive(true);
             updateToolbar();
@@ -489,10 +534,15 @@ void CreateMapWidget::onStopHighClick()
     if (clicked == saveBtn) {
         auto *loading = new LoadingDialog("正在停止高阶建图，请稍候...", window(), Qt::ApplicationModal);
         loading->show();
-        ApiService::instance().stopReflectorMapping([this, loading](int code, const QJsonObject &) {
+        ApiService::instance().stopReflectorMapping([this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {
+                QString err = checkApiError(res);
+                if (!err.isEmpty()) {
+                    QMessageBox::warning(this, "错误", err);
+                    return;
+                }
                 m_highMappingActive = false;
                 m_mappingActive = false;
                 updateToolbar();
@@ -504,10 +554,15 @@ void CreateMapWidget::onStopHighClick()
     } else {
         auto *loading = new LoadingDialog("正在取消高阶建图，请稍候...", window(), Qt::ApplicationModal);
         loading->show();
-        ApiService::instance().cancelReflectorMapping([this, loading](int code, const QJsonObject &) {
+        ApiService::instance().cancelReflectorMapping([this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {
+                QString err = checkApiError(res);
+                if (!err.isEmpty()) {
+                    QMessageBox::warning(this, "错误", err);
+                    return;
+                }
                 m_highMappingActive = false;
                 m_mappingActive = false;
                 updateToolbar();
@@ -523,11 +578,15 @@ void CreateMapWidget::onResetReflectorAll()
 {
     auto *loading = new LoadingDialog("正在全局重置反光柱...", this);
     loading->show();
-    ApiService::instance().resetReflectorAll([this, loading](int code, const QJsonObject &) {
+    ApiService::instance().resetReflectorAll([this, loading](int code, const QJsonObject &res) {
         loading->close();
         loading->deleteLater();
-        if (code == 200) Toast::success(this, "全局重置反光柱成功");
-        else QMessageBox::warning(this, "错误", "全局重置反光柱失败");
+        if (code == 200) {
+            QString err = checkApiError(res);
+            if (!err.isEmpty()) { QMessageBox::warning(this, "错误", err); return; }
+            Toast::success(this, "全局重置反光柱成功");
+        } else
+            QMessageBox::warning(this, "错误", "全局重置反光柱失败");
     });
 }
 
@@ -535,11 +594,15 @@ void CreateMapWidget::onResetReflectorLocal()
 {
     auto *loading = new LoadingDialog("正在局部重置反光柱...", this);
     loading->show();
-    ApiService::instance().resetReflectorLocal([this, loading](int code, const QJsonObject &) {
+    ApiService::instance().resetReflectorLocal([this, loading](int code, const QJsonObject &res) {
         loading->close();
         loading->deleteLater();
-        if (code == 200) Toast::success(this, "局部重置反光柱成功");
-        else QMessageBox::warning(this, "错误", "局部重置反光柱失败");
+        if (code == 200) {
+            QString err = checkApiError(res);
+            if (!err.isEmpty()) { QMessageBox::warning(this, "错误", err); return; }
+            Toast::success(this, "局部重置反光柱成功");
+        } else
+            QMessageBox::warning(this, "错误", "局部重置反光柱失败");
     });
 }
 
@@ -548,10 +611,15 @@ void CreateMapWidget::onToggleCruiseClick()
     if (!m_cruiseSuspended) {
         auto *loading = new LoadingDialog("正在暂停巡航...", this);
         loading->show();
-        ApiService::instance().suspendWork([this, loading](int code, const QJsonObject &) {
+        ApiService::instance().suspendWork([this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {
+                QString err = checkApiError(res);
+                if (!err.isEmpty()) {
+                    QMessageBox::warning(this, "错误", err);
+                    return;
+                }
                 m_cruiseSuspended = true;
                 updateToolbar();
                 Toast::success(this, "巡航已暂停");
@@ -562,10 +630,15 @@ void CreateMapWidget::onToggleCruiseClick()
     } else {
         auto *loading = new LoadingDialog("正在恢复巡航...", this);
         loading->show();
-        ApiService::instance().continueWork([this, loading](int code, const QJsonObject &) {
+        ApiService::instance().continueWork([this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {
+                QString err = checkApiError(res);
+                if (!err.isEmpty()) {
+                    QMessageBox::warning(this, "错误", err);
+                    return;
+                }
                 m_cruiseSuspended = false;
                 updateToolbar();
                 Toast::success(this, "巡航已恢复");
@@ -605,10 +678,15 @@ bool CreateMapWidget::tryExitMapping()
         auto *loading = new LoadingDialog(loadingText, window(), Qt::ApplicationModal);
         loading->show();
         if (m_highMappingActive) {
-            ApiService::instance().stopReflectorMapping([this, loading](int code, const QJsonObject &) {
+            ApiService::instance().stopReflectorMapping([this, loading](int code, const QJsonObject &res) {
                 loading->close();
                 loading->deleteLater();
                 if (code == 200) {
+                    QString err = checkApiError(res);
+                    if (!err.isEmpty()) {
+                        QMessageBox::warning(this, "错误", err);
+                        return;
+                    }
                     m_mappingActive = false;
                     m_highMappingActive = false;
                     m_mapCanvas->setHighMappingActive(false);
@@ -620,10 +698,15 @@ bool CreateMapWidget::tryExitMapping()
                 }
             });
         } else {
-            ApiService::instance().saveMap([this, loading](int code, const QJsonObject &) {
+            ApiService::instance().saveMap([this, loading](int code, const QJsonObject &res) {
                 loading->close();
                 loading->deleteLater();
                 if (code == 200) {
+                    QString err = checkApiError(res);
+                    if (!err.isEmpty()) {
+                        QMessageBox::warning(this, "错误", err);
+                        return;
+                    }
                     m_mappingActive = false;
                     m_highMappingActive = false;
                     m_mapCanvas->setHighMappingActive(false);
@@ -643,10 +726,15 @@ bool CreateMapWidget::tryExitMapping()
     auto *loading = new LoadingDialog(cancelText, window(), Qt::ApplicationModal);
     loading->show();
     if (m_highMappingActive) {
-        ApiService::instance().cancelReflectorMapping([this, loading](int code, const QJsonObject &) {
+        ApiService::instance().cancelReflectorMapping([this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {
+                QString err = checkApiError(res);
+                if (!err.isEmpty()) {
+                    QMessageBox::warning(this, "错误", err);
+                    return;
+                }
                 m_mappingActive = false;
                 m_highMappingActive = false;
                 m_mapCanvas->setHighMappingActive(false);
@@ -658,10 +746,15 @@ bool CreateMapWidget::tryExitMapping()
             }
         });
     } else {
-        ApiService::instance().cancelMapping([this, loading](int code, const QJsonObject &) {
+        ApiService::instance().cancelMapping([this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {
+                QString err = checkApiError(res);
+                if (!err.isEmpty()) {
+                    QMessageBox::warning(this, "错误", err);
+                    return;
+                }
                 m_mappingActive = false;
                 m_highMappingActive = false;
                 m_mapCanvas->setHighMappingActive(false);

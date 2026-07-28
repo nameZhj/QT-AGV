@@ -137,6 +137,7 @@ void CarWidget::getList()
             m_table->setItem(i, 3, new QTableWidgetItem(
                 carInfo.value("status").toString() == "0" ? "在线" : "离线"));
             m_table->setItem(i, 4, new QTableWidgetItem(
+                // 参考 Vue index.vue: linkStatus==='0' 表示已链接, '1' 表示未链接
                 car.value("linkStatus").toString() == "0" ? "已链接" : "未链接"));
 
             // Status combo
@@ -162,6 +163,17 @@ void CarWidget::getList()
             auto *editBtn = new QPushButton("修改");
             auto *delBtn  = new QPushButton("删除");
             auto *linkBtn = new QPushButton("链接");
+
+            // 参考 Vue index.vue: 已链接(linkStatus=="0") 或设备停用(status!="0") 时禁用"链接"按钮
+            bool isLinked  = car.value("linkStatus").toString() == "0";
+            bool isEnabled = car.value("status").toString() == "0";
+            linkBtn->setEnabled(!isLinked && isEnabled);
+            if (isLinked) {
+                linkBtn->setToolTip("设备已链接");
+            } else if (!isEnabled) {
+                linkBtn->setToolTip("设备已停用，无法链接");
+            }
+
             connect(editBtn, &QPushButton::clicked, this, [this, i] {
                 showEditDialog(m_carList[i].toObject());
             });

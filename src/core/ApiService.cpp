@@ -348,6 +348,13 @@ void ApiService::linkCar(const QJsonObject &data, const Callback &cb)
     put("/robot/car/link", data, cb);
 }
 
+void ApiService::linkCarWithoutKey(const QJsonObject &data, const Callback &cb)
+{
+    // 对应 Vue linkCarWithoutKey: PUT /robot/car/link/withoutCertificationKey
+    // 无需设备认证码即可链接设备
+    put("/robot/car/link/withoutCertificationKey", data, cb);
+}
+
 void ApiService::updateCar(const QJsonObject &data, const Callback &cb)
 {
     put("/robot/car", data, cb);

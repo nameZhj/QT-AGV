@@ -16,8 +16,21 @@
 #include <QIcon>
 #include <QInputDialog>
 #include <QTimer>
+#include <QProgressDialog>
 #include <QPointer>
 #include "Toast.h"
+
+// 从 QJsonObject 提取 linkStatus (可能是字符串 "0"/"1" 或数値 0/1)
+// 参考 Vue index.vue: linkStatus==='0' 表示已链接, '1' 表示未链接
+// bool true 对应 "0"(已链接), false 对应 "1"(未链接)
+static QString extractLinkStatus(const QJsonObject &obj, const QString &key = "linkStatus")
+{
+    QJsonValue v = obj.value(key);
+    if (v.isString()) return v.toString();
+    if (v.isDouble()) return QString::number(v.toInt());
+    if (v.isBool())   return v.toBool() ? "0" : "1";
+    return QString();
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  DeviceCard
@@ -161,13 +174,36 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
     auto *fl = new QHBoxLayout(ftr);
     fl->setContentsMargins(10, 0, 10, 0);
     fl->setSpacing(8);
+    m_footerLay = fl;  // 保存布局引用，供 setLinkStatus 动态更新
 
     if (profile.carId.isEmpty()) {
         auto *warn = new QLabel("⚠ 未同步");
         warn->setStyleSheet("color:#f0a060; font-size:11px; background:transparent;");
         fl->addWidget(warn);
+    } else if (profile.linkStatus != "0") {
+        // 已注册但未链接: Vue 中 linkStatus==='0' 表示已链接, 所以 !='0' 表示未链接
+        m_warnLabel = new QLabel("⚠ 未链接");
+        m_warnLabel->setStyleSheet("color:#f0a060; font-size:11px; background:transparent;");
+        fl->addWidget(m_warnLabel);
     }
     fl->addStretch();
+
+    // 链接设备按钮: 仅在已注册但未链接时显示 (linkStatus != '0')
+    // 参考 Vue details.vue: :disabled="form.linkStatus==='0'" 已链接时禁用
+    if (!profile.carId.isEmpty() && profile.linkStatus != "0") {
+        m_linkBtn = new QPushButton("链接设备");
+        m_linkBtn->setCursor(Qt::PointingHandCursor);
+        m_linkBtn->setStyleSheet(
+            "QPushButton{"
+            "  background:#6a4f1e; color:#ffd699; border:none;"
+            "  border-radius:4px; padding:6px 12px;"
+            "  font-size:12px; font-weight:700;"
+            "}"
+            "QPushButton:hover{background:#8a6f2e;}"
+            "QPushButton:disabled{background:#2d3340; color:#556677;}");
+        connect(m_linkBtn, &QPushButton::clicked, this, [this]{ emit linkClicked(m_index); });
+        fl->addWidget(m_linkBtn);
+    }
 
     m_connectBtn = new QPushButton("开始连接");
     m_connectBtn->setCursor(Qt::PointingHandCursor);
@@ -180,6 +216,9 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
         "QPushButton:hover{background:#2980e8;}"
         "QPushButton:disabled{background:#2d3340; color:#556677;}");
     connect(m_connectBtn, &QPushButton::clicked, this, [this]{ emit connectClicked(m_index); });
+    // 已链接(linkStatus=='0')时显示"开始连接", 未链接时隐藏
+    // 参考 Vue: linkStatus==='0' 表示已链接
+    m_connectBtn->setVisible(profile.linkStatus == "0");
     fl->addWidget(m_connectBtn);
 
     root->addWidget(ftr);
@@ -194,6 +233,16 @@ void DeviceCard::setBusy(bool busy)
 {
     m_connectBtn->setEnabled(!busy);
     m_connectBtn->setText(busy ? "连接中..." : "开始连接");
+}
+
+// 动态更新链接状态 UI。
+// linked=true 时：隐藏"⚠ 未链接"标签和"链接设备"按钮，显示"开始连接"按钮。
+// linked=false 时反之。
+void DeviceCard::setLinkStatus(bool linked)
+{
+    if (m_warnLabel)  m_warnLabel->setVisible(!linked);
+    if (m_linkBtn)    m_linkBtn->setVisible(!linked);
+    if (m_connectBtn) m_connectBtn->setVisible(linked);
 }
 
 void DeviceCard::setOnlineUI(bool online)
@@ -551,8 +600,41 @@ void DeviceManagerDialog::refreshCards()
         auto *card = new DeviceCard(list[i], i, m_cardsContainer);
         connect(card, &DeviceCard::connectClicked, this, &DeviceManagerDialog::onConnectCard);
         connect(card, &DeviceCard::removeClicked,  this, &DeviceManagerDialog::onRemoveCard);
+        connect(card, &DeviceCard::linkClicked,     this, &DeviceManagerDialog::onLinkCard);
         m_cardsGrid->addWidget(card, i / cols, i % cols);
         m_cards.append(card);
+
+        // 异步从服务器同步最新 linkStatus，防止本地缓存值陈旧导致状态显示错误
+        // 参考 Vue index.vue: row.linkStatus 直接来自 listCar 接口，此处用 getCar 等价
+        if (!list[i].carId.isEmpty()) {
+            const QString carId = list[i].carId;
+            const QString ip    = list[i].ip;
+            QPointer<DeviceCard> cardPtr(card);
+            ApiService::instance().getCar(carId,
+                [this, cardPtr, carId, ip, i](int code, const QJsonObject &res) {
+                    if (!cardPtr) return;  // 卡片已被销毁（用户刷新/关闭）
+                    if (code != 200) return;
+
+                    QJsonObject data = res.value("data").toObject();
+                    QString serverStatus = extractLinkStatus(data);
+                    // extractLinkStatus 返回 "0"=已链接, "1"=未链接 (参考 Vue), 空=未知
+                    if (serverStatus.isEmpty()) return;
+
+                    bool linked = (serverStatus == "0");  // Vue: '0'=已链接, '1'=未链接
+
+                    // 更新本地缓存，与服务器保持一致
+                    QList<DeviceProfile> devList = AppConfig::instance().deviceList();
+                    if (i < devList.size() && devList[i].ip == ip) {
+                        if (devList[i].linkStatus != serverStatus) {
+                            devList[i].linkStatus = serverStatus;
+                            AppConfig::instance().saveDevice(devList[i]);
+                        }
+                    }
+
+                    // 更新卡片 UI（无需重建整个卡片）
+                    cardPtr->setLinkStatus(linked);
+                });
+        }
     }
 }
 
@@ -641,19 +723,35 @@ void DeviceManagerDialog::onConfirmAdd()
                         QString carId = v.isString() ? v.toString()
                                                      : QString::number(v.toInt());
 
-                        DeviceProfile dev;
-                        dev.ip            = ip;
-                        dev.carId         = carId;
-                        dev.token         = AppConfig::instance().token();
-                        dev.name          = carName;
-                        dev.lastConnected = QDateTime::currentDateTime();
-                        AppConfig::instance().saveDevice(dev);
-                        AppConfig::instance().setAgvId(carId);
+                        // 参考 Vue handleLink → submitLinkForm: 创建成功后自动发起链接请求
+                        // 使用 linkCarWithoutKey (无需认证码) 与 addCarWithoutKey 配对
+                        m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
+                        m_addStatus->setText("正在链接设备...");
 
-                        m_stack->setCurrentWidget(m_mainPanel);
-                        refreshCards();
-                        setStatus(QString("设备 [%1] 已创建并添加").arg(dev.name), "#5cb85c");
-                        Toast::success(this, QString("设备 [%1] 已创建并添加").arg(dev.name));
+                        QJsonObject linkForm;
+                        linkForm["carId"]   = carId;
+                        linkForm["carName"]  = carName;
+                        linkForm["mapId"]    = QJsonValue();   // 不绑定地图
+                        linkForm["deptId"]   = 100;
+                        linkForm["ipPort"]   = ip + ":8061";   // 参考 Vue details.vue handleLink
+                        // 无需 certification (走 withoutCertificationKey 接口)
+
+                        ApiService::instance().linkCarWithoutKey(linkForm,
+                            [this, ip, carName, carId](int code3, const QJsonObject &linkRes) {
+                                if (code3 != 200) {
+                                    m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
+                                    m_addStatus->setText("链接设备失败: " +
+                                        linkRes.value("msg").toString("服务器无响应"));
+                                    m_confirmBtn->setEnabled(true);
+                                    return;
+                                }
+                                // linkCarWithoutKey 返回 200 仅表示请求已受理 (Vue 中提示"已申请链接")
+                                // 真正的链接成功需要通过 getCar 轮询 linkStatus 字段判断:
+                                //   linkStatus='1' 已链接, '0' 未链接
+                                // 参考 Vue: index.vue 通过 listCar 返回的 row.linkStatus 展示链接状态
+                                m_addStatus->setText("已申请链接，等待设备响应...");
+                                checkLinkStatus(carId, ip, carName, 0);
+                            });
                     });
             });
         return;
@@ -693,22 +791,60 @@ void DeviceManagerDialog::onConfirmAdd()
                     }
 
                     if (!carId.isEmpty()) {
-                        // 服务器已有设备，直接保存（对应 Vue 有设备时的处理逻辑）
+                        // 服务器已有设备, 通过 getCar 获取完整信息 (含 linkStatus)
+                        // listCarAllNoLogin 可能不返回 linkStatus 字段, 需要用 getCar 确认
                         if (carName.isEmpty()) carName = QString("AGV @ %1").arg(ip);
+                        m_addStatus->setText("正在获取设备链接状态...");
 
-                        DeviceProfile dev;
-                        dev.ip            = ip;
-                        dev.carId         = carId;
-                        dev.token         = AppConfig::instance().token();
-                        dev.name          = carName;
-                        dev.lastConnected = QDateTime::currentDateTime();
-                        AppConfig::instance().saveDevice(dev);
-                        AppConfig::instance().setAgvId(carId);
+                        ApiService::instance().getCar(carId,
+                            [this, ip, carId, carName](int code3, const QJsonObject &carRes) {
+                                QString linkStatus;
+                                if (code3 == 200) {
+                                    QJsonObject data = carRes.value("data").toObject();
+                                    linkStatus = extractLinkStatus(data);
+                                }
 
-                        m_stack->setCurrentWidget(m_mainPanel);
-                        refreshCards();
-                        setStatus(QString("设备 [%1] 已添加").arg(dev.name), "#5cb85c");
-                        Toast::success(this, QString("设备 [%1] 已添加").arg(dev.name));
+                                if (linkStatus == "0") {
+                                    // 已链接 (参考 Vue: linkStatus==='0' 表示已链接) → 直接保存
+                                    DeviceProfile dev;
+                                    dev.ip            = ip;
+                                    dev.carId         = carId;
+                                    dev.token         = AppConfig::instance().token();
+                                    dev.name          = carName;
+                                    dev.lastConnected = QDateTime::currentDateTime();
+                                    dev.linkStatus    = "0";  // '0'=已链接
+                                    AppConfig::instance().saveDevice(dev);
+                                    AppConfig::instance().setAgvId(carId);
+
+                                    m_stack->setCurrentWidget(m_mainPanel);
+                                    refreshCards();
+                                    setStatus(QString("设备 [%1] 已添加 (已链接)").arg(dev.name), "#5cb85c");
+                                    Toast::success(this, QString("设备 [%1] 已添加").arg(dev.name));
+                                } else {
+                                    // 已有设备但未链接 → 执行 linkCarWithoutKey
+                                    m_addStatus->setText(QString("设备 [%1] 未链接，正在链接...").arg(carName));
+
+                                    QJsonObject linkForm;
+                                    linkForm["carId"]   = carId;
+                                    linkForm["carName"]  = carName;
+                                    linkForm["mapId"]    = QJsonValue();
+                                    linkForm["deptId"]   = 100;
+                                    linkForm["ipPort"]   = ip + ":8061";  // 参考 Vue details.vue handleLink
+
+                                    ApiService::instance().linkCarWithoutKey(linkForm,
+                                        [this, ip, carId, carName](int code4, const QJsonObject &linkRes) {
+                                            if (code4 != 200) {
+                                                m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
+                                                m_addStatus->setText("链接设备失败: " +
+                                                    linkRes.value("msg").toString("服务器无响应"));
+                                                m_confirmBtn->setEnabled(true);
+                                                return;
+                                            }
+                                            m_addStatus->setText("已申请链接，等待设备响应...");
+                                            checkLinkStatus(carId, ip, carName, 0);
+                                        });
+                                }
+                            });
                     } else {
                         // 服务器无设备，展开设备名称输入行，要求用户输入名称创建
                         // （对应 Vue 无设备时展示 createCar 对话框）
@@ -719,6 +855,132 @@ void DeviceManagerDialog::onConfirmAdd()
                         m_confirmBtn->setEnabled(true);
                         m_confirmBtn->setText("创建并添加");
                     }
+                });
+        });
+}
+
+// 轮询 getCar 检查 linkStatus: '0'=已链接, '1'=未链接
+// 参考 Vue index.vue: linkStatus==='0' 表示已链接 (链接按钮禁用)
+// linkCarWithoutKey 返回 200 仅表示请求已受理, 设备实际链接需要时间, 故轮询校验
+// 轮询期间显示阻塞式进度弹窗, 用户可取消
+void DeviceManagerDialog::checkLinkStatus(const QString &carId, const QString &ip,
+                                           const QString &carName, int attempt)
+{
+    // 最多尝试 10 次, 间隔 2 秒, 总计约 20 秒
+    static const int kMaxAttempts = 10;
+    static const int kIntervalMs = 2000;
+
+    // 第一次调用时创建进度弹窗
+    if (attempt == 0) {
+        m_linkCancelled = false;
+        if (m_linkProgress) {
+            m_linkProgress->cancel();
+            delete m_linkProgress;
+        }
+        m_linkProgress = new QProgressDialog(
+            QString("正在校验设备 [%1] 的链接状态...\n剩余约 %2 秒").arg(carName).arg(kMaxAttempts * kIntervalMs / 1000),
+            "取消", 0, kMaxAttempts, this);
+        m_linkProgress->setWindowTitle("链接中");
+        m_linkProgress->setWindowModality(Qt::WindowModal);
+        m_linkProgress->setMinimumDuration(0);
+        m_linkProgress->setValue(0);
+        m_linkProgress->setCancelButton(nullptr);  // 用 canceled 信号控制, 不自动关闭
+        // 点击右上角 X 或 ESC 取消
+        connect(m_linkProgress, &QProgressDialog::canceled, this, [this]() {
+            m_linkCancelled = true;
+            if (m_linkProgress) {
+                m_linkProgress->hide();
+                m_linkProgress->deleteLater();
+                m_linkProgress = nullptr;
+            }
+            // 标记为未链接并保存, 允许用户稍后重试
+            // (carId/ip/carName 通过最后调用方捕获, 这里只设标志)
+        });
+    }
+
+    // 用户已取消 → 保存为未链接状态, 结束轮询
+    if (m_linkCancelled) {
+        DeviceProfile dev;
+        dev.ip            = ip;
+        dev.carId         = carId;
+        dev.token         = AppConfig::instance().token();
+        dev.name          = carName;
+        dev.lastConnected = QDateTime::currentDateTime();
+        dev.linkStatus    = "1";  // '1'=未链接 (参考 Vue: linkStatus==='0'才是已链接)
+        AppConfig::instance().saveDevice(dev);
+
+        m_stack->setCurrentWidget(m_mainPanel);
+        refreshCards();
+        setStatus(QString("设备 [%1] 链接已取消").arg(carName), "#f0a060");
+        return;
+    }
+
+    // 超时 → 保存为未链接
+    if (attempt >= kMaxAttempts) {
+        if (m_linkProgress) {
+            m_linkProgress->hide();
+            m_linkProgress->deleteLater();
+            m_linkProgress = nullptr;
+        }
+        DeviceProfile dev;
+        dev.ip            = ip;
+        dev.carId         = carId;
+        dev.token         = AppConfig::instance().token();
+        dev.name          = carName;
+        dev.lastConnected = QDateTime::currentDateTime();
+        dev.linkStatus    = "1";  // '1'=未链接
+        AppConfig::instance().saveDevice(dev);
+
+        m_stack->setCurrentWidget(m_mainPanel);
+        refreshCards();
+        setStatus(QString("设备 [%1] 已保存，但未链接").arg(dev.name), "#f0a060");
+        Toast::error(this, QString("设备 [%1] 链接超时，请在列表中点击\"链接设备\"重试").arg(dev.name));
+        return;
+    }
+
+    // 更新进度弹窗
+    if (m_linkProgress) {
+        int remaining = kMaxAttempts - attempt;
+        m_linkProgress->setLabelText(
+            QString("正在校验设备 [%1] 的链接状态...\n剩余约 %2 秒").arg(carName).arg(remaining * kIntervalMs / 1000));
+        m_linkProgress->setValue(attempt);
+    }
+
+    ApiService::instance().getCar(carId,
+        [this, carId, ip, carName, attempt](int code, const QJsonObject &res) {
+            if (m_linkCancelled) return;  // 用户已取消, 不再处理
+
+            if (code == 200) {
+                QJsonObject data = res.value("data").toObject();
+                QString linkStatus = extractLinkStatus(data);
+                if (linkStatus == "0") {
+                    // 链接成功 (参考 Vue: linkStatus==='0' 表示已链接) → 关闭弹窗, 保存设备
+                    if (m_linkProgress) {
+                        m_linkProgress->hide();
+                        m_linkProgress->deleteLater();
+                        m_linkProgress = nullptr;
+                    }
+                    DeviceProfile dev;
+                    dev.ip            = ip;
+                    dev.carId         = carId;
+                    dev.token         = AppConfig::instance().token();
+                    dev.name          = carName;
+                    dev.lastConnected = QDateTime::currentDateTime();
+                    dev.linkStatus    = "0";  // '0'=已链接
+                    AppConfig::instance().saveDevice(dev);
+                    AppConfig::instance().setAgvId(carId);
+
+                    m_stack->setCurrentWidget(m_mainPanel);
+                    refreshCards();
+                    setStatus(QString("设备 [%1] 已创建并链接").arg(dev.name), "#5cb85c");
+                    Toast::success(this, QString("设备 [%1] 已创建并链接").arg(dev.name));
+                    return;
+                }
+            }
+            // 未链接或请求失败, 间隔后重试
+            QTimer::singleShot(kIntervalMs, this,
+                [this, carId, ip, carName, attempt]() {
+                    checkLinkStatus(carId, ip, carName, attempt + 1);
                 });
         });
 }
@@ -734,6 +996,49 @@ void DeviceManagerDialog::onRemoveCard(int index)
     refreshCards();
     setStatus("设备已移除");
     Toast::success(this, "设备已移除");
+}
+
+// 重新链接未链接的设备: 只执行 linkCarWithoutKey (已有 carId, 不再执行 addCarWithoutKey)
+void DeviceManagerDialog::onLinkCard(int index)
+{
+    const QList<DeviceProfile> list = AppConfig::instance().deviceList();
+    if (index < 0 || index >= list.size()) return;
+
+    const DeviceProfile &dev = list[index];
+    if (dev.carId.isEmpty()) return;
+
+    // 标记卡片为忙碌状态
+    if (index < m_cards.size())
+        m_cards[index]->setBusy(true);
+
+    setStatus(QString("正在链接设备 [%1] ...").arg(dev.name));
+
+    QJsonObject linkForm;
+    linkForm["carId"]   = dev.carId;
+    linkForm["carName"]  = dev.name;
+    linkForm["mapId"]    = QJsonValue();
+    linkForm["deptId"]   = 100;
+    linkForm["ipPort"]   = dev.ip + ":8061";  // 参考 Vue details.vue handleLink
+
+    // 登录获取最新 token
+    ApiService::instance().login("admin", "admin123",
+        [this, dev, linkForm](int code, const QJsonObject &data) {
+            if (code == 200 && !data.value("token").toString().isEmpty()) {
+                AppConfig::instance().setToken(data.value("token").toString());
+            }
+            ApiService::instance().linkCarWithoutKey(linkForm,
+                [this, dev](int code3, const QJsonObject &linkRes) {
+                    if (code3 != 200) {
+                        setStatus(QString("链接设备 [%1] 失败: %2").arg(dev.name,
+                            linkRes.value("msg").toString("服务器无响应")), "#e05555");
+                        // 刷新卡片以恢复按钮状态
+                        refreshCards();
+                        return;
+                    }
+                    setStatus(QString("已申请链接 [%1]，等待设备响应...").arg(dev.name));
+                    checkLinkStatus(dev.carId, dev.ip, dev.name, 0);
+                });
+        });
 }
 
 void DeviceManagerDialog::connectDevice(int index)

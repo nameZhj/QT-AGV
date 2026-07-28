@@ -79,6 +79,7 @@ public:
     void addCar(const QJsonObject &data, const Callback &cb);
     void addCarWithoutKey(const QJsonObject &data, const Callback &cb); // POST /robot/car/withoutCertificationKey
     void linkCar(const QJsonObject &data, const Callback &cb);
+    void linkCarWithoutKey(const QJsonObject &data, const Callback &cb); // PUT /robot/car/link/withoutCertificationKey
     void updateCar(const QJsonObject &data, const Callback &cb);
     void changeCarStatus(const QString &carId, const QString &mapId, const QString &status, const Callback &cb);
     void delCar(const QString &carId, const Callback &cb);

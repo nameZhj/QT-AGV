@@ -13,6 +13,7 @@ struct DeviceProfile {
     QString carId;          // car ID returned from API
     QString token;          // last auth token
     QDateTime lastConnected;
+    QString linkStatus;     // 设备链接状态: "0"=已链接, "1"=未链接 (参考 Vue: linkStatus==='0' 时链接按钮禁用)
 };
 
 // 全局应用配置
