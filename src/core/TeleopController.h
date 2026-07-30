@@ -57,9 +57,11 @@ private:
     void updateMotion();
     void resetKeyStates();
     void publishTeleopEnable(bool on);
+    void publishHoistStatus(const QString &status);
 
     QTimer *m_timer = nullptr;
     bool m_active = false;
+    bool m_wasHoisting = false;
 
     // 按键状态
     bool m_keyForward   = false;

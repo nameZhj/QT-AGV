@@ -605,24 +605,18 @@ void DeviceManagerDialog::refreshCards()
         m_cards.append(card);
 
         // 异步从服务器同步最新 linkStatus，防止本地缓存值陈旧导致状态显示错误
-        // 参考 Vue index.vue: row.linkStatus 直接来自 listCar 接口，此处用 getCar 等价
         if (!list[i].carId.isEmpty()) {
             const QString carId = list[i].carId;
             const QString ip    = list[i].ip;
             QPointer<DeviceCard> cardPtr(card);
             ApiService::instance().getCar(carId,
                 [this, cardPtr, carId, ip, i](int code, const QJsonObject &res) {
-                    if (!cardPtr) return;  // 卡片已被销毁（用户刷新/关闭）
+                    if (!cardPtr) return;
                     if (code != 200) return;
-
                     QJsonObject data = res.value("data").toObject();
                     QString serverStatus = extractLinkStatus(data);
-                    // extractLinkStatus 返回 "0"=已链接, "1"=未链接 (参考 Vue), 空=未知
                     if (serverStatus.isEmpty()) return;
-
-                    bool linked = (serverStatus == "0");  // Vue: '0'=已链接, '1'=未链接
-
-                    // 更新本地缓存，与服务器保持一致
+                    bool linked = (serverStatus == "0");  // Vue: '0'=已链接
                     QList<DeviceProfile> devList = AppConfig::instance().deviceList();
                     if (i < devList.size() && devList[i].ip == ip) {
                         if (devList[i].linkStatus != serverStatus) {
@@ -630,8 +624,6 @@ void DeviceManagerDialog::refreshCards()
                             AppConfig::instance().saveDevice(devList[i]);
                         }
                     }
-
-                    // 更新卡片 UI（无需重建整个卡片）
                     cardPtr->setLinkStatus(linked);
                 });
         }
@@ -647,13 +639,9 @@ void DeviceManagerDialog::onRefreshAll()
 void DeviceManagerDialog::onAddDevice()
 {
     m_ipEdit->clear();
-    if (m_nameEdit) {
-        m_nameEdit->clear();
-        m_nameRow->hide();
-        m_confirmBtn->setText("连接并添加");
-    }
     m_addStatus->clear();
     m_confirmBtn->setEnabled(true);
+    m_confirmBtn->setText("连接并添加");
     m_stack->setCurrentWidget(m_addPanel);
     m_ipEdit->setFocus();
 }
@@ -662,6 +650,7 @@ void DeviceManagerDialog::onCancelAdd()
 {
     m_stack->setCurrentWidget(m_mainPanel);
 }
+
 
 void DeviceManagerDialog::onConfirmAdd()
 {
@@ -676,94 +665,13 @@ void DeviceManagerDialog::onConfirmAdd()
         return;
     }
 
-    // 如果设备名称行已展开，说明此次点击是确认创建新设备
-    if (m_nameRow && m_nameRow->isVisible()) {
-        QString carName = m_nameEdit->text().trimmed();
-        if (carName.isEmpty()) {
-            m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
-            m_addStatus->setText("请输入设备名称");
-            return;
-        }
-        m_confirmBtn->setEnabled(false);
-        m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
-        m_addStatus->setText("正在创建设备...");
-
-        // 参考 Vue submitCarForm: 先登录，再调用 addCarWithoutKey
-        ApiService::instance().login("admin", "admin123",
-            [this, ip, carName](int code, const QJsonObject &data) {
-                if (code != 200 || data.value("token").toString().isEmpty()) {
-                    m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
-                    m_addStatus->setText("登录失败: " +
-                        data.value("msg").toString("服务器无响应"));
-                    m_confirmBtn->setEnabled(true);
-                    return;
-                }
-                AppConfig::instance().setToken(data.value("token").toString());
-
-                // 构造与 Vue carForm 等价的请求体
-                QJsonObject carForm;
-                carForm["deptId"]    = 100;
-                carForm["mapId"]     = QJsonValue();
-                carForm["carName"]   = carName;
-                carForm["ipPort"]    = ip + ":8061";
-                carForm["robotType"] = "1";
-                carForm["machinery"] = "0";
-
-                ApiService::instance().addCarWithoutKey(carForm,
-                    [this, ip, carName](int code2, const QJsonObject &res) {
-                        if (code2 != 200) {
-                            m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
-                            m_addStatus->setText("创建设备失败: " +
-                                res.value("msg").toString("请检查服务器"));
-                            m_confirmBtn->setEnabled(true);
-                            return;
-                        }
-                        // 获取服务器返回的 carId
-                        QJsonValue v = res.value("data").toObject().value("carId");
-                        QString carId = v.isString() ? v.toString()
-                                                     : QString::number(v.toInt());
-
-                        // 参考 Vue handleLink → submitLinkForm: 创建成功后自动发起链接请求
-                        // 使用 linkCarWithoutKey (无需认证码) 与 addCarWithoutKey 配对
-                        m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
-                        m_addStatus->setText("正在链接设备...");
-
-                        QJsonObject linkForm;
-                        linkForm["carId"]   = carId;
-                        linkForm["carName"]  = carName;
-                        linkForm["mapId"]    = QJsonValue();   // 不绑定地图
-                        linkForm["deptId"]   = 100;
-                        linkForm["ipPort"]   = ip + ":8061";   // 参考 Vue details.vue handleLink
-                        // 无需 certification (走 withoutCertificationKey 接口)
-
-                        ApiService::instance().linkCarWithoutKey(linkForm,
-                            [this, ip, carName, carId](int code3, const QJsonObject &linkRes) {
-                                if (code3 != 200) {
-                                    m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
-                                    m_addStatus->setText("链接设备失败: " +
-                                        linkRes.value("msg").toString("服务器无响应"));
-                                    m_confirmBtn->setEnabled(true);
-                                    return;
-                                }
-                                // linkCarWithoutKey 返回 200 仅表示请求已受理 (Vue 中提示"已申请链接")
-                                // 真正的链接成功需要通过 getCar 轮询 linkStatus 字段判断:
-                                //   linkStatus='1' 已链接, '0' 未链接
-                                // 参考 Vue: index.vue 通过 listCar 返回的 row.linkStatus 展示链接状态
-                                m_addStatus->setText("已申请链接，等待设备响应...");
-                                checkLinkStatus(carId, ip, carName, 0);
-                            });
-                    });
-            });
-        return;
-    }
-
-    // 第一阶段: 登录并尝试获取 carId
     m_confirmBtn->setEnabled(false);
     m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
     m_addStatus->setText("正在连接服务器...");
 
     AppConfig::instance().setServerIp(ip);
 
+    // ── 第一步: 登录 ─────────────────────────────────────────────────────────
     ApiService::instance().login("admin", "admin123",
         [this, ip](int code, const QJsonObject &data) {
             if (code != 200 || data.value("token").toString().isEmpty()) {
@@ -776,7 +684,7 @@ void DeviceManagerDialog::onConfirmAdd()
             AppConfig::instance().setToken(data.value("token").toString());
             m_addStatus->setText("登录成功，正在获取设备信息...");
 
-            // 参考 Vue submitForm: 查询设备列表，判断是否已有设备
+            // ── 第二步: 查询车辆列表 ─────────────────────────────────────────
             ApiService::instance().listCarAllNoLogin(
                 [this, ip](int code2, const QJsonObject &carData) {
                     QString carId, carName;
@@ -787,32 +695,31 @@ void DeviceManagerDialog::onConfirmAdd()
                             QJsonValue v = car.value("carId");
                             carId   = v.isString() ? v.toString() : QString::number(v.toInt());
                             carName = car.value("carName").toString();
+                            if (carName.isEmpty()) carName = QString("AGV @ %1").arg(ip);
                         }
                     }
 
                     if (!carId.isEmpty()) {
-                        // 服务器已有设备, 通过 getCar 获取完整信息 (含 linkStatus)
-                        // listCarAllNoLogin 可能不返回 linkStatus 字段, 需要用 getCar 确认
-                        if (carName.isEmpty()) carName = QString("AGV @ %1").arg(ip);
+                        // ── 场景(1): 列表不为空且 carId 不为空 ──────────────
+                        // 检查当前链接状态 (getCar 获取实时 linkStatus)
                         m_addStatus->setText("正在获取设备链接状态...");
-
                         ApiService::instance().getCar(carId,
                             [this, ip, carId, carName](int code3, const QJsonObject &carRes) {
                                 QString linkStatus;
                                 if (code3 == 200) {
-                                    QJsonObject data = carRes.value("data").toObject();
-                                    linkStatus = extractLinkStatus(data);
+                                    QJsonObject d = carRes.value("data").toObject();
+                                    linkStatus = extractLinkStatus(d);
                                 }
 
                                 if (linkStatus == "0") {
-                                    // 已链接 (参考 Vue: linkStatus==='0' 表示已链接) → 直接保存
+                                    // 已链接 (Vue: linkStatus==='0') → 保存已链接状态，完成
                                     DeviceProfile dev;
                                     dev.ip            = ip;
                                     dev.carId         = carId;
                                     dev.token         = AppConfig::instance().token();
                                     dev.name          = carName;
                                     dev.lastConnected = QDateTime::currentDateTime();
-                                    dev.linkStatus    = "0";  // '0'=已链接
+                                    dev.linkStatus    = "0";  // 已链接
                                     AppConfig::instance().saveDevice(dev);
                                     AppConfig::instance().setAgvId(carId);
 
@@ -821,44 +728,125 @@ void DeviceManagerDialog::onConfirmAdd()
                                     setStatus(QString("设备 [%1] 已添加 (已链接)").arg(dev.name), "#5cb85c");
                                     Toast::success(this, QString("设备 [%1] 已添加").arg(dev.name));
                                 } else {
-                                    // 已有设备但未链接 → 执行 linkCarWithoutKey
-                                    m_addStatus->setText(QString("设备 [%1] 未链接，正在链接...").arg(carName));
+                                    // 未链接 → 发起链接请求，无论成功与否均以未链接状态保存
+                                    m_addStatus->setText(QString("设备 [%1] 未链接，正在申请链接...").arg(carName));
 
                                     QJsonObject linkForm;
-                                    linkForm["carId"]   = carId;
-                                    linkForm["carName"]  = carName;
-                                    linkForm["mapId"]    = QJsonValue();
-                                    linkForm["deptId"]   = 100;
-                                    linkForm["ipPort"]   = ip + ":8061";  // 参考 Vue details.vue handleLink
+                                    linkForm["carId"]  = carId;
+                                    linkForm["carName"] = carName;
+                                    linkForm["mapId"]   = QJsonValue();
+                                    linkForm["deptId"]  = 100;
+                                    linkForm["ipPort"]  = ip + ":8061";
+
+                                    // 无论链接请求是否成功，都保存设备（未链接状态）
+                                    auto saveAsUnlinked = [this, ip, carId, carName]() {
+                                        DeviceProfile dev;
+                                        dev.ip            = ip;
+                                        dev.carId         = carId;
+                                        dev.token         = AppConfig::instance().token();
+                                        dev.name          = carName;
+                                        dev.lastConnected = QDateTime::currentDateTime();
+                                        dev.linkStatus    = "1";  // 未链接
+                                        AppConfig::instance().saveDevice(dev);
+                                        AppConfig::instance().setAgvId(carId);
+
+                                        m_stack->setCurrentWidget(m_mainPanel);
+                                        refreshCards();
+                                        setStatus(QString("设备 [%1] 已添加 (未链接，请点击\"链接设备\")").arg(dev.name), "#f0a060");
+                                        Toast::info(this, QString("设备 [%1] 已添加，链接申请已发送").arg(dev.name));
+                                    };
 
                                     ApiService::instance().linkCarWithoutKey(linkForm,
-                                        [this, ip, carId, carName](int code4, const QJsonObject &linkRes) {
-                                            if (code4 != 200) {
-                                                m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
-                                                m_addStatus->setText("链接设备失败: " +
-                                                    linkRes.value("msg").toString("服务器无响应"));
-                                                m_confirmBtn->setEnabled(true);
-                                                return;
-                                            }
-                                            m_addStatus->setText("已申请链接，等待设备响应...");
-                                            checkLinkStatus(carId, ip, carName, 0);
+                                        [saveAsUnlinked](int /*code4*/, const QJsonObject &) {
+                                            // 无论返回什么都保存设备，linkStatus 后续由 refreshCards 同步
+                                            saveAsUnlinked();
                                         });
                                 }
                             });
                     } else {
-                        // 服务器无设备，展开设备名称输入行，要求用户输入名称创建
-                        // （对应 Vue 无设备时展示 createCar 对话框）
+                        // ── 场景(2): 列表为空，弹窗让用户输入设备名称后再创建 ──
+                        m_confirmBtn->setEnabled(true);  // 暂时恢复按钮，等待用户操作
+
+                        bool ok = false;
+                        QString newCarName = QInputDialog::getText(
+                            this,
+                            "创建新设备",
+                            QString("服务器 [%1] 未注册任何设备，请输入设备名称：").arg(ip),
+                            QLineEdit::Normal,
+                            QString("AGV @ %1").arg(ip),
+                            &ok);
+                        newCarName = newCarName.trimmed();
+
+                        if (!ok || newCarName.isEmpty()) {
+                            // 用户取消或未填写，中止流程
+                            m_addStatus->setStyleSheet("color:#8898a8; font-size:12px;");
+                            m_addStatus->setText("已取消，请重新输入 IP 或填写设备名称。");
+                            return;
+                        }
+
+                        // 用户确认后，锁定按钮并开始创建
+                        m_confirmBtn->setEnabled(false);
                         m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
-                        m_addStatus->setText("服务器无已注册设备，请输入设备名称进行创建");
-                        m_nameEdit->setText(QString("AGV @ %1").arg(ip));
-                        m_nameRow->show();
-                        m_confirmBtn->setEnabled(true);
-                        m_confirmBtn->setText("创建并添加");
+                        m_addStatus->setText(QString("正在创建设备 [%1]...").arg(newCarName));
+
+                        QJsonObject carForm;
+                        carForm["deptId"]    = 100;
+                        carForm["mapId"]     = QJsonValue();
+                        carForm["carName"]   = newCarName;
+                        carForm["ipPort"]    = ip + ":8061";
+                        carForm["robotType"] = "1";
+                        carForm["machinery"] = "0";
+
+                        ApiService::instance().addCarWithoutKey(carForm,
+                            [this, ip, newCarName](int code2, const QJsonObject &res) {
+                                if (code2 != 200) {
+                                    m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
+                                    m_addStatus->setText("创建设备失败: " +
+                                        res.value("msg").toString("请检查服务器连接"));
+                                    m_confirmBtn->setEnabled(true);
+                                    return;
+                                }
+
+                                // 获取服务器返回的 carId
+                                QJsonValue v = res.value("data").toObject().value("carId");
+                                QString newCarId = v.isString() ? v.toString()
+                                                                : QString::number(v.toInt());
+                                m_addStatus->setText("设备已创建，正在申请链接...");
+
+                                QJsonObject linkForm;
+                                linkForm["carId"]   = newCarId;
+                                linkForm["carName"]  = newCarName;
+                                linkForm["mapId"]    = QJsonValue();
+                                linkForm["deptId"]   = 100;
+                                linkForm["ipPort"]   = ip + ":8061";
+
+                                // 无论链接请求是否成功，都保存设备（未链接状态）
+                                auto saveAsUnlinked = [this, ip, newCarId, newCarName]() {
+                                    DeviceProfile dev;
+                                    dev.ip            = ip;
+                                    dev.carId         = newCarId;
+                                    dev.token         = AppConfig::instance().token();
+                                    dev.name          = newCarName;
+                                    dev.lastConnected = QDateTime::currentDateTime();
+                                    dev.linkStatus    = "1";  // 未链接
+                                    AppConfig::instance().saveDevice(dev);
+                                    AppConfig::instance().setAgvId(newCarId);
+
+                                    m_stack->setCurrentWidget(m_mainPanel);
+                                    refreshCards();
+                                    setStatus(QString("设备 [%1] 已创建 (未链接，请点击\"链接设备\")").arg(dev.name), "#f0a060");
+                                    Toast::info(this, QString("设备 [%1] 已创建，链接申请已发送").arg(dev.name));
+                                };
+
+                                ApiService::instance().linkCarWithoutKey(linkForm,
+                                    [saveAsUnlinked](int /*code3*/, const QJsonObject &) {
+                                        saveAsUnlinked();
+                                    });
+                            });
                     }
                 });
         });
 }
-
 // 轮询 getCar 检查 linkStatus: '0'=已链接, '1'=未链接
 // 参考 Vue index.vue: linkStatus==='0' 表示已链接 (链接按钮禁用)
 // linkCarWithoutKey 返回 200 仅表示请求已受理, 设备实际链接需要时间, 故轮询校验

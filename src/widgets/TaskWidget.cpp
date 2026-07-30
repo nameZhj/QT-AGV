@@ -1105,6 +1105,13 @@ void TaskWidget::showEvent(QShowEvent *e)
     refreshData();
 }
 
+void TaskWidget::hideEvent(QHideEvent *e)
+{
+    QWidget::hideEvent(e);
+    // 离开任务管理界面时停止轮询，避免后台无用请求
+    stopTaskPolling();
+}
+
 void TaskWidget::renderAxesAndGrid()
 {
     if (m_imgW <= 0 || m_imgH <= 0) return;
@@ -1637,6 +1644,13 @@ void TaskWidget::onTaskPollTimeout()
         m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
         updateTaskButtons();
         applyTaskValidityStyle();
+
+        // 状态变为“停止条件”时自动停止轮询：
+        //   1=已完成  2=失败  3=暂停  4=已加载(未开始)
+        // 仅当 status==0(执行中)时继续轮询
+        if (status != "0") {
+            stopTaskPolling();
+        }
     });
 }
 
@@ -1766,10 +1780,13 @@ void TaskWidget::sendNavCommand(const QString &command, const QString &loadingTe
         loading->deleteLater();
         if (code == 200) {
             Toast::success(this, successText);
-            // 继续(continue navigation)命令: 重新启动1Hz轮询
-            // 暂停/结束命令: 轮询循环会在下次检测到状态变为3/1时自动停止
             if (command == "continue navigation") {
+                // 继续执行: 重新启动轮询
                 startTaskPolling();
+            } else {
+                // 暂停(“pause navigation”) 或 结束(“stop navigation”): 立即停止轮询
+                // 不再依赖轮询自己检测到状态变化才停止，降低不必要的 API 请求
+                stopTaskPolling();
             }
         } else {
             QString msg = resp.value("msg").toString();

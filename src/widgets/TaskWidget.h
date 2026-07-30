@@ -18,6 +18,7 @@
 #include <QPixmap>
 #include <QResizeEvent>
 #include <QShowEvent>
+#include <QHideEvent>
 
 class RulerWidget;
 class LoadingDialog;
@@ -40,6 +41,7 @@ protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
     void resizeEvent(QResizeEvent *e) override;
     void showEvent(QShowEvent *e) override;
+    void hideEvent(QHideEvent *e) override;  // 离开页面时停止轮询
 
 private slots:
     void onAdd();

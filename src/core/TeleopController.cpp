@@ -38,6 +38,7 @@ void TeleopController::setActive(bool on)
         publishTeleopEnable(true);
     } else {
         // 停用：复位按键、停止定时器、移除事件过滤器、发布停用信号
+        bool wasHoisting = (m_wasHoisting || m_keyHoistUp || m_keyHoistDown);
         m_timer->stop();
         resetKeyStates();
         // 停用瞬间强制发一次零速，确保机器人停止
@@ -55,6 +56,9 @@ void TeleopController::setActive(bool on)
         emit motionChanged(0.0, 0.0);
         emit brakeChanged(false);
         emit hoistChanged(0);
+        if (wasHoisting) {
+            publishHoistStatus("2");
+        }
     }
 
     emit activeChanged(m_active);
@@ -168,10 +172,19 @@ bool TeleopController::handleKeyEvent(QKeyEvent *event, bool pressed)
         emit brakeChanged(m_keyBrake);
     }
     if (event->key() == Qt::Key_P || event->key() == Qt::Key_L) {
+        bool nowHoisting = (m_keyHoistUp || m_keyHoistDown);
         int dir = 0;
         if (m_keyHoistUp)   dir = +1;
         else if (m_keyHoistDown) dir = -1;
         emit hoistChanged(dir);
+
+        if (nowHoisting) {
+            m_wasHoisting = true;
+        } else if (m_wasHoisting) {
+            // 抬手不再按下控制顶升的按键：只发送一次 2（停止指令）
+            m_wasHoisting = false;
+            publishHoistStatus("2");
+        }
     }
 
     updateMotion();
@@ -180,7 +193,7 @@ bool TeleopController::handleKeyEvent(QKeyEvent *event, bool pressed)
 
 void TeleopController::onTick()
 {
-    // Ctrl 线性加速渐增速率：每 tick 向最大倍率渐进一步，松开立即重置
+    // Ctrl 线性加速渐增速率：每 tick 向最大倍率渐一步，松开立即重置
     // 参考 Vue TeleopControls/index.vue 的 boostMultiplier 逻辑
     constexpr int kBoostMaxTicks = 10;  // 10 × 100ms = 1秒内线性到达最大倍率
     if (m_ctrlHeld) {
@@ -192,13 +205,10 @@ void TeleopController::onTick()
     updateMotion();
 
     // 升降：按住期间持续发送（与速度去重逻辑无关）
-    QString agvId = AppConfig::instance().agvId();
-    if (agvId.isEmpty() || !MqttService::instance().isConnected()) return;
-
     if (m_keyHoistUp)
-        MqttService::instance().publish(QString("/rob/%1/hoisting_status").arg(agvId), "1");
+        publishHoistStatus("1");
     else if (m_keyHoistDown)
-        MqttService::instance().publish(QString("/rob/%1/hoisting_status").arg(agvId), "0");
+        publishHoistStatus("0");
 }
 
 void TeleopController::updateMotion()
@@ -264,6 +274,7 @@ void TeleopController::resetKeyStates()
 {
     m_keyForward = m_keyBack = m_keyLeft = m_keyRight = false;
     m_keyBrake = m_keyHoistUp = m_keyHoistDown = false;
+    m_wasHoisting = false;
     m_ctrlHeld = false;   // 停用遥控时清除 Ctrl 状态
     m_ctrlHeldTicks = 0;  // 重置线性加速计数
     m_hasPublishedLinear = m_hasPublishedAngular = false;
@@ -278,4 +289,13 @@ void TeleopController::publishTeleopEnable(bool on)
     MqttService::instance().publish(
         QString("/rob/%1/teleop_enable").arg(agvId),
         on ? "1" : "0");
+}
+
+void TeleopController::publishHoistStatus(const QString &status)
+{
+    QString agvId = AppConfig::instance().agvId();
+    if (agvId.isEmpty() || !MqttService::instance().isConnected()) return;
+    MqttService::instance().publish(
+        QString("/rob/%1/hoisting_status").arg(agvId),
+        status.toUtf8());
 }
