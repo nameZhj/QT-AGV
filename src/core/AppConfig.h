@@ -14,6 +14,8 @@ struct DeviceProfile {
     QString token;          // last auth token
     QDateTime lastConnected;
     QString linkStatus;     // 设备链接状态: "0"=已链接, "1"=未链接 (参考 Vue: linkStatus==='0' 时链接按钮禁用)
+    QString mapName;        // 绑定的地图名称 (持久化缓存)
+    QString version;        // 系统/固件版本号 (持久化缓存)
 };
 
 // 全局应用配置
@@ -60,8 +62,14 @@ public:
     QString baseApiUrl() const;
     QString robotApiUrl(int port) const;
 
-    // 已取消端口映射，原样返回传入端口（保留函数签名以兼容现有调用点）
+    // 根据 TestPortMapping 测试环境规则对端口进行映射转换（带映射使能开关）
     static int mapPort(int internalPort);
+
+    // ========== Test mode ==========
+    bool testMode() const;
+    void setTestMode(bool enabled);
+    // 添加一个模拟设备用于测试
+    void ensureTestDevice();
 
 private:
     AppConfig();

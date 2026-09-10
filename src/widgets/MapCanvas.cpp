@@ -275,6 +275,9 @@ void MapCanvas::handleNativeGesture(QNativeGestureEvent *e)
 
 void MapCanvas::mousePressEvent(QMouseEvent *e)
 {
+    QPointF sp = mapToScene(e->pos());
+    emit sceneClicked(sp, e->button());
+
     if (e->button() == Qt::LeftButton && (e->modifiers() & Qt::ControlModifier)) {
         m_rotating = true;
         // 记录按下时的鼠标位置(用于计算相对中心的极角)
@@ -295,8 +298,6 @@ void MapCanvas::mousePressEvent(QMouseEvent *e)
         return;
     }
     
-    QPointF sp = mapToScene(e->pos());
-    emit sceneClicked(sp, e->button());
     QGraphicsView::mousePressEvent(e);
 }
 

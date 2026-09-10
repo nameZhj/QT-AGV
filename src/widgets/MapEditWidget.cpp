@@ -40,55 +40,62 @@
 #include <QMenu>
 #include <QAction>
 #include <QProgressDialog>
+#include <QFileDialog>
 #include <cmath>
 #include <QPainter>
 #include <QToolTip>
+#include <QShortcut>
+#include <QKeySequence>
 #include <QDebug>
 
 // ── Style constants ───────────────────────────────────────────────────────────
 
 static const char *S_TOOLBAR =
-    "background:#1a2230;";
+    "background:#191e2b; border-right:1px solid #262f42;";
 
 static const char *S_TOOLBTN =
     "QPushButton{"
     "  background:transparent;"
-    "  border:none; border-radius:7px; padding:0;"
+    "  border:none; border-radius:6px; padding:0;"
     "}"
     "QPushButton:hover{"
-    "  background:rgba(100,160,220,0.14);"
+    "  background:rgba(255,255,255,0.08);"
     "}"
     "QPushButton:checked{"
-    "  background:rgba(41,128,185,210);"
+    "  background:#1296DB;"
     "}";
 
 static const char *S_TOPBAR =
-    "background:#1e2d3d; border-bottom:1px solid rgba(255,255,255,0.06);";
+    "background:#1b212f; border-bottom:1px solid #262e3f;";
 
 static const char *S_RIGHTPANEL =
-    "background:#16202e;";
+    "background:#151822; border-left:1px solid #262e3f;";
 
 static const char *S_CARD =
     "QGroupBox{"
-    "  font-weight:bold; font-size:11px; color:#4a7098;"
-    "  border:1px solid rgba(255,255,255,0.07); border-radius:7px;"
-    "  margin-top:10px; padding:2px; background:#1a2638;"
+    "  font-weight:bold; font-size:11px; color:#5a789a;"
+    "  border:1px solid #263348; border-radius:6px;"
+    "  margin-top:10px; padding:4px; background:#1b2230;"
     "}"
     "QGroupBox::title{"
     "  subcontrol-origin:margin; left:8px;"
-    "  padding:0 3px; background:#16202e; color:#5888a8;"
+    "  padding:0 4px; background:#151822; color:#7090b0;"
     "}"
-    "QLabel{background:transparent; color:#90b0cc; font-size:12px;}"
+    "QLabel{background:transparent; color:#8fa6bf; font-size:12px;}"
     "QLineEdit,QComboBox,QDoubleSpinBox{"
-    "  border:1px solid rgba(255,255,255,0.10); border-radius:3px;"
-    "  padding:2px 4px; background:#1e2d40; color:#b0c8e0; font-size:12px;"
+    "  border:1px solid #2b384e; border-radius:4px;"
+    "  padding:2px 6px; background:#131722; color:#cfddea; font-size:12px;"
     "}"
-    "QComboBox QAbstractItemView{background:#1e2d40;color:#b0c8e0;selection-background-color:#2a4060;}"
+    "QLineEdit:focus,QComboBox:focus,QDoubleSpinBox:focus{border:1px solid #1296DB;}"
+    "QComboBox QAbstractItemView{background:#171d2a;color:#cfddea;selection-background-color:#1296DB;border:1px solid #2b384e;}"
+    "QCheckBox{color:#8fa6bf;font-size:12px;spacing:6px;}"
+    "QCheckBox::indicator{width:14px;height:14px;border:1px solid #32435c;border-radius:3px;background:#131722;}"
+    "QCheckBox::indicator:checked{background:#1296DB;border:1px solid #1296DB;}"
     "QPushButton{"
-    "  border:1px solid rgba(255,255,255,0.10); border-radius:4px;"
-    "  padding:3px 6px; font-size:12px; background:#1e2d40; color:#90b0cc;"
+    "  border:1px solid #2b384e; border-radius:4px;"
+    "  padding:4px 8px; font-size:12px; background:#1a2230; color:#8fa6bf;"
     "}"
-    "QPushButton:hover{background:#263850;}";
+    "QPushButton:hover{background:#253044; color:#fff;}";
 
 static const char *S_TABLE =
     "QTableWidget{"
@@ -147,24 +154,28 @@ QPixmap drawToolIcon(const QString &name, const QColor &col, int sz = 22)
     double c = sz * 0.5;
 
     if (name == "pan") {
-        p.setPen(QPen(col, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        double arm = sz * 0.34, head = sz * 0.17;
-        auto arw = [&](double dx, double dy) {
-            QPointF tip(c + dx*arm, c + dy*arm), base(c + dx*2.5, c + dy*2.5);
-            p.drawLine(base, tip);
-            QPointF n(-dy, dx);
-            p.drawLine(tip, tip - QPointF(dx,dy)*head + n*(head*0.5));
-            p.drawLine(tip, tip - QPointF(dx,dy)*head - n*(head*0.5));
-        };
-        arw(0,-1); arw(0,1); arw(-1,0); arw(1,0);
-        p.setPen(Qt::NoPen); p.setBrush(col);
-        p.drawEllipse(QPointF(c,c), sz*0.09, sz*0.09);
+        // 指针光标 (ToolArrow) 风格: 经典斜向箭头
+        QPainterPath ptr;
+        ptr.moveTo(sz*0.22, sz*0.14);
+        ptr.lineTo(sz*0.22, sz*0.80);
+        ptr.lineTo(sz*0.42, sz*0.60);
+        ptr.lineTo(sz*0.62, sz*0.82);
+        ptr.lineTo(sz*0.74, sz*0.72);
+        ptr.lineTo(sz*0.53, sz*0.51);
+        ptr.lineTo(sz*0.78, sz*0.46);
+        ptr.closeSubpath();
+        p.setPen(QPen(col.darker(120), 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(col);
+        p.drawPath(ptr);
     }
     else if (name == "point") {
-        p.setPen(QPen(col, 1.6)); p.setBrush(Qt::NoBrush);
-        p.drawEllipse(QPointF(c,c), sz*0.35, sz*0.35);
-        p.setPen(Qt::NoPen); p.setBrush(col);
-        p.drawEllipse(QPointF(c,c), sz*0.12, sz*0.12);
+        // 站点 Mark: 紧凑矩形车标与内部十字
+        QRectF rc(sz*0.15, sz*0.28, sz*0.70, sz*0.44);
+        p.setPen(QPen(col, 1.4)); p.setBrush(col.lighter(160));
+        p.drawRoundedRect(rc, 2, 2);
+        p.setPen(QPen(QColor("#e74c3c"), 1.2));
+        p.drawLine(QPointF(c-sz*0.11, c), QPointF(c+sz*0.11, c));
+        p.drawLine(QPointF(c, c-sz*0.11), QPointF(c, c+sz*0.11));
     }
     else if (name == "line") {
         QPointF a(sz*0.15, sz*0.85), b2(sz*0.85, sz*0.15);
@@ -255,6 +266,35 @@ QPixmap drawToolIcon(const QString &name, const QColor &col, int sz = 22)
         p.setPen(Qt::NoPen); p.setBrush(col.lighter(140));
         p.drawEllipse(QPointF(c, c - sz*0.12), sz*0.10, sz*0.10);
     }
+    else if (name == "brush") {
+        p.setPen(QPen(col, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawLine(QPointF(sz*0.25, sz*0.75), QPointF(sz*0.75, sz*0.25));
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        p.drawEllipse(QPointF(sz*0.22, sz*0.78), sz*0.12, sz*0.12);
+        p.drawEllipse(QPointF(sz*0.78, sz*0.22), sz*0.08, sz*0.08);
+    }
+    else if (name == "eraser") {
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QRectF er(sz*0.22, sz*0.35, sz*0.56, sz*0.36);
+        p.drawRoundedRect(er, 2, 2);
+        p.drawLine(QPointF(sz*0.48, sz*0.35), QPointF(sz*0.48, sz*0.71));
+    }
+    else if (name == "undo") {
+        p.setPen(QPen(col, 1.8, Qt::SolidLine, Qt::RoundCap)); p.setBrush(Qt::NoBrush);
+        QRectF r(sz*0.22, sz*0.22, sz*0.56, sz*0.56);
+        p.drawArc(r, 45 * 16, 220 * 16);
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow; arrow << QPointF(sz*0.20, sz*0.28) << QPointF(sz*0.40, sz*0.18) << QPointF(sz*0.35, sz*0.42);
+        p.drawPolygon(arrow);
+    }
+    else if (name == "redo") {
+        p.setPen(QPen(col, 1.8, Qt::SolidLine, Qt::RoundCap)); p.setBrush(Qt::NoBrush);
+        QRectF r(sz*0.22, sz*0.22, sz*0.56, sz*0.56);
+        p.drawArc(r, -45 * 16, -220 * 16);
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow; arrow << QPointF(sz*0.80, sz*0.28) << QPointF(sz*0.60, sz*0.18) << QPointF(sz*0.65, sz*0.42);
+        p.drawPolygon(arrow);
+    }
     return pm;
 }
 
@@ -314,7 +354,7 @@ bool MapEditWidget::checkUnsavedChanges()
     box.addButton("取消", QMessageBox::RejectRole);
     box.exec();
     if (box.clickedButton() == saveBtn) {
-        onSaveRoute();
+        onSaveMap();
         return true;   // 保存是异步的，允许离开
     } else if (box.clickedButton() == discardBtn) {
         return true;   // 放弃修改，直接离开
@@ -370,10 +410,46 @@ void MapEditWidget::setupUI()
     QFrame *div = new QFrame; div->setFrameShape(QFrame::VLine);
     div->setStyleSheet("color:rgba(255,255,255,0.08);"); tl->addWidget(div);
 
-    m_mapInfoLabel = new QLabel("路网编辑");
+    m_mapInfoLabel = new QLabel("编辑地图");
     m_mapInfoLabel->setStyleSheet("color:#9ab8d8;font-weight:bold;font-size:13px;");
     tl->addWidget(m_mapInfoLabel);
     tl->addStretch();
+
+    // 撤销 / 重做 (针对栅格地图修图)
+    m_undoBtn = topBtn("撤销");
+    m_undoBtn->setIcon(makeToolIcon("undo"));
+    m_undoBtn->setToolTip(ttHtml("撤销", "撤销上一步底图修图"));
+    m_undoBtn->setEnabled(false);
+    connect(m_undoBtn, &QPushButton::clicked, this, &MapEditWidget::onUndo);
+    tl->addWidget(m_undoBtn);
+
+    m_redoBtn = topBtn("重做");
+    m_redoBtn->setIcon(makeToolIcon("redo"));
+    m_redoBtn->setToolTip(ttHtml("重做", "重做上一步底图修图"));
+    m_redoBtn->setEnabled(false);
+    connect(m_redoBtn, &QPushButton::clicked, this, &MapEditWidget::onRedo);
+    tl->addWidget(m_redoBtn);
+
+    // 笔刷粗细
+    QLabel *brushSizeLbl = new QLabel("笔刷:");
+    brushSizeLbl->setStyleSheet("color:#9ab8d8;font-size:12px;margin-left:4px;");
+    tl->addWidget(brushSizeLbl);
+
+    m_brushSizeCombo = new QComboBox;
+    m_brushSizeCombo->addItem("2 px", 2);
+    m_brushSizeCombo->addItem("4 px", 4);
+    m_brushSizeCombo->addItem("8 px", 8);
+    m_brushSizeCombo->addItem("16 px", 16);
+    m_brushSizeCombo->addItem("32 px", 32);
+    m_brushSizeCombo->setCurrentIndex(1); // 默认 4px
+    m_brushSizeCombo->setStyleSheet(
+        "QComboBox{background:#1e2d40; color:#c8ddef; border:1px solid rgba(255,255,255,0.12); border-radius:4px; padding:2px 6px; font-size:12px;}"
+        "QComboBox::drop-down{border:none; width:16px;}"
+        "QComboBox QAbstractItemView{background:#1a2332; color:#c8ddef; selection-background-color:#2980b9;}");
+    connect(m_brushSizeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        m_brushSize = m_brushSizeCombo->itemData(idx).toInt();
+    });
+    tl->addWidget(m_brushSizeCombo);
 
     m_resetViewBtn = new QPushButton;
     m_resetViewBtn->setIcon(makeToolIcon("reset"));
@@ -439,9 +515,22 @@ void MapEditWidget::setupUI()
     connect(m_editMapBtn, &QPushButton::clicked, this, &MapEditWidget::onEditMap);
     tl->addWidget(m_editMapBtn);
 
-    m_saveBtn = topBtn("保存路网", "#2471a3");
-    connect(m_saveBtn, &QPushButton::clicked, this, &MapEditWidget::onSaveRoute);
+    m_importSmapBtn = topBtn("导入 .smap", "#2e7d32");
+    m_importSmapBtn->setToolTip(ttHtml("导入 .smap", "选择并导入 .smap 地图路网文件"));
+    m_importSmapBtn->installEventFilter(new InstantTip(m_importSmapBtn));
+    connect(m_importSmapBtn, &QPushButton::clicked, this, &MapEditWidget::onImportSmap);
+    tl->addWidget(m_importSmapBtn);
+
+    m_saveBtn = topBtn("保存地图", "#2471a3");
+    m_saveBtn->setToolTip(ttHtml("保存地图 (Ctrl+S)", "同时保存路网数据与修改后的栅格地图底图"));
+    connect(m_saveBtn, &QPushButton::clicked, this, &MapEditWidget::onSaveMap);
     tl->addWidget(m_saveBtn);
+
+    QPushButton *helpBtn = topBtn("帮助 (F1)", "#34495e");
+    helpBtn->setToolTip(ttHtml("帮助 (F1)", "查看键盘快捷键与地图编辑操作指南"));
+    helpBtn->installEventFilter(new InstantTip(helpBtn));
+    connect(helpBtn, &QPushButton::clicked, this, &MapEditWidget::showHelpDialog);
+    tl->addWidget(helpBtn);
 
     root->addWidget(topBar);
 
@@ -453,23 +542,29 @@ void MapEditWidget::setupUI()
 
     // ── Left toolbar ──────────────────────────────────────────────────────────
     QWidget *toolbar = new QWidget;
-    toolbar->setFixedWidth(50);
+    toolbar->setFixedWidth(46);
     toolbar->setStyleSheet(S_TOOLBAR);
     QVBoxLayout *tbLayout = new QVBoxLayout(toolbar);
-    tbLayout->setContentsMargins(5,10,5,10);
-    tbLayout->setSpacing(2);
+    tbLayout->setContentsMargins(5,8,5,8);
+    tbLayout->setSpacing(3);
 
     struct Tool { int mode; QString icon; QString tip; QString detail; };
     const QList<Tool> tools = {
-        {Drag,          "pan",          "拖拽",   "平移地图 / 选择要素\n拖动曲线控制手柄调整形状"},
-        {-1,            "",             "",        ""},
-        {Point,         "point",        "节点",   "点击放置普通路网节点"},
-        {Line,          "line",         "线段",   "点击起点 → 再点终点"},
-        {Curve,         "curve",        "曲线",   "点击两点自动生成曲线\n拖动橙色控制手柄微调"},
-        {-1,            "",             "",        ""},
-        {-2,            "devicepoint",  "设备打点","添加设备当前位置为普通节点"},
-        {-3,            "charge",       "充电桩打点","通过设备相对定位添加充电桩点\n(等待设备返回 epc 坐标)"},
-        {-4,            "highprecision","高精度打点","通过设备相对定位添加高精度点\n(等待设备返回 epc 坐标)"},
+        {Drag,          "pan",          "指针 (Esc)",   "选择要素 / 拖动站点与线路 / 调整曲线控制手柄"},
+        {-1,            "",             "",             ""},
+        {Line,          "line",         "线路 (L)",     "绘制直线路径：空地自动建站，连续连线，右键/Esc结束"},
+        {Curve,         "curve",        "曲线 (B)",     "绘制多阶贝塞尔曲线：起点→控制点→终点，自动吸附/建站"},
+        {-1,            "",             "",             ""},
+        {Point,         "point",        "站点 (M)",     "放置普通站点 LM（蓝）"},
+        {Charge,        "charge",       "充电桩 (C)",   "放置充电桩站点 CP（金）"},
+        {HighPrecision, "highprecision","精定位点 (T)", "放置高精定位站点 TL（红）"},
+        {-1,            "",             "",             ""},
+        {Eraser,        "eraser",       "橡皮擦 (E)",   "擦除栅格涂改：恢复可通行区域"},
+        {Brush,         "brush",        "画笔 (P)",     "涂黑栅格地图：标记障碍物/墙体"},
+        {-1,            "",             "",             ""},
+        {-2,            "devicepoint",  "设备打点",     "添加设备当前位置为普通站点"},
+        {-3,            "charge",       "充电打点",     "通过设备相对定位添加充电桩站点 CP\n(等待设备返回 epc 坐标)"},
+        {-4,            "highprecision","精定位打点",   "通过设备相对定位添加高精定位站点 TL\n(等待设备返回 epc 坐标)"},
     };
 
     m_toolBtns.clear();
@@ -477,21 +572,20 @@ void MapEditWidget::setupUI()
         if (t.mode == -1) {
             auto *sep = new QFrame; sep->setFrameShape(QFrame::HLine);
             sep->setFixedHeight(1);
-            sep->setStyleSheet("background:rgba(255,255,255,0.07); border:none; margin:4px 4px;");
+            sep->setStyleSheet("background:#262f42; border:none; margin:3px 2px;");
             tbLayout->addWidget(sep);
             continue;
         }
         auto *b = new QPushButton;
         b->setIcon(makeToolIcon(t.icon));
-        b->setIconSize(QSize(22, 22));
-        b->setCheckable(t.mode >= 0);   // 动作按钮(mode<0)不需要 checkable
-        b->setFixedSize(40, 40);
+        b->setIconSize(QSize(20, 20));
+        b->setCheckable(t.mode >= 0);
+        b->setFixedSize(36, 36);
         b->setStyleSheet(S_TOOLBTN);
         b->setToolTip(ttHtml(t.tip, t.detail));
         b->setCursor(Qt::PointingHandCursor);
         b->installEventFilter(new InstantTip(b));
         if (t.mode == -2) {
-            // 设备打点: 直接添加设备当前位置为普通节点
             connect(b, &QPushButton::clicked, this, [this]() {
                 if (!m_hasCarPose) {
                     Toast::info(this, "未收到设备位置信息，无法打点");
@@ -499,13 +593,11 @@ void MapEditWidget::setupUI()
                 }
                 QPointF sp = worldToScene(m_carX, m_carY);
                 addPoint(sp);
-                Toast::success(this, QString("已在设备位置(%1, %2)添加节点").arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2));
+                Toast::success(this, QString("已在设备位置(%1, %2)添加普通站点").arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2));
             });
         } else if (t.mode == -3) {
-            // 充电桩打点: 通过设备相对定位获取
             connect(b, &QPushButton::clicked, this, [this]() { addDevicePoint("charge"); });
         } else if (t.mode == -4) {
-            // 高精度打点: 通过设备相对定位获取
             connect(b, &QPushButton::clicked, this, [this]() { addDevicePoint("highPrecision"); });
         } else {
             int mode = t.mode;
@@ -519,14 +611,14 @@ void MapEditWidget::setupUI()
 
     auto *sep2 = new QFrame; sep2->setFrameShape(QFrame::HLine);
     sep2->setFixedHeight(1);
-    sep2->setStyleSheet("background:rgba(255,255,255,0.07); border:none; margin:4px 4px;");
+    sep2->setStyleSheet("background:#262f42; border:none; margin:3px 2px;");
     tbLayout->addWidget(sep2);
 
     m_tableModeBtn = new QPushButton;
     m_tableModeBtn->setIcon(makeToolIcon("list"));
-    m_tableModeBtn->setIconSize(QSize(22, 22));
+    m_tableModeBtn->setIconSize(QSize(20, 20));
     m_tableModeBtn->setCheckable(true);
-    m_tableModeBtn->setFixedSize(40, 40);
+    m_tableModeBtn->setFixedSize(36, 36);
     m_tableModeBtn->setStyleSheet(S_TOOLBTN);
     m_tableModeBtn->setToolTip(ttHtml("要素列表", "显示/隐藏路网要素列表"));
     m_tableModeBtn->setCursor(Qt::PointingHandCursor);
@@ -541,7 +633,8 @@ void MapEditWidget::setupUI()
     m_scene   = new QGraphicsScene(this);
     m_mapView = new MapCanvas(m_scene, this);
     connect(m_mapView, &MapCanvas::transformChanged, this, [this]() { updateRulers(); });
-    m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    m_mapView->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing);
+    m_mapView->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
     m_mapView->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     m_mapView->setAlignment(Qt::AlignCenter);
     m_mapView->setFrameStyle(QFrame::NoFrame);
@@ -549,6 +642,7 @@ void MapEditWidget::setupUI()
     // NoDrag: 平移由 MapCanvas(Ctrl+左键旋转/中键/Alt+左键平移)和 eventFilter 手动处理，
     // 避免 ScrollHandDrag 拦截鼠标事件导致手柄拖拽失效
     m_mapView->setDragMode(QGraphicsView::NoDrag);
+    m_mapView->installEventFilter(this);
     m_mapView->viewport()->installEventFilter(this);
     m_mapView->viewport()->setMouseTracking(true);
 
@@ -581,24 +675,23 @@ void MapEditWidget::setupUI()
     cl->addWidget(mapArea, 1);
 
     // ── Right panel ───────────────────────────────────────────────────────────
-    // 完全重构：不用 QGroupBox(边框/padding/margin 占宽度)，改用轻量容器
     QWidget *rightOuter = new QWidget;
-    rightOuter->setFixedWidth(260);
-    rightOuter->setStyleSheet("background:#16202e;");
+    rightOuter->setFixedWidth(280);
+    rightOuter->setStyleSheet(S_RIGHTPANEL);
 
     QScrollArea *sa = new QScrollArea;
     sa->setWidgetResizable(true);
     sa->setFrameStyle(QFrame::NoFrame);
     sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     sa->setStyleSheet(
-        "background:transparent; border:none;"
-        "QScrollBar:vertical{background:#131d2a;width:5px;border:none;}"
-        "QScrollBar::handle:vertical{background:#2a4060;border-radius:2px;}");
+        "QScrollArea{background:transparent; border:none;}"
+        "QScrollBar:vertical{background:#131722;width:5px;border:none;}"
+        "QScrollBar::handle:vertical{background:#2a364d;border-radius:2px;}");
 
     QWidget *rc = new QWidget;
-    rc->setStyleSheet("background:#16202e;");
+    rc->setStyleSheet("background:#151822;");
     QVBoxLayout *rl = new QVBoxLayout(rc);
-    rl->setContentsMargins(6,6,6,6);
+    rl->setContentsMargins(8,8,8,8);
     rl->setSpacing(8);
     sa->setWidget(rc);
 
@@ -606,17 +699,32 @@ void MapEditWidget::setupUI()
     rol->setContentsMargins(0,0,0,0);
     rol->addWidget(sa);
 
-    // 轻量卡片容器(无边框，仅背景色+圆角+标题)
+    // 卡片容器辅助函数
     auto mkCard = [&](const QString &title) -> QPair<QWidget*, QVBoxLayout*> {
         auto *container = new QWidget;
-        container->setStyleSheet("background:#1a2638; border-radius:6px;");
+        container->setStyleSheet("background:#1b2230; border:1px solid #263348; border-radius:6px;");
         auto *l = new QVBoxLayout(container);
-        l->setContentsMargins(8,6,8,8);
-        l->setSpacing(4);
+        l->setContentsMargins(10,8,10,10);
+        l->setSpacing(5);
         auto *lbl = new QLabel(title);
-        lbl->setStyleSheet("color:#5888a8; font-size:11px; font-weight:bold; background:transparent; border:none;");
+        lbl->setStyleSheet("color:#627e9e; font-size:11px; font-weight:bold; background:transparent; border:none;");
         l->addWidget(lbl);
         return {container, l};
+    };
+
+    auto mkFormRow = [](const QString &label, QWidget *editor) -> QWidget* {
+        auto *w = new QWidget;
+        w->setStyleSheet("background:transparent; border:none;");
+        auto *h = new QHBoxLayout(w);
+        h->setContentsMargins(0,1,0,1);
+        h->setSpacing(6);
+        auto *lbl = new QLabel(label);
+        lbl->setMinimumWidth(68);
+        lbl->setMaximumWidth(84);
+        lbl->setStyleSheet("color:#7e96b0; font-size:11px; background:transparent; border:none;");
+        h->addWidget(lbl);
+        h->addWidget(editor, 1);
+        return w;
     };
 
     // Map info
@@ -638,126 +746,249 @@ void MapEditWidget::setupUI()
 
     // Properties (hidden until selection)
     {
-        auto [card, pl] = mkCard("选中要素");
+        auto [card, pl] = mkCard("要素属性");
 
-        m_propTypeLabel = new QLabel("类型: -");
-        m_propTypeLabel->setStyleSheet("color:#4a7098; font-size:11px; background:transparent; border:none;");
-        pl->addWidget(m_propTypeLabel);
+        // 顶栏: 标题 + Badge
+        auto *headerBar = new QWidget;
+        headerBar->setStyleSheet("background:transparent; border:none;");
+        auto *hbl = new QHBoxLayout(headerBar);
+        hbl->setContentsMargins(0,0,0,4);
+        m_propHeaderTitle = new QLabel("图元属性");
+        m_propHeaderTitle->setStyleSheet("color:#e2ecf7; font-size:13px; font-weight:bold; background:transparent; border:none;");
+        m_propHeaderBadge = new QLabel("LM");
+        m_propHeaderBadge->setStyleSheet("background:#1e3a5f; color:#60a5fa; border:1px solid #2563eb; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
+        hbl->addWidget(m_propHeaderTitle);
+        hbl->addStretch();
+        hbl->addWidget(m_propHeaderBadge);
+        pl->addWidget(headerBar);
 
-        // 编号/名称：标签在上、输入框在下(垂直排列，节省水平空间)
-        auto *idLbl = new QLabel("编号:");
-        idLbl->setStyleSheet("color:#4a6080; font-size:11px; background:transparent; border:none;");
-        pl->addWidget(idLbl);
-        m_propIdEdit = new QLineEdit; m_propIdEdit->setReadOnly(true);
-        m_propIdEdit->setStyleSheet("background:#f8f9fc; color:#6a7888; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:2px 4px; font-size:12px;");
-        pl->addWidget(m_propIdEdit);
+        // ==========================================
+        // 1. 站点属性组 (WidgetMarkPPTW)
+        // ==========================================
+        m_stationPropGroup = new QWidget;
+        m_stationPropGroup->setStyleSheet("background:transparent; border:none;");
+        auto *sl = new QVBoxLayout(m_stationPropGroup);
+        sl->setContentsMargins(0,0,0,0);
+        sl->setSpacing(4);
 
-        auto *nameLbl = new QLabel("名称:");
-        nameLbl->setStyleSheet("color:#4a6080; font-size:11px; background:transparent; border:none;");
-        pl->addWidget(nameLbl);
-        m_propNameEdit = new QLineEdit;
-        m_propNameEdit->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:2px 4px; font-size:12px;");
-        pl->addWidget(m_propNameEdit);
+        // 基础信息
+        m_stationTypeCombo = new QComboBox;
+        m_stationTypeCombo->addItem("普通站点 (LM)", "point");
+        m_stationTypeCombo->addItem("充电桩 (CP)", "charge");
+        m_stationTypeCombo->addItem("高精定位点 (TL)", "highPrecision");
+        sl->addWidget(mkFormRow("站点类型:", m_stationTypeCombo));
 
-        // 方向行
-        m_propDirectRow = new QWidget;
-        m_propDirectRow->setStyleSheet("background:transparent;");
-        auto *dl = new QHBoxLayout(m_propDirectRow);
-        dl->setContentsMargins(0,0,0,0); dl->setSpacing(4);
-        auto *dLbl = new QLabel("方向:");
-        dLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
-        dLbl->setMinimumWidth(36); dLbl->setMaximumWidth(50);
-        m_propDirectCombo = new QComboBox;
-        m_propDirectCombo->addItem("单向 →", 100);
-        m_propDirectCombo->addItem("双向 ↔", 10);
-        dl->addWidget(dLbl); dl->addWidget(m_propDirectCombo, 1);
-        pl->addWidget(m_propDirectRow);
+        m_stationIdEdit = new QLineEdit;
+        m_stationIdEdit->setReadOnly(true);
+        m_stationIdEdit->setStyleSheet("background:#12151e; color:#627284; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
+        sl->addWidget(mkFormRow("站点编号:", m_stationIdEdit));
 
-        // 点类型行
-        m_propKindRow = new QWidget;
-        m_propKindRow->setStyleSheet("background:transparent;");
-        auto *kl = new QHBoxLayout(m_propKindRow);
-        kl->setContentsMargins(0,0,0,0); kl->setSpacing(4);
-        auto *kLbl = new QLabel("点类型:");
-        kLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
-        kLbl->setMinimumWidth(36); kLbl->setMaximumWidth(50);
-        m_propKindCombo = new QComboBox;
-        m_propKindCombo->addItem("普通点",   "point");
-        m_propKindCombo->addItem("高精度点", "highPrecision");
-        m_propKindCombo->addItem("充电桩",   "charge");
-        kl->addWidget(kLbl); kl->addWidget(m_propKindCombo, 1);
-        pl->addWidget(m_propKindRow);
+        m_stationLabelEdit = new QLineEdit;
+        sl->addWidget(mkFormRow("站点名称:", m_stationLabelEdit));
 
-        // 坐标行：X 和 Y 垂直排列，避免水平方向空间不足被裁切
-        m_propCoordRow = new QWidget;
-        m_propCoordRow->setStyleSheet("background:transparent;");
-        auto *cl = new QVBoxLayout(m_propCoordRow);
-        cl->setContentsMargins(0,0,0,0); cl->setSpacing(2);
-        // X 行
-        auto *xRow = new QWidget; xRow->setStyleSheet("background:transparent;");
-        auto *xl = new QHBoxLayout(xRow); xl->setContentsMargins(0,0,0,0); xl->setSpacing(4);
-        auto *xLbl = new QLabel("X:");
-        xLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
-        xLbl->setFixedWidth(20);
-        m_propXSpin = new QDoubleSpinBox; m_propXSpin->setRange(-100000, 100000); m_propXSpin->setDecimals(3);
-        m_propXSpin->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:1px 3px; font-size:12px;");
-        xl->addWidget(xLbl); xl->addWidget(m_propXSpin, 1);
-        cl->addWidget(xRow);
-        // Y 行
-        auto *yRow = new QWidget; yRow->setStyleSheet("background:transparent;");
-        auto *yl = new QHBoxLayout(yRow); yl->setContentsMargins(0,0,0,0); yl->setSpacing(4);
-        auto *yLbl = new QLabel("Y:");
-        yLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
-        yLbl->setFixedWidth(20);
-        m_propYSpin = new QDoubleSpinBox; m_propYSpin->setRange(-100000, 100000); m_propYSpin->setDecimals(3);
-        m_propYSpin->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:1px 3px; font-size:12px;");
-        yl->addWidget(yLbl); yl->addWidget(m_propYSpin, 1);
-        cl->addWidget(yRow);
-        // Yaw 行 (充电桩/高精度点专属，只读显示 epc_theta)
-        m_propYawRow = new QWidget; m_propYawRow->setStyleSheet("background:transparent;");
-        auto *wl = new QHBoxLayout(m_propYawRow); wl->setContentsMargins(0,0,0,0); wl->setSpacing(4);
-        auto *wLbl = new QLabel("Yaw:");
-        wLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
-        wLbl->setFixedWidth(30);
-        m_propYawLabel = new QLabel("--");
-        m_propYawLabel->setStyleSheet("background:#141e2a; color:#7ab0d8; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:2px 6px; font-size:12px;");
-        wl->addWidget(wLbl); wl->addWidget(m_propYawLabel, 1);
-        cl->addWidget(m_propYawRow);
-        m_propYawRow->setVisible(false);
-        // Epc X/Y 行(充电桩/高精度点专属，只读显示 epc_x/epc_y)
-        m_propEpcRow = new QWidget; m_propEpcRow->setStyleSheet("background:transparent;");
-        auto *el = new QHBoxLayout(m_propEpcRow); el->setContentsMargins(0,0,0,0); el->setSpacing(4);
-        auto *exLbl = new QLabel("epc X:");
-        exLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
-        exLbl->setFixedWidth(40);
-        m_propEpcXLabel = new QLabel("--");
-        m_propEpcXLabel->setStyleSheet("background:#141e2a; color:#7ab0d8; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:2px 6px; font-size:12px;");
-        auto *eyLbl = new QLabel("epc Y:");
-        eyLbl->setStyleSheet("color:#4a6080; font-size:12px; background:transparent; border:none;");
-        eyLbl->setFixedWidth(40);
-        m_propEpcYLabel = new QLabel("--");
-        m_propEpcYLabel->setStyleSheet("background:#141e2a; color:#7ab0d8; border:1px solid rgba(255,255,255,0.08); border-radius:3px; padding:2px 6px; font-size:12px;");
-        el->addWidget(exLbl); el->addWidget(m_propEpcXLabel, 1);
-        el->addWidget(eyLbl); el->addWidget(m_propEpcYLabel, 1);
-        cl->addWidget(m_propEpcRow);
-        m_propEpcRow->setVisible(false);
-        pl->addWidget(m_propCoordRow);
+        // 空间坐标
+        m_stationXSpin = new QDoubleSpinBox;
+        m_stationXSpin->setRange(-99999.0, 99999.0);
+        m_stationXSpin->setDecimals(3);
+        m_stationXSpin->setSuffix(" m");
+        sl->addWidget(mkFormRow("X 坐标:", m_stationXSpin));
 
-        // 按钮行
-        QHBoxLayout *pb = new QHBoxLayout;
-        pb->setSpacing(4);
-        auto *applyBtn = new QPushButton("应用");
-        auto *delBtn   = new QPushButton("删除");
-        applyBtn->setStyleSheet(
-            "QPushButton{background:rgba(36,113,163,180);color:white;border:none;border-radius:4px;padding:5px;}"
-            "QPushButton:hover{background:rgba(52,152,219,200);}");
-        delBtn->setStyleSheet(
-            "QPushButton{background:rgba(192,57,43,160);color:white;border:none;border-radius:4px;padding:5px;}"
-            "QPushButton:hover{background:rgba(231,76,60,190);}");
-        connect(applyBtn, &QPushButton::clicked, this, &MapEditWidget::applyPropsEdit);
-        connect(delBtn,   &QPushButton::clicked, this, &MapEditWidget::deleteSelected);
-        pb->addWidget(applyBtn, 1); pb->addWidget(delBtn, 1);
-        pl->addLayout(pb);
+        m_stationYSpin = new QDoubleSpinBox;
+        m_stationYSpin->setRange(-99999.0, 99999.0);
+        m_stationYSpin->setDecimals(3);
+        m_stationYSpin->setSuffix(" m");
+        sl->addWidget(mkFormRow("Y 坐标:", m_stationYSpin));
+
+        m_stationYawSpin = new QDoubleSpinBox;
+        m_stationYawSpin->setRange(-360.0, 360.0);
+        m_stationYawSpin->setDecimals(1);
+        m_stationYawSpin->setSuffix(" °");
+        sl->addWidget(mkFormRow("朝向角度:", m_stationYawSpin));
+
+        // 站点特性复选框
+        auto *attrCard = new QWidget;
+        attrCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
+        auto *acl = new QVBoxLayout(attrCard);
+        acl->setContentsMargins(6,6,6,6);
+        acl->setSpacing(6);
+        m_stationDockableChk = new QCheckBox("允许停靠 (rdsDockable)");
+        m_stationDockableChk->setChecked(true);
+        m_stationRotateChk = new QCheckBox("允许转身 (allowRotate)");
+        m_stationRotateChk->setChecked(true);
+        m_stationPgvChk = new QCheckBox("使用下视 PGV (useDownPGV)");
+        acl->addWidget(m_stationDockableChk);
+        acl->addWidget(m_stationRotateChk);
+        acl->addWidget(m_stationPgvChk);
+        sl->addWidget(attrCard);
+
+        // EPC 相对定位数据
+        m_stationEpcGroup = new QWidget;
+        m_stationEpcGroup->setStyleSheet("background:#141a26; border:1px solid #222b3c; border-radius:4px;");
+        auto *el = new QVBoxLayout(m_stationEpcGroup);
+        el->setContentsMargins(6,6,6,6);
+        el->setSpacing(3);
+        auto *epcTitle = new QLabel("设备相对校准 (EPC)");
+        epcTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
+        el->addWidget(epcTitle);
+        m_stationEpcXLabel = new QLabel("--");
+        m_stationEpcXLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
+        m_stationEpcYLabel = new QLabel("--");
+        m_stationEpcYLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
+        m_stationEpcYawLabel = new QLabel("--");
+        m_stationEpcYawLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
+        el->addWidget(mkFormRow("epc X:", m_stationEpcXLabel));
+        el->addWidget(mkFormRow("epc Y:", m_stationEpcYLabel));
+        el->addWidget(mkFormRow("epc Yaw:", m_stationEpcYawLabel));
+        sl->addWidget(m_stationEpcGroup);
+        m_stationEpcGroup->setVisible(false);
+
+        pl->addWidget(m_stationPropGroup);
+
+        // ==========================================
+        // 2. 线路属性组 (WidgetBezierPPTW)
+        // ==========================================
+        m_linePropGroup = new QWidget;
+        m_linePropGroup->setStyleSheet("background:transparent; border:none;");
+        auto *ll = new QVBoxLayout(m_linePropGroup);
+        ll->setContentsMargins(0,0,0,0);
+        ll->setSpacing(4);
+
+        // 基础信息
+        m_lineTypeCombo = new QComboBox;
+        m_lineTypeCombo->addItem("直线", "line");
+        m_lineTypeCombo->addItem("贝塞尔曲线", "curve");
+        ll->addWidget(mkFormRow("线路类型:", m_lineTypeCombo));
+
+        m_lineIdEdit = new QLineEdit;
+        m_lineIdEdit->setReadOnly(true);
+        m_lineIdEdit->setStyleSheet("background:#12151e; color:#627284; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
+        ll->addWidget(mkFormRow("线路编号:", m_lineIdEdit));
+
+        m_lineNameEdit = new QLineEdit;
+        ll->addWidget(mkFormRow("线路名称:", m_lineNameEdit));
+
+        // 起止端点
+        m_lineStartLabel = new QLabel("--");
+        m_lineStartLabel->setStyleSheet("background:#12151e; color:#79a2c9; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
+        ll->addWidget(mkFormRow("起点 (Pos1):", m_lineStartLabel));
+
+        m_lineEndLabel = new QLabel("--");
+        m_lineEndLabel->setStyleSheet("background:#12151e; color:#79a2c9; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
+        ll->addWidget(mkFormRow("终点 (Pos2):", m_lineEndLabel));
+
+        // 运动方向
+        auto *dirRow = new QWidget;
+        dirRow->setStyleSheet("background:transparent; border:none;");
+        auto *dirl = new QHBoxLayout(dirRow);
+        dirl->setContentsMargins(0,0,0,0);
+        dirl->setSpacing(4);
+        m_lineDirectCombo = new QComboBox;
+        m_lineDirectCombo->addItem("双向 ↔", 10);
+        m_lineDirectCombo->addItem("单向前进 →", 0);
+        m_lineDirectCombo->addItem("单向后退 ←", 1);
+        m_lineFlipDirBtn = new QPushButton("⇄ 翻转");
+        m_lineFlipDirBtn->setToolTip("翻转单向行进方向或交换端点");
+        m_lineFlipDirBtn->setFixedWidth(64);
+        m_lineFlipDirBtn->setStyleSheet(
+            "QPushButton{background:#1e2736; border:1px solid #2e3d54; border-radius:3px; color:#8fa6bf; font-size:11px; padding:2px;}"
+            "QPushButton:hover{background:#2a374c; color:#fff;}");
+        connect(m_lineFlipDirBtn, &QPushButton::clicked, this, [this]() {
+            int curDirect = m_lineDirectCombo->currentData().toInt();
+            if (curDirect == 0)      m_lineDirectCombo->setCurrentIndex(2); // forward -> backward
+            else if (curDirect == 1) m_lineDirectCombo->setCurrentIndex(1); // backward -> forward
+            else {
+                // 双向时交换起止显示文本
+                QString t1 = m_lineStartLabel->text();
+                m_lineStartLabel->setText(m_lineEndLabel->text());
+                m_lineEndLabel->setText(t1);
+            }
+        });
+        dirl->addWidget(m_lineDirectCombo, 1);
+        dirl->addWidget(m_lineFlipDirBtn);
+        ll->addWidget(mkFormRow("运动方向:", dirRow));
+
+        // 运动控制参数卡片
+        auto *motionCard = new QWidget;
+        motionCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
+        auto *mcl = new QVBoxLayout(motionCard);
+        mcl->setContentsMargins(6,6,6,6);
+        mcl->setSpacing(3);
+        auto *mTitle = new QLabel("运动控制参数");
+        mTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
+        mcl->addWidget(mTitle);
+
+        m_lineMaxSpeedSpin = new QDoubleSpinBox;
+        m_lineMaxSpeedSpin->setRange(0.01, 5.0);
+        m_lineMaxSpeedSpin->setSingleStep(0.05);
+        m_lineMaxSpeedSpin->setValue(0.5);
+        m_lineMaxSpeedSpin->setSuffix(" m/s");
+        mcl->addWidget(mkFormRow("最大速度:", m_lineMaxSpeedSpin));
+
+        m_lineMaxAccSpin = new QDoubleSpinBox;
+        m_lineMaxAccSpin->setRange(0.01, 3.0);
+        m_lineMaxAccSpin->setSingleStep(0.05);
+        m_lineMaxAccSpin->setValue(0.3);
+        m_lineMaxAccSpin->setSuffix(" m/s²");
+        mcl->addWidget(mkFormRow("最大加速度:", m_lineMaxAccSpin));
+
+        m_lineMaxDecSpin = new QDoubleSpinBox;
+        m_lineMaxDecSpin->setRange(0.01, 3.0);
+        m_lineMaxDecSpin->setSingleStep(0.05);
+        m_lineMaxDecSpin->setValue(0.3);
+        m_lineMaxDecSpin->setSuffix(" m/s²");
+        mcl->addWidget(mkFormRow("最大减速度:", m_lineMaxDecSpin));
+
+        m_lineMaxRotSpin = new QDoubleSpinBox;
+        m_lineMaxRotSpin->setRange(1.0, 360.0);
+        m_lineMaxRotSpin->setSingleStep(5.0);
+        m_lineMaxRotSpin->setValue(60.0);
+        m_lineMaxRotSpin->setSuffix(" °/s");
+        mcl->addWidget(mkFormRow("最大角速度:", m_lineMaxRotSpin));
+
+        m_lineReachDistSpin = new QDoubleSpinBox;
+        m_lineReachDistSpin->setRange(0.01, 1.0);
+        m_lineReachDistSpin->setSingleStep(0.01);
+        m_lineReachDistSpin->setValue(0.1);
+        m_lineReachDistSpin->setSuffix(" m");
+        mcl->addWidget(mkFormRow("到达距离精度:", m_lineReachDistSpin));
+
+        m_lineReachAngleSpin = new QDoubleSpinBox;
+        m_lineReachAngleSpin->setRange(0.1, 45.0);
+        m_lineReachAngleSpin->setSingleStep(0.1);
+        m_lineReachAngleSpin->setValue(0.5);
+        m_lineReachAngleSpin->setSuffix(" °");
+        mcl->addWidget(mkFormRow("到达角度精度:", m_lineReachAngleSpin));
+
+        m_lineRoadWidthSpin = new QDoubleSpinBox;
+        m_lineRoadWidthSpin->setRange(0.5, 10.0);
+        m_lineRoadWidthSpin->setSingleStep(0.5);
+        m_lineRoadWidthSpin->setValue(4.0);
+        m_lineRoadWidthSpin->setSuffix(" m");
+        mcl->addWidget(mkFormRow("路线宽度:", m_lineRoadWidthSpin));
+
+        ll->addWidget(motionCard);
+        pl->addWidget(m_linePropGroup);
+
+        // ==========================================
+        // 3. 操作按钮栏
+        // ==========================================
+        auto *btnRow = new QHBoxLayout;
+        btnRow->setSpacing(6);
+        m_propApplyBtn = new QPushButton("应用修改");
+        m_propDeleteBtn = new QPushButton("删除图元");
+        m_propApplyBtn->setCursor(Qt::PointingHandCursor);
+        m_propDeleteBtn->setCursor(Qt::PointingHandCursor);
+        m_propApplyBtn->setStyleSheet(
+            "QPushButton{background:#1296DB; color:#fff; font-weight:bold; border:none; border-radius:4px; padding:6px 12px; font-size:12px;}"
+            "QPushButton:hover{background:#23a2e6;}");
+        m_propDeleteBtn->setStyleSheet(
+            "QPushButton{background:#c0392b; color:#fff; font-weight:bold; border:none; border-radius:4px; padding:6px 12px; font-size:12px;}"
+            "QPushButton:hover{background:#d9534f;}");
+        connect(m_propApplyBtn,  &QPushButton::clicked, this, &MapEditWidget::applyPropsEdit);
+        connect(m_propDeleteBtn, &QPushButton::clicked, this, &MapEditWidget::deleteSelected);
+        btnRow->addWidget(m_propApplyBtn, 1);
+        btnRow->addWidget(m_propDeleteBtn, 1);
+        pl->addLayout(btnRow);
 
         m_propsPanel = card;
         m_propsPanel->setVisible(false);
@@ -769,11 +1000,11 @@ void MapEditWidget::setupUI()
         auto [card, tl2] = mkCard("要素列表");
 
         m_tableTypeCombo = new QComboBox;
-        m_tableTypeCombo->addItem("节点",   "point");
-        m_tableTypeCombo->addItem("线段",   "line");
-        m_tableTypeCombo->addItem("曲线",   "curve");
-        m_tableTypeCombo->addItem("充电桩", "charge");
-        m_tableTypeCombo->addItem("高精度", "highPrecision");
+        m_tableTypeCombo->addItem("普通站点", "point");
+        m_tableTypeCombo->addItem("线段",     "line");
+        m_tableTypeCombo->addItem("曲线",     "curve");
+        m_tableTypeCombo->addItem("充电点",   "charge");
+        m_tableTypeCombo->addItem("精定位点", "highPrecision");
         m_tableTypeCombo->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:2px 4px; font-size:12px;");
         connect(m_tableTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this]() {
@@ -815,6 +1046,9 @@ void MapEditWidget::setupUI()
     rl->addStretch();
     cl->addWidget(rightOuter);
     root->addWidget(content, 1);
+
+    setFocusPolicy(Qt::StrongFocus);
+    setupShortcuts();
 }
 
 // ── Snap helpers ──────────────────────────────────────────────────────────────
@@ -950,40 +1184,6 @@ void MapEditWidget::updateRulers()
         m_leftRuler->syncWithView(m_mapView, m_worldL, m_worldB, m_worldR, m_worldT, m_imgW, m_imgH);
 }
 
-// ── Draw mode ─────────────────────────────────────────────────────────────────
-
-void MapEditWidget::setDrawMode(int mode)
-{
-    cancelDraw();
-    m_drawStatus = static_cast<DrawStatus>(mode);
-
-    for (auto it = m_toolBtns.begin(); it != m_toolBtns.end(); ++it)
-        if (it.value()) it.value()->setChecked(it.key() == mode);
-
-    bool handles = (mode == Drag);
-    for (auto &lst : m_curveHandles.values())
-        for (auto *h : lst) if (h) h->setVisible(handles);
-
-    if (mode == Drag) {
-        m_mapView->setDragMode(QGraphicsView::NoDrag);
-        m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
-    } else {
-        m_mapView->setDragMode(QGraphicsView::NoDrag);
-        m_mapView->viewport()->setCursor(Qt::CrossCursor);
-    }
-}
-
-void MapEditWidget::cancelDraw()
-{
-    m_drawHasP1 = false;
-    m_drawP1    = {};
-    m_drawP1Id.clear();
-    m_curveCtrlPts.clear();
-    m_curveCtrlIds.clear();
-    clearPreview();
-    updateSnapIndicator({});
-}
-
 // ── Data loading ──────────────────────────────────────────────────────────────
 
 void MapEditWidget::loadMapData(std::function<void()> onDone)
@@ -1045,6 +1245,11 @@ void MapEditWidget::loadMapData(std::function<void()> onDone)
                 debugLog(QString("[loadMapData] thumbnail download ok=%1 bytes=%2").arg(ok).arg(raw.size()));
                 if (!ok) { if (onDone) onDone(); return; }
                 m_mapImage.loadFromData(raw);
+                m_mapImage = m_mapImage.convertToFormat(QImage::Format_RGB32);
+                m_originalMapImage = m_mapImage;
+                m_undoStack.clear();
+                m_redoStack.clear();
+                updateHistoryButtons();
                 m_imgW = m_mapImage.width();
                 m_imgH = m_mapImage.height();
                 debugLog(QString("[loadMapData] FINAL(thumbnail) imgW=%1 imgH=%2 worldL=%3 worldB=%4 worldR=%5 worldT=%6")
@@ -1086,7 +1291,11 @@ void MapEditWidget::loadMapData(std::function<void()> onDone)
                             .arg(img.isNull()).arg(img.width()).arg(img.height()));
                         if (img.isNull()) { useThumbnailFallback(); return; }
 
-                        m_mapImage = img;
+                        m_mapImage = img.convertToFormat(QImage::Format_RGB32);
+                        m_originalMapImage = m_mapImage;
+                        m_undoStack.clear();
+                        m_redoStack.clear();
+                        updateHistoryButtons();
                         m_imgW = img.width();
                         m_imgH = img.height();
                         // ROS map_server 标准：yaml 的 origin 本身就是 pgm 左下角像素对应的
@@ -1271,81 +1480,160 @@ void MapEditWidget::renderMap()
     m_selItem       = nullptr;
     m_snapIndicator = nullptr;   // scene cleared
     m_robotItem     = nullptr;  // scene cleared
+    m_mapBgItem     = nullptr;
 
     if (!m_mapImage.isNull()) {
-        auto *bg = m_scene->addPixmap(QPixmap::fromImage(m_mapImage));
-        bg->setZValue(-100);
+        m_mapBgItem = m_scene->addPixmap(QPixmap::fromImage(m_mapImage));
+        m_mapBgItem->setTransformationMode(Qt::SmoothTransformation);
+        m_mapBgItem->setZValue(-100);
     }
 
-    auto addNode = [&](const QJsonObject &pt, const QColor &col, int r, const QString &type, bool visible = true) {
+    double pxPerMeterX = (m_imgW > 0 && (m_worldR > m_worldL)) ? (m_imgW / (m_worldR - m_worldL)) : 20.0;
+    double pxPerMeterY = (m_imgH > 0 && (m_worldT > m_worldB)) ? (m_imgH / (m_worldT - m_worldB)) : 20.0;
+
+    auto addNode = [&](const QJsonObject &pt, const QColor &fillCol, const QColor &borderCol, const QString &type, bool visible = true) {
         QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
         QString id = pt.value("id").toString();
-        auto *e = m_scene->addEllipse(-r, -r, r*2, r*2,
-                                       QPen(col.darker(130), 1.5), QBrush(col));
-        e->setPos(sp);
-        e->setZValue(10);
-        e->setData(0, type); e->setData(1, id);
-        e->setVisible(visible);
-        m_featureItems[type + "_" + id] = e;
-        auto *lbl = m_scene->addText(pt.value("name").toString());
-        lbl->setDefaultTextColor(QColor(210, 225, 240));
-        lbl->setZValue(11);
-        QFont f = lbl->font(); f.setPointSizeF(7); lbl->setFont(f);
-        lbl->setPos(sp.x() + r + 2, sp.y() - 7);
+        QString nameText = pt.value("name").toString();
+        if (nameText.isEmpty()) nameText = id;
+
+        double rectW = 0, rectH = 0;
+        QPainterPath crossPath;
+        QPainterPath path = MapPgmUtil::createPointPath(pxPerMeterX, pxPerMeterY, &rectW, &rectH, &crossPath, 0.0);
+
+        QFont f("Segoe UI");
+        double ptSize = qBound(4.0, rectH * 0.35, 7.0);
+        f.setPointSizeF(ptSize);
+        f.setBold(true);
+        QFontMetrics fm(f);
+        int tw = fm.horizontalAdvance(nameText);
+
+        QPen pen(borderCol, 0.8);
+        auto *item = m_scene->addPath(path, pen, QBrush(fillCol));
+        item->setPos(sp);
+        item->setZValue(10);
+        item->setData(0, type); item->setData(1, id); item->setData(2, fillCol);
+        item->setVisible(visible);
+
+        // 内部红色实线精确定位小十字 (居中位于 (0,0)，与路线精准交汇，不遮挡文字)
+        QPen crossPen(QColor("#E74C3C"), 0.8, Qt::SolidLine);
+        crossPen.setCapStyle(Qt::FlatCap);
+        auto *crossItem = m_scene->addPath(crossPath, crossPen);
+        crossItem->setParentItem(item);
+        crossItem->setPos(0, 0);
+        crossItem->setAcceptedMouseButtons(Qt::NoButton);
+        crossItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        crossItem->setData(0, type); crossItem->setData(1, id); crossItem->setData(2, fillCol);
+
+        // 若配置了车头朝向角，绘制微型方向指针；长方形与名称本身保持水平正向，确保文字永远清晰可读
+        double yawVal = 0.0;
+        if (pt.contains("yaw")) yawVal = pt.value("yaw").toDouble();
+        else if (pt.contains("robotYaw")) yawVal = pt.value("robotYaw").toDouble();
+        else if (pt.contains("theta")) yawVal = pt.value("theta").toDouble() * M_PI / 180.0;
+        if (yawVal != 0.0) {
+            double angleDeg = 90.0 - yawVal * 180.0 / M_PI;
+            double rad = qDegreesToRadians(angleDeg);
+            double pr = rectW / 2.0 + 2.5;
+            QPointF pHead(std::sin(rad) * pr, -std::cos(rad) * pr);
+            QPolygonF ptr;
+            QPointF norm(-std::cos(rad) * 2.0, -std::sin(rad) * 2.0);
+            ptr << pHead + QPointF(std::sin(rad) * 3.5, -std::cos(rad) * 3.5)
+                << pHead + norm
+                << pHead - norm;
+            auto *pItem = m_scene->addPolygon(ptr, QPen(Qt::NoPen), QBrush(borderCol));
+            pItem->setParentItem(item);
+            pItem->setAcceptedMouseButtons(Qt::NoButton);
+            pItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        }
+
+        m_featureItems[type + "_" + id] = item;
+
+        // 站点名称：直接绘制在矩形框下部，水平居中，与上方红色十字完全分离无遮挡，深色高对比度，尺寸紧凑工整
+        auto *lbl = m_scene->addText(nameText, f);
+        lbl->document()->setDocumentMargin(0);
+        lbl->setDefaultTextColor(QColor("#1A1A1A"));
+        lbl->setParentItem(item);
+        double textY = (rectH >= 12.0) ? (rectH * 0.16) : (rectH / 2.0 + 1.0);
+        lbl->setPos(-tw / 2.0, textY);
+        lbl->setAcceptedMouseButtons(Qt::NoButton);
+        lbl->setFlag(QGraphicsItem::ItemIsSelectable, false);
         lbl->setVisible(visible);
     };
 
-    for (const auto &v : m_points)  addNode(v.toObject(), QColor("#4a9fd4"), 5, "point");
-    for (const auto &v : m_charges) addNode(v.toObject(), QColor("#2ecc71"), 7, "charge");
-    // 高精度点：黄色圆点，与普通点统一大小和样式
-    for (const auto &v : m_highPrecisionPoints) addNode(v.toObject(), QColor("#f2c200"), 5, "highPrecision", true);
+    for (const auto &v : m_points)              addNode(v.toObject(), QColor(210, 230, 250, 235), QColor(41, 128, 185, 240), "point");
+    for (const auto &v : m_charges)             addNode(v.toObject(), QColor(254, 243, 199, 235), QColor(217, 119, 6, 240), "charge");
+    for (const auto &v : m_highPrecisionPoints) addNode(v.toObject(), QColor(254, 226, 226, 235), QColor(220, 38, 38, 240), "highPrecision", true);
 
     for (const auto &v : m_lines) {
         QJsonObject ln = v.toObject();
         QPointF a = worldToScene(ln.value("x1").toDouble(), ln.value("y1").toDouble());
         QPointF b = worldToScene(ln.value("x2").toDouble(), ln.value("y2").toDouble());
         QString id     = ln.value("id").toString();
-        int direct     = ln.value("direct").toInt(100);
-        QPen pen(direct == 10 ? QColor("#2ecc71") : QColor("#1abc9c"), 1.8);
+        int direct     = ln.value("direct").toInt(10);
+        // 直线：清爽天蓝色，线宽 1.5px (抗锯齿圆头连接)
+        QPen pen(QColor("#1296DB"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
         auto *li = m_scene->addLine(a.x(), a.y(), b.x(), b.y(), pen);
-        li->setZValue(5); li->setData(0, "line"); li->setData(1, id);
+        li->setZValue(5); li->setData(0, "line"); li->setData(1, id); li->setData(2, pen.color());
         m_featureItems["line_" + id] = li;
-        // Direction arrow at midpoint
-        QPointF mid = (a + b) / 2, dir = b - a;
+
+        // 线路导向标 (单向或双向)
+        QPointF dir = b - a;
         double len = std::hypot(dir.x(), dir.y());
         if (len > 1e-3) {
             dir /= len;
-            QPointF n(-dir.y(), dir.x());
-            QPolygonF arr; arr << mid+dir*7 << mid-dir*7+n*4 << mid-dir*7-n*4;
-            m_scene->addPolygon(arr, QPen(Qt::NoPen), QBrush(pen.color()))->setZValue(6);
+            QPointF mid = (a + b) / 2.0;
+            QList<QPolygonF> arrows = MapPgmUtil::createDirectionArrows(mid, dir, direct, len);
+            for (const auto &arr : arrows) {
+                auto *arrItem = m_scene->addPolygon(arr, QPen(Qt::NoPen), QBrush(pen.color()));
+                arrItem->setParentItem(li);
+                arrItem->setZValue(6);
+                arrItem->setAcceptedMouseButtons(Qt::NoButton);
+            }
         }
     }
 
     for (const auto &v : m_curves) {
         QJsonObject cv = v.toObject();
         QString id     = cv.value("id").toString();
-        int direct     = cv.value("direct").toInt(100);
-        QPen pen(direct == 10 ? QColor("#a29bfe") : QColor("#6c5ce7"), 1.8);
+        int direct     = cv.value("direct").toInt(10);
+        // 3阶贝塞尔曲线：鲜明典雅紫色，线宽 1.5px (抗锯齿圆头连接)
+        QPen pen(QColor("#9B59B6"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
 
         // 支持多阶贝塞尔曲线: 优先使用 controlPoints 数组
         QJsonArray ctrlArr = cv.value("controlPoints").toArray();
         QPainterPath path;
+        QList<QPointF> curveScenePts;
         if (!ctrlArr.isEmpty()) {
-            QList<QPointF> pts;
-            for (const auto &pv : ctrlArr)
-                pts.append(worldToScene(pv.toObject().value("x").toDouble(),
-                                        pv.toObject().value("y").toDouble()));
-            path = MapPgmUtil::getBezierPath(pts);
+            for (const auto &pv : ctrlArr) {
+                QPointF sp = worldToScene(pv.toObject().value("x").toDouble(),
+                                          pv.toObject().value("y").toDouble());
+                curveScenePts.append(sp);
+            }
+            path = MapPgmUtil::getBezierPath(curveScenePts);
         } else {
             // 兼容旧格式: cx/cy 二次贝塞尔
             QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
             QPointF pc = worldToScene(cv.value("cx").toDouble(),  cv.value("cy").toDouble());
             QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+            curveScenePts.append(p1); curveScenePts.append(pc); curveScenePts.append(p2);
             path.moveTo(p1); path.quadTo(pc, p2);
         }
         auto *pi = m_scene->addPath(path, pen);
-        pi->setZValue(5); pi->setData(0, "curve"); pi->setData(1, id);
+        pi->setZValue(5); pi->setData(0, "curve"); pi->setData(1, id); pi->setData(2, pen.color());
         m_featureItems["curve_" + id] = pi;
+
+        if (curveScenePts.size() >= 2) {
+            double cLen = std::hypot(curveScenePts.last().x() - curveScenePts.first().x(),
+                                     curveScenePts.last().y() - curveScenePts.first().y());
+            QList<QPolygonF> arrows = MapPgmUtil::createBezierDirectionArrows(curveScenePts, direct, cLen);
+            for (const auto &arr : arrows) {
+                auto *arrItem = m_scene->addPolygon(arr, QPen(Qt::NoPen), QBrush(pen.color()));
+                arrItem->setParentItem(pi);
+                arrItem->setZValue(6);
+                arrItem->setAcceptedMouseButtons(Qt::NoButton);
+            }
+        }
+
         rebuildCurveHandles(id);
     }
 
@@ -1456,11 +1744,11 @@ void MapEditWidget::rebuildCurveHandles(const QString &id)
             handles.append(nullptr);   // 端点由节点显示，不绘制手柄
             continue;
         }
-        // 点(未关联节点)用蓝色，中间控制点用橙色
-        QColor col = isEndpoint ? QColor("#4a9fd4") : QColor("#f39c12");
-        auto *h = m_scene->addEllipse(-5, -5, 10, 10,
-                                       QPen(col.darker(140), 1.5),
-                                       QBrush(col.lighter(130)));
+        // 端点未关联节点时用天蓝色，中间控制点用白底蓝边精致圆点
+        QColor col = isEndpoint ? QColor("#5DADE2") : QColor("#3498DB");
+        auto *h = m_scene->addEllipse(-4, -4, 8, 8,
+                                       QPen(QColor("#2980B9"), 1.2),
+                                       QBrush(isEndpoint ? QColor("#D4E6F1") : Qt::white));
         h->setPos(scenePts[i]);
         h->setZValue(50);
         h->setData(Qt::UserRole,   id);
@@ -1468,8 +1756,8 @@ void MapEditWidget::rebuildCurveHandles(const QString &id)
         h->setVisible(m_drawStatus == Drag);
         handles.append(h);
     }
-    // 控制臂(相邻控制点之间的虚线)
-    auto arm = QPen(QColor(240,180,50,100), 1, Qt::DotLine);
+    // 控制臂(相邻控制点之间的虚线参考线)
+    auto arm = QPen(QColor(170, 185, 215, 180), 1, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
     for (int i = 0; i + 1 < scenePts.size(); ++i) {
         m_scene->addLine(scenePts[i].x(), scenePts[i].y(),
                          scenePts[i+1].x(), scenePts[i+1].y(), arm)->setZValue(49);
@@ -1508,7 +1796,25 @@ void MapEditWidget::updateCurveShape(const QString &id)
     }
     QPainterPath path = MapPgmUtil::getBezierPath(pts);
     auto *pi = qgraphicsitem_cast<QGraphicsPathItem*>(m_featureItems.value("curve_" + id));
-    if (pi) pi->setPath(path);
+    if (pi) {
+        pi->setPath(path);
+        // 同步更新曲线中点箭头
+        for (auto *child : pi->childItems()) {
+            delete child;
+        }
+        if (pts.size() >= 2) {
+            int direct = cv.value("direct").toInt(10);
+            QColor col = pi->pen().color();
+            double cLen = std::hypot(pts.last().x() - pts.first().x(), pts.last().y() - pts.first().y());
+            QList<QPolygonF> arrows = MapPgmUtil::createBezierDirectionArrows(pts, direct, cLen);
+            for (const auto &arr : arrows) {
+                auto *arrItem = m_scene->addPolygon(arr, QPen(Qt::NoPen), QBrush(col));
+                arrItem->setParentItem(pi);
+                arrItem->setZValue(6);
+                arrItem->setAcceptedMouseButtons(Qt::NoButton);
+            }
+        }
+    }
 }
 
 // ── Preview rubber-band ───────────────────────────────────────────────────────
@@ -1522,11 +1828,11 @@ void MapEditWidget::updatePreview(const QPointF &sp)
         pts.append(sp);
         if (pts.size() >= 2) {
             QPainterPath path = MapPgmUtil::getBezierPath(pts);
-            QPen pen(QColor(108, 92, 231, 200), 1.6, Qt::DashLine);
+            QPen pen(QColor("#9B59B6"), 1.5, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
             m_previewItem = m_scene->addPath(path, pen);
             m_previewItem->setZValue(100);
             // 显示控制点连线(辅助参考线)
-            QPen aidPen(QColor(250, 190, 50, 120), 1.0, Qt::DotLine);
+            QPen aidPen(QColor(170, 185, 215, 180), 1.0, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
             for (int i = 0; i + 1 < pts.size(); ++i) {
                 auto *ln = m_scene->addLine(pts[i].x(), pts[i].y(), pts[i+1].x(), pts[i+1].y(), aidPen);
                 ln->setZValue(99);
@@ -1537,7 +1843,7 @@ void MapEditWidget::updatePreview(const QPointF &sp)
     }
     if (!m_drawHasP1) return;
     if (m_drawStatus == Line || m_drawStatus == Curve) {
-        QPen pen(QColor(250, 190, 50, 170), 1.4, Qt::DashLine);
+        QPen pen(m_drawStatus == Curve ? QColor("#9B59B6") : QColor("#5DADE2"), 1.5, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
         m_previewItem = m_scene->addLine(m_drawP1.x(), m_drawP1.y(), sp.x(), sp.y(), pen);
         m_previewItem->setZValue(100);
     }
@@ -1548,6 +1854,127 @@ void MapEditWidget::clearPreview()
     if (m_previewItem) { m_scene->removeItem(m_previewItem); delete m_previewItem; m_previewItem = nullptr; }
     for (auto *ln : m_previewAids) { m_scene->removeItem(ln); delete ln; }
     m_previewAids.clear();
+}
+
+// ── 栅格地图涂绘与历史 ────────────────────────────────────────────────────────
+
+void MapEditWidget::updateHistoryButtons()
+{
+    if (m_undoBtn) m_undoBtn->setEnabled(!m_undoStack.isEmpty());
+    if (m_redoBtn) m_redoBtn->setEnabled(!m_redoStack.isEmpty());
+}
+
+void MapEditWidget::pushMapUndo()
+{
+    if (m_mapImage.isNull()) return;
+    m_undoStack.append(m_mapImage);
+    if (m_undoStack.size() > 30) m_undoStack.removeFirst();
+    m_redoStack.clear();
+    m_dirty = true;
+    updateHistoryButtons();
+}
+
+void MapEditWidget::undoMap()
+{
+    if (m_undoStack.isEmpty()) return;
+    m_redoStack.append(m_mapImage);
+    if (m_redoStack.size() > 30) m_redoStack.removeFirst();
+    m_mapImage = m_undoStack.takeLast();
+    if (m_mapBgItem) {
+        m_mapBgItem->setPixmap(QPixmap::fromImage(m_mapImage));
+        m_mapBgItem->setTransformationMode(Qt::SmoothTransformation);
+    }
+    m_dirty = true;
+    updateHistoryButtons();
+}
+
+void MapEditWidget::redoMap()
+{
+    if (m_redoStack.isEmpty()) return;
+    m_undoStack.append(m_mapImage);
+    if (m_undoStack.size() > 30) m_undoStack.removeFirst();
+    m_mapImage = m_redoStack.takeLast();
+    if (m_mapBgItem) {
+        m_mapBgItem->setPixmap(QPixmap::fromImage(m_mapImage));
+        m_mapBgItem->setTransformationMode(Qt::SmoothTransformation);
+    }
+    m_dirty = true;
+    updateHistoryButtons();
+}
+
+void MapEditWidget::onUndo()
+{
+    undoMap();
+}
+
+void MapEditWidget::onRedo()
+{
+    redoMap();
+}
+
+void MapEditWidget::paintStroke(const QPointF &from, const QPointF &to, bool isPoint)
+{
+    if (m_mapImage.isNull()) return;
+
+    if (m_mapImage.format() != QImage::Format_RGB32 && m_mapImage.format() != QImage::Format_ARGB32_Premultiplied) {
+        m_mapImage = m_mapImage.convertToFormat(QImage::Format_RGB32);
+    }
+
+    QPainter painter(&m_mapImage);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+    // 画笔 (Brush): 涂黑 (RGB 0, 0, 0 / 标记障碍物/墙体)
+    // 橡皮 (Eraser): 擦除为纯白 (RGB 255, 255, 255 / 标记为可通行自由空间)
+    QColor color = (m_drawStatus == Brush) ? QColor(0, 0, 0) : QColor(255, 255, 255);
+    QPen pen(color, m_brushSize, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    if (isPoint) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QBrush(color));
+        double r = m_brushSize / 2.0;
+        painter.drawEllipse(to, r, r);
+    } else {
+        painter.setPen(pen);
+        painter.setBrush(QBrush(color));
+        painter.drawLine(from, to);
+    }
+    painter.end();
+
+    if (m_mapBgItem) {
+        m_mapBgItem->setPixmap(QPixmap::fromImage(m_mapImage));
+        m_mapBgItem->setTransformationMode(Qt::SmoothTransformation);
+    }
+}
+
+void MapEditWidget::setDrawMode(int mode)
+{
+    cancelDraw();
+    m_drawStatus = static_cast<DrawStatus>(mode);
+    for (auto it = m_toolBtns.begin(); it != m_toolBtns.end(); ++it) {
+        it.value()->setChecked(it.key() == mode);
+    }
+    if (m_drawStatus == Drag) {
+        m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
+    } else if (m_drawStatus == Brush || m_drawStatus == Eraser) {
+        m_mapView->viewport()->setCursor(Qt::CrossCursor);
+    } else {
+        m_mapView->viewport()->setCursor(Qt::CrossCursor);
+    }
+    bool showH = (m_drawStatus == Drag);
+    for (auto &lst : m_curveHandles.values())
+        for (auto *h : lst) if (h) h->setVisible(showH);
+}
+
+void MapEditWidget::cancelDraw()
+{
+    m_drawHasP1 = false;
+    m_drawP1 = {};
+    m_drawP1Id.clear();
+    m_curveCtrlPts.clear();
+    m_curveCtrlIds.clear();
+    m_isPainting = false;
+    clearPreview();
+    updateSnapIndicator({});
 }
 
 // ── Feature addition ──────────────────────────────────────────────────────────
@@ -1572,8 +1999,9 @@ void MapEditWidget::addPoint(const QPointF &sp)
     QPointF w = sceneToWorld(sp.x(), sp.y());
     int n = nextIdNum(m_points, "p_");
     QJsonObject pt;
-    pt["id"] = QString("p_%1").arg(n); pt["name"] = QString("P%1").arg(n);
+    pt["id"] = QString("p_%1").arg(n); pt["name"] = QString("LM%1").arg(n);
     pt["x"] = w.x(); pt["y"] = w.y();
+    pt["yaw"] = 0.0;
     m_points.append(pt);
     m_dirty = true;
     renderMap();
@@ -1585,7 +2013,7 @@ void MapEditWidget::addCharge(const QPointF &sp, double epcX, double epcY, doubl
     QPointF w = sceneToWorld(sp.x(), sp.y());
     int n = nextIdNum(m_charges, "c_");
     QJsonObject ch;
-    ch["id"] = QString("c_%1").arg(n); ch["name"] = QString("充电%1").arg(n);
+    ch["id"] = QString("c_%1").arg(n); ch["name"] = QString("CP%1").arg(n);
     ch["x"] = w.x(); ch["y"] = w.y();
     // 充电桩的设备相对定位末端坐标(end-effector position coordinates)
     ch["epc_x"] = epcX;
@@ -1613,7 +2041,7 @@ void MapEditWidget::addHighPrecisionPoint(const QPointF &sp, double epcX, double
     QPointF w = sceneToWorld(sp.x(), sp.y());
     int n = nextIdNum(m_highPrecisionPoints, "hp_");
     QJsonObject hp;
-    hp["id"] = QString("hp_%1").arg(n); hp["name"] = QString("高精%1").arg(n);
+    hp["id"] = QString("hp_%1").arg(n); hp["name"] = QString("TL%1").arg(n);
     hp["x"] = w.x(); hp["y"] = w.y();
     // 高精度点的设备相对定位末端坐标(end-effector position coordinates)
     hp["epc_x"] = epcX;
@@ -1704,12 +2132,12 @@ void MapEditWidget::addDevicePoint(const QString &type)
             QPointF sp = worldToScene(m_carX, m_carY);
             if (type == "charge") {
                 addCharge(sp, m_epcX, m_epcY, m_epcTheta, m_carYaw, m_carTheta);
-                Toast::success(this, QString("已在设备位置(%1, %2)添加充电桩点\nepc(%3, %4)")
+                Toast::success(this, QString("已在设备位置(%1, %2)添加充电点\nepc(%3, %4)")
                     .arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2)
                     .arg(m_epcX, 0, 'f', 2).arg(m_epcY, 0, 'f', 2));
             } else if (type == "highPrecision") {
                 addHighPrecisionPoint(sp, m_epcX, m_epcY, m_epcTheta, m_carYaw, m_carTheta);
-                Toast::success(this, QString("已在设备位置(%1, %2)添加高精度点\nepc(%3, %4)")
+                Toast::success(this, QString("已在设备位置(%1, %2)添加精定位点\nepc(%3, %4)")
                     .arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2)
                     .arg(m_epcX, 0, 'f', 2).arg(m_epcY, 0, 'f', 2));
             }
@@ -1728,7 +2156,7 @@ void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
     QJsonObject ln;
     ln["id"] = QString("l_%1").arg(n); ln["name"] = QString("线%1").arg(n);
     ln["x1"] = wa.x(); ln["y1"] = wa.y(); ln["x2"] = wb.x(); ln["y2"] = wb.y();
-    ln["direct"] = 100; ln["startid"] = startId; ln["endid"] = endId;
+    ln["direct"] = 10; ln["startid"] = startId; ln["endid"] = endId; // 默认双向 ↔
     m_lines.append(ln);
     m_dirty = true;
     renderMap();
@@ -1748,7 +2176,7 @@ void MapEditWidget::addCurve(const QPointF &a, const QPointF &b,
     cv["x1"] = wa.x(); cv["y1"] = wa.y();
     cv["cx"] = wc.x(); cv["cy"] = wc.y();
     cv["x2"] = wb.x(); cv["y2"] = wb.y();
-    cv["direct"] = 100; cv["startid"] = startId; cv["endid"] = endId;
+    cv["direct"] = 10; cv["startid"] = startId; cv["endid"] = endId; // 默认双向 ↔
     m_curves.append(cv);
     m_dirty = true;
     renderMap();
@@ -1800,7 +2228,7 @@ void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
     QJsonObject cv;
     cv["id"]   = QString("b_%1").arg(n);
     cv["name"] = QString("曲%1").arg(n);
-    cv["direct"] = 100;
+    cv["direct"] = 10; // 默认双向 ↔
 
     // 起终点(世界坐标)
     QPointF wStart = sceneToWorld(scenePts.first().x(), scenePts.first().y());
@@ -1871,7 +2299,10 @@ QColor itemOrigColor(QGraphicsItem *item)
 {
     if (auto *e = qgraphicsitem_cast<QGraphicsEllipseItem*>(item)) return e->brush().color();
     if (auto *l = qgraphicsitem_cast<QGraphicsLineItem*>(item))    return l->pen().color();
-    if (auto *p = qgraphicsitem_cast<QGraphicsPathItem*>(item))    return p->pen().color();
+    if (auto *p = qgraphicsitem_cast<QGraphicsPathItem*>(item)) {
+        if (item->data(0).toString() == "curve") return p->pen().color();
+        return p->brush().color().isValid() ? p->brush().color() : p->pen().color();
+    }
     return {};
 }
 
@@ -1882,11 +2313,43 @@ void setItemColor(QGraphicsItem *item, const QColor &col, bool selected)
         e->setPen(pen);
         e->setBrush(col);
     } else if (auto *l = qgraphicsitem_cast<QGraphicsLineItem*>(item)) {
-        QPen pen = l->pen(); pen.setColor(col); pen.setWidthF(selected ? 3.2 : 1.8);
+        QPen pen = l->pen(); pen.setColor(col); pen.setWidthF(selected ? 2.6 : 1.5);
+        pen.setCapStyle(Qt::RoundCap); pen.setJoinStyle(Qt::RoundJoin);
         l->setPen(pen);
+        for (auto *child : item->childItems()) {
+            if (auto *poly = qgraphicsitem_cast<QGraphicsPolygonItem*>(child)) {
+                poly->setBrush(QBrush(col));
+            }
+        }
     } else if (auto *p = qgraphicsitem_cast<QGraphicsPathItem*>(item)) {
-        QPen pen = p->pen(); pen.setColor(col); pen.setWidthF(selected ? 3.2 : 1.8);
-        p->setPen(pen);
+        QString type = item->data(0).toString();
+        if (type == "curve") {
+            // 贝塞尔曲线：保持无画刷填充 (NoBrush)，严禁填充闭合区域，仅加粗线条画笔并变色高亮
+            p->setBrush(Qt::NoBrush);
+            QPen pen = p->pen();
+            pen.setColor(col);
+            pen.setWidthF(selected ? 2.6 : 1.5);
+            pen.setCapStyle(Qt::RoundCap); pen.setJoinStyle(Qt::RoundJoin);
+            p->setPen(pen);
+            for (auto *child : item->childItems()) {
+                if (auto *poly = qgraphicsitem_cast<QGraphicsPolygonItem*>(child)) {
+                    poly->setBrush(QBrush(col));
+                }
+            }
+        } else {
+            // 点图元(QGraphicsPathItem): 保持节点原本类型色彩，选中时加深边框并高亮
+            QColor baseCol = item->data(2).isValid() ? item->data(2).value<QColor>() : col;
+            if (selected) {
+                QPen pen(QColor("#2ECC71"), 1.2);
+                p->setPen(pen);
+                QColor fillCol = baseCol.lighter(115);
+                p->setBrush(QBrush(fillCol));
+            } else {
+                QPen pen(baseCol.darker(130), 0.8);
+                p->setPen(pen);
+                p->setBrush(QBrush(baseCol));
+            }
+        }
     }
 }
 
@@ -1911,8 +2374,12 @@ void MapEditWidget::selectFeatureAt(const QPointF &sp)
 {
     const double tol = hitTolScene(12.0);
     for (auto *it : m_scene->items(QRectF(sp.x()-tol, sp.y()-tol, tol*2, tol*2))) {
-        QString type = it->data(0).toString();
-        QString id   = it->data(1).toString();
+        QGraphicsItem *target = it;
+        if (!target->data(0).isValid() && target->parentItem()) {
+            target = target->parentItem();
+        }
+        QString type = target->data(0).toString();
+        QString id   = target->data(1).toString();
         if (!type.isEmpty()) { showFeatureProperties(type, id); return; }
     }
     clearSelection();
@@ -1953,57 +2420,92 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
     m_selItem = newSel;
     applySelectColor(m_selItem);
 
-    static const QMap<QString,QString> names = {
-        {"point","普通节点"},{"line","线段"},{"curve","贝塞尔曲线"},
-        {"charge","充电桩"},{"highPrecision","高精度节点"}
-    };
-    m_propTypeLabel->setText("类型: " + names.value(realType, realType));
-    m_propIdEdit->setText(realId);
-    m_propNameEdit->setText(obj.value("name").toString());
-    bool hasDir = (realType == "line" || realType == "curve");
-    m_propDirectRow->setVisible(hasDir);
-    if (hasDir) m_propDirectCombo->setCurrentIndex(obj.value("direct").toInt(100) == 10 ? 1 : 0);
-
-    // 点类型切换: 仅当选中的是点(普通/高精度/充电桩)时显示
     bool isPointKind = (realType == "point" || realType == "highPrecision" || realType == "charge");
-    m_propKindRow->setVisible(isPointKind);
-    m_propCoordRow->setVisible(isPointKind);
     if (isPointKind) {
-        int idx = m_propKindCombo->findData(realType);
-        if (idx >= 0) m_propKindCombo->setCurrentIndex(idx);
-        m_propXSpin->setValue(obj.value("x").toDouble());
-        m_propYSpin->setValue(obj.value("y").toDouble());
+        m_propHeaderTitle->setText("站点属性");
+        QString badgeText = (realType == "point") ? "LM" : ((realType == "charge") ? "CP" : "TL");
+        QString badgeStyle = (realType == "point")
+            ? "background:#1e3a5f; color:#60a5fa; border:1px solid #2563eb; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;"
+            : ((realType == "charge")
+                ? "background:#4d3800; color:#fbbf24; border:1px solid #d97706; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;"
+                : "background:#4d1414; color:#f87171; border:1px solid #dc2626; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
+        m_propHeaderBadge->setText(badgeText);
+        m_propHeaderBadge->setStyleSheet(badgeStyle);
 
-        // 充电桩/高精度点: X/Y 只读 + 显示 yaw (epc_theta) + 显示 epc_x/epc_y
+        m_stationPropGroup->setVisible(true);
+        m_linePropGroup->setVisible(false);
+
+        int idx = m_stationTypeCombo->findData(realType);
+        if (idx >= 0) m_stationTypeCombo->setCurrentIndex(idx);
+        m_stationIdEdit->setText(realId);
+        m_stationLabelEdit->setText(obj.value("name").toString());
+        m_stationXSpin->setValue(obj.value("x").toDouble());
+        m_stationYSpin->setValue(obj.value("y").toDouble());
+
+        double yawVal = 0.0;
+        if (obj.contains("yaw")) yawVal = obj.value("yaw").toDouble();
+        else if (obj.contains("robotYaw")) yawVal = obj.value("robotYaw").toDouble();
+        else if (obj.contains("theta")) yawVal = obj.value("theta").toDouble() * M_PI / 180.0;
+        m_stationYawSpin->setValue(yawVal * 180.0 / M_PI);
+
+        m_stationDockableChk->setChecked(obj.value("rdsDockable").toBool(true));
+        m_stationRotateChk->setChecked(obj.value("allowRotate").toBool(true));
+        m_stationPgvChk->setChecked(obj.value("useDownPGV").toBool(false));
+
         bool isDevicePoint = (realType == "charge" || realType == "highPrecision");
-        m_propXSpin->setReadOnly(isDevicePoint);
-        m_propYSpin->setReadOnly(isDevicePoint);
-        // 只读时用灰色背景区分，可编辑时恢复正常
-        QString roStyle = "background:#141e2a; color:#6a8898; border:1px solid rgba(255,255,255,0.06); border-radius:3px; padding:1px 3px; font-size:12px;";
-        QString rwStyle = "background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:1px 3px; font-size:12px;";
-        m_propXSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
-        m_propYSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
+        m_stationXSpin->setReadOnly(isDevicePoint);
+        m_stationYSpin->setReadOnly(isDevicePoint);
+        m_stationYawSpin->setReadOnly(isDevicePoint);
+
+        QString roStyle = "background:#12151e; color:#627284; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;";
+        QString rwStyle = "background:#131722; color:#cfddea; border:1px solid #2b384e; border-radius:4px; padding:2px 6px; font-size:12px;";
+        m_stationXSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
+        m_stationYSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
+        m_stationYawSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
 
         if (isDevicePoint) {
-            // 兼容 Vue 保存的 camelCase 和 Qt 保存的 snake_case 两种格式
             double theta = obj.contains("epc_theta") ? obj.value("epc_theta").toDouble()
                                                       : obj.value("epcTheta").toDouble();
-            m_propYawLabel->setText(QString::number(theta, 'f', 4) + " rad");
-            m_propYawRow->setVisible(true);
+            m_stationEpcYawLabel->setText(QString::number(theta, 'f', 4) + " rad (" + QString::number(theta * 180.0 / M_PI, 'f', 1) + "°)");
             double epcX = obj.contains("epc_x") ? obj.value("epc_x").toDouble()
                                                  : obj.value("epcX").toDouble();
             double epcY = obj.contains("epc_y") ? obj.value("epc_y").toDouble()
                                                  : obj.value("epcY").toDouble();
-            m_propEpcXLabel->setText(QString::number(epcX, 'f', 4));
-            m_propEpcYLabel->setText(QString::number(epcY, 'f', 4));
-            m_propEpcRow->setVisible(true);
+            m_stationEpcXLabel->setText(QString::number(epcX, 'f', 4) + " m");
+            m_stationEpcYLabel->setText(QString::number(epcY, 'f', 4) + " m");
+            m_stationEpcGroup->setVisible(true);
         } else {
-            m_propYawRow->setVisible(false);
-            m_propEpcRow->setVisible(false);
+            m_stationEpcGroup->setVisible(false);
         }
     } else {
-        m_propYawRow->setVisible(false);
-        m_propEpcRow->setVisible(false);
+        // Line or Curve
+        m_propHeaderTitle->setText("线路属性");
+        m_propHeaderBadge->setText(realType == "line" ? "直线" : "贝塞尔曲线");
+        m_propHeaderBadge->setStyleSheet("background:#17344f; color:#38bdf8; border:1px solid #0284c7; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
+
+        m_stationPropGroup->setVisible(false);
+        m_linePropGroup->setVisible(true);
+
+        m_lineTypeCombo->setCurrentIndex(realType == "line" ? 0 : 1);
+        m_lineIdEdit->setText(realId);
+        m_lineNameEdit->setText(obj.value("name").toString());
+
+        QString sId = obj.value("startid").toString();
+        QString eId = obj.value("endid").toString();
+        m_lineStartLabel->setText(sId.isEmpty() ? "--" : sId);
+        m_lineEndLabel->setText(eId.isEmpty() ? "--" : eId);
+
+        int direct = obj.value("direct").toInt(10);
+        int dIdx = (direct == 10) ? 0 : ((direct == 0) ? 1 : 2);
+        m_lineDirectCombo->setCurrentIndex(dIdx);
+
+        m_lineMaxSpeedSpin->setValue(obj.value("maxspeed").toDouble(0.5));
+        m_lineMaxAccSpin->setValue(obj.value("maxacc").toDouble(0.3));
+        m_lineMaxDecSpin->setValue(obj.value("maxdec").toDouble(0.3));
+        m_lineMaxRotSpin->setValue(obj.value("maxrot").toDouble(60.0));
+        m_lineReachDistSpin->setValue(obj.value("reachdist").toDouble(0.1));
+        m_lineReachAngleSpin->setValue(obj.value("reachangle").toDouble(0.5));
+        m_lineRoadWidthSpin->setValue(obj.value("width").toDouble(4.0));
     }
 
     m_propsPanel->setVisible(true);
@@ -2019,18 +2521,211 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
     }
 }
 
+void MapEditWidget::onSaveMap()
+{
+    // 1. Flush any dragged handle positions to JSON (支持任意阶贝塞尔)
+    for (auto it = m_curveHandles.begin(); it != m_curveHandles.end(); ++it) {
+        auto &lst = it.value();
+        if (lst.size() < 2) continue;
+        const QString &id = it.key();
+        for (int i = 0; i < m_curves.size(); ++i) {
+            QJsonObject cv = m_curves[i].toObject();
+            if (cv.value("id").toString() != id) continue;
+
+            auto handlePos = [&](int idx) -> QPointF {
+                if (lst[idx]) return lst[idx]->pos();
+                if (idx == 0)
+                    return worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
+                return worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+            };
+
+            QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+            if (ctrlArr.isEmpty() && lst.size() == 3) {
+                QList<QPointF> wPts;
+                for (int k = 0; k < lst.size(); ++k)
+                    wPts.append(sceneToWorld(handlePos(k).x(), handlePos(k).y()));
+                cv["x1"] = wPts[0].x(); cv["y1"] = wPts[0].y();
+                cv["cx"] = wPts[1].x(); cv["cy"] = wPts[1].y();
+                cv["x2"] = wPts[2].x(); cv["y2"] = wPts[2].y();
+            } else {
+                for (int j = 0; j < lst.size() && j < ctrlArr.size(); ++j) {
+                    QPointF wp = sceneToWorld(handlePos(j).x(), handlePos(j).y());
+                    QJsonObject pt = ctrlArr[j].toObject();
+                    pt["x"] = wp.x(); pt["y"] = wp.y();
+                    ctrlArr[j] = pt;
+                }
+                cv["controlPoints"] = ctrlArr;
+                if (!ctrlArr.isEmpty()) {
+                    QPointF wFirst = sceneToWorld(handlePos(0).x(), handlePos(0).y());
+                    QPointF wLast  = sceneToWorld(handlePos(lst.size()-1).x(), handlePos(lst.size()-1).y());
+                    cv["x1"] = wFirst.x(); cv["y1"] = wFirst.y();
+                    cv["x2"] = wLast.x();  cv["y2"] = wLast.y();
+                }
+            }
+            m_curves[i] = cv; break;
+        }
+    }
+
+    // 2. Build GeoJSON FeatureCollection
+    QJsonArray features;
+
+    auto makePointFeat = [](const QJsonObject &obj) -> QJsonObject {
+        QJsonArray coords;
+        coords.append(obj.value("x").toDouble());
+        coords.append(obj.value("y").toDouble());
+        coords.append(0.0);
+        QJsonObject geom; geom["type"] = "Point"; geom["coordinates"] = coords;
+        QJsonObject props = obj; props.remove("x"); props.remove("y");
+        QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
+        return f;
+    };
+
+    for (const auto &v : m_points)              features.append(makePointFeat(v.toObject()));
+    for (const auto &v : m_charges)             features.append(makePointFeat(v.toObject()));
+    for (const auto &v : m_highPrecisionPoints) features.append(makePointFeat(v.toObject()));
+
+    for (const auto &v : m_lines) {
+        QJsonObject ln = v.toObject();
+        QJsonArray ca, cb;
+        ca.append(ln.value("x1").toDouble()); ca.append(ln.value("y1").toDouble());
+        cb.append(ln.value("x2").toDouble()); cb.append(ln.value("y2").toDouble());
+        QJsonArray coords; coords.append(ca); coords.append(cb);
+        QJsonObject geom; geom["type"] = "LineString"; geom["coordinates"] = coords;
+        QJsonObject props = ln;
+        props.remove("x1"); props.remove("y1"); props.remove("x2"); props.remove("y2");
+        QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
+        features.append(f);
+    }
+
+    for (const auto &v : m_curves) {
+        QJsonObject cv = v.toObject();
+        QJsonArray coords;
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        if (!ctrlArr.isEmpty()) {
+            for (const auto &pv : ctrlArr) {
+                QJsonObject pt = pv.toObject();
+                QJsonArray c;
+                c.append(pt.value("x").toDouble());
+                c.append(pt.value("y").toDouble());
+                coords.append(c);
+            }
+        } else {
+            QJsonArray c0, c1, c2;
+            c0.append(cv.value("x1").toDouble()); c0.append(cv.value("y1").toDouble());
+            c1.append(cv.value("cx").toDouble()); c1.append(cv.value("cy").toDouble());
+            c2.append(cv.value("x2").toDouble()); c2.append(cv.value("y2").toDouble());
+            coords.append(c0); coords.append(c1); coords.append(c2);
+        }
+
+        QJsonObject geom; geom["type"] = "MultiPoint"; geom["coordinates"] = coords;
+        QJsonObject props = cv;
+        props.remove("x1"); props.remove("y1"); props.remove("cx"); props.remove("cy");
+        props.remove("x2"); props.remove("y2"); props.remove("controlPoints");
+        QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
+        features.append(f);
+    }
+
+    QJsonObject geojson;
+    geojson["type"]     = "FeatureCollection";
+    geojson["features"] = features;
+    geojson["mapId"]    = m_mapId;
+    geojson["mapName"]  = m_mapName;
+
+    // 3. Prepare PGM raster data
+    QByteArray pgmData;
+    if (!m_mapImage.isNull()) {
+        pgmData = MapPgmUtil::imageToPgm(m_mapImage, false);
+    }
+
+    m_saveBtn->setEnabled(false);
+    auto *loading = new LoadingDialog("正在保存地图与路网...", this);
+    loading->show();
+
+    // 4. Concurrently save route and upload PGM
+    struct SaveState {
+        bool routeDone = false;
+        bool routeOk = false;
+        QString routeErr;
+        bool pgmDone = false;
+        bool pgmOk = false;
+        QString pgmErr;
+    };
+    auto state = std::make_shared<SaveState>();
+    if (pgmData.isEmpty()) {
+        state->pgmDone = true;
+        state->pgmOk = true;
+    }
+
+    auto onComplete = [this, loading, state]() {
+        loading->close(); loading->deleteLater();
+        m_saveBtn->setEnabled(true);
+
+        if (state->routeOk && state->pgmOk) {
+            Toast::success(this, "地图与路网保存成功");
+            m_dirty = false;
+            m_undoStack.clear();
+            m_redoStack.clear();
+            updateHistoryButtons();
+            loadRouteData();
+        } else if (!state->routeOk && !state->pgmOk) {
+            Toast::error(this, QString("保存失败: 路网(%1), 栅格(%2)").arg(state->routeErr, state->pgmErr));
+        } else if (!state->routeOk) {
+            Toast::info(this, QString("栅格已保存，但路网保存失败: %1").arg(state->routeErr));
+        } else {
+            Toast::info(this, QString("路网已保存，但栅格地图上传失败: %1").arg(state->pgmErr));
+        }
+    };
+
+    // A. Save Route
+    ApiService::instance().saveEditedMap(geojson, [this, state, onComplete](int code, const QJsonObject &resp) {
+        state->routeDone = true;
+        state->routeOk = (code == 200);
+        if (code != 200) {
+            QString err = resp.value("msg").toString();
+            if (err.isEmpty()) err = resp.value("message").toString();
+            if (err.isEmpty()) err = QString("HTTP %1").arg(code);
+            state->routeErr = err;
+        }
+        if (state->pgmDone) {
+            onComplete();
+        }
+    });
+
+    // B. Save PGM raster (if available)
+    if (!pgmData.isEmpty()) {
+        ApiService::instance().uploadMapPgm(m_mapId, pgmData, [this, state, onComplete](int code, const QJsonObject &resp) {
+            state->pgmDone = true;
+            state->pgmOk = (code == 200);
+            if (code != 200) {
+                QString err = resp.value("msg").toString();
+                if (err.isEmpty()) err = resp.value("message").toString();
+                if (err.isEmpty()) err = QString("HTTP %1").arg(code);
+                state->pgmErr = err;
+            }
+            if (state->routeDone) {
+                onComplete();
+            }
+        });
+    }
+}
+
 void MapEditWidget::applyPropsEdit()
 {
     if (m_selType.isEmpty()) return;
-    QString newName = m_propNameEdit->text().trimmed();
-    int newDirect   = m_propDirectCombo->currentData().toInt();
-
-    // 点类型切换: 把点从原数组移到目标数组(并生成对应前缀的新ID)
     bool isPointKind = (m_selType == "point" || m_selType == "highPrecision" || m_selType == "charge");
-    if (isPointKind && m_propKindRow && m_propKindRow->isVisible()) {
-        QString newKind = m_propKindCombo->currentData().toString();
+
+    if (isPointKind) {
+        QString newName  = m_stationLabelEdit->text().trimmed();
+        QString newKind  = m_stationTypeCombo->currentData().toString();
+        double newX      = m_stationXSpin->value();
+        double newY      = m_stationYSpin->value();
+        double newYawRad = m_stationYawSpin->value() * M_PI / 180.0;
+        bool dockable    = m_stationDockableChk->isChecked();
+        bool rotate      = m_stationRotateChk->isChecked();
+        bool pgv         = m_stationPgvChk->isChecked();
+
         if (newKind != m_selType) {
-            // 从原数组取出该点
+            // 类型切换处理
             QJsonObject pointObj;
             auto take = [&](QJsonArray &arr) {
                 for (int i = 0; i < arr.size(); ++i) {
@@ -2046,18 +2741,19 @@ void MapEditWidget::applyPropsEdit()
             else if (m_selType == "highPrecision") take(m_highPrecisionPoints);
 
             if (!pointObj.isEmpty()) {
-                // 生成新类型对应的 ID 与默认名称
                 QString newId, defaultName;
-                if      (newKind == "point")         { int nn = nextIdNum(m_points, "p_");              newId = QString("p_%1").arg(nn);  defaultName = QString("P%1").arg(nn); }
-                else if (newKind == "charge")        { int nn = nextIdNum(m_charges, "c_");             newId = QString("c_%1").arg(nn);  defaultName = QString("充电%1").arg(nn); }
-                else                                  { int nn = nextIdNum(m_highPrecisionPoints, "hp_"); newId = QString("hp_%1").arg(nn); defaultName = QString("高精%1").arg(nn); }
+                if      (newKind == "point")         { int nn = nextIdNum(m_points, "p_");              newId = QString("p_%1").arg(nn);  defaultName = QString("LM%1").arg(nn); }
+                else if (newKind == "charge")        { int nn = nextIdNum(m_charges, "c_");             newId = QString("c_%1").arg(nn);  defaultName = QString("CP%1").arg(nn); }
+                else                                  { int nn = nextIdNum(m_highPrecisionPoints, "hp_"); newId = QString("hp_%1").arg(nn); defaultName = QString("TL%1").arg(nn); }
 
                 pointObj["id"]   = newId;
-                if (newName.isEmpty()) pointObj["name"] = defaultName;
-                else                   pointObj["name"] = newName;
-                // 同步坐标(从编辑框取值)
-                pointObj["x"] = m_propXSpin->value();
-                pointObj["y"] = m_propYSpin->value();
+                pointObj["name"] = newName.isEmpty() ? defaultName : newName;
+                pointObj["x"]    = newX;
+                pointObj["y"]    = newY;
+                pointObj["yaw"]  = newYawRad;
+                pointObj["rdsDockable"] = dockable;
+                pointObj["allowRotate"] = rotate;
+                pointObj["useDownPGV"]  = pgv;
 
                 if      (newKind == "point")         m_points.append(pointObj);
                 else if (newKind == "charge")        m_charges.append(pointObj);
@@ -2066,34 +2762,98 @@ void MapEditWidget::applyPropsEdit()
                 m_selType = newKind;
                 m_selId   = newId;
             }
-            renderMap();
-                showFeatureProperties(m_selType, m_selId);
-                if (m_tableVisible) refreshTable();
-                m_dirty = true;
-                return;
+        } else {
+            // 普通更新
+            auto upd = [&](QJsonArray &arr) {
+                for (int i = 0; i < arr.size(); ++i) {
+                    QJsonObject o = arr[i].toObject();
+                    if (o.value("id").toString() != m_selId) continue;
+                    o["name"]        = newName;
+                    o["x"]           = newX;
+                    o["y"]           = newY;
+                    o["yaw"]         = newYawRad;
+                    o["rdsDockable"] = dockable;
+                    o["allowRotate"] = rotate;
+                    o["useDownPGV"]  = pgv;
+
+                    // 联动更新所有相连线路与曲线的端点坐标
+                    for (int li = 0; li < m_lines.size(); ++li) {
+                        QJsonObject ln = m_lines[li].toObject();
+                        bool changed = false;
+                        if (ln.value("startid").toString() == m_selId) { ln["x1"] = newX; ln["y1"] = newY; changed = true; }
+                        if (ln.value("endid").toString() == m_selId)   { ln["x2"] = newX; ln["y2"] = newY; changed = true; }
+                        if (changed) m_lines[li] = ln;
+                    }
+                    for (int ci = 0; ci < m_curves.size(); ++ci) {
+                        QJsonObject cv = m_curves[ci].toObject();
+                        bool changed = false;
+                        if (cv.value("startid").toString() == m_selId) {
+                            cv["x1"] = newX; cv["y1"] = newY;
+                            QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+                            if (!ctrlArr.isEmpty()) {
+                                QJsonObject cp0 = ctrlArr[0].toObject();
+                                cp0["x"] = newX; cp0["y"] = newY;
+                                ctrlArr[0] = cp0;
+                                cv["controlPoints"] = ctrlArr;
+                            }
+                            changed = true;
+                        }
+                        if (cv.value("endid").toString() == m_selId) {
+                            cv["x2"] = newX; cv["y2"] = newY;
+                            QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+                            if (!ctrlArr.isEmpty()) {
+                                int lastIdx = ctrlArr.size() - 1;
+                                QJsonObject cpLast = ctrlArr[lastIdx].toObject();
+                                cpLast["x"] = newX; cpLast["y"] = newY;
+                                ctrlArr[lastIdx] = cpLast;
+                                cv["controlPoints"] = ctrlArr;
+                            }
+                            changed = true;
+                        }
+                        if (changed) m_curves[ci] = cv;
+                    }
+
+                    arr[i] = o;
+                    break;
+                }
+            };
+            if      (m_selType == "point")         upd(m_points);
+            else if (m_selType == "charge")        upd(m_charges);
+            else if (m_selType == "highPrecision") upd(m_highPrecisionPoints);
         }
+    } else {
+        // Line or Curve
+        QString newName   = m_lineNameEdit->text().trimmed();
+        int newDirect     = m_lineDirectCombo->currentData().toInt();
+        double maxSpeed   = m_lineMaxSpeedSpin->value();
+        double maxAcc     = m_lineMaxAccSpin->value();
+        double maxDec     = m_lineMaxDecSpin->value();
+        double maxRot     = m_lineMaxRotSpin->value();
+        double reachDist  = m_lineReachDistSpin->value();
+        double reachAngle = m_lineReachAngleSpin->value();
+        double roadWidth  = m_lineRoadWidthSpin->value();
+
+        auto updLine = [&](QJsonArray &arr) {
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                if (o.value("id").toString() != m_selId) continue;
+                o["name"]       = newName;
+                o["direct"]     = newDirect;
+                o["maxspeed"]   = maxSpeed;
+                o["maxacc"]     = maxAcc;
+                o["maxdec"]     = maxDec;
+                o["maxrot"]     = maxRot;
+                o["reachdist"]  = reachDist;
+                o["reachangle"] = reachAngle;
+                o["width"]      = roadWidth;
+                arr[i] = o;
+                break;
+            }
+        };
+        if (m_selType == "line")       updLine(m_lines);
+        else if (m_selType == "curve") updLine(m_curves);
     }
 
-    // 普通属性更新(名称/方向/坐标)
-    auto upd = [&](QJsonArray &arr) {
-        for (int i = 0; i < arr.size(); ++i) {
-            QJsonObject o = arr[i].toObject();
-            if (o.value("id").toString() != m_selId) continue;
-            o["name"] = newName;
-            if (m_selType == "line" || m_selType == "curve") o["direct"] = newDirect;
-            // 点类型: 更新坐标
-            if (isPointKind) {
-                o["x"] = m_propXSpin->value();
-                o["y"] = m_propYSpin->value();
-            }
-            arr[i] = o; break;
-        }
-    };
-    if      (m_selType == "point")         upd(m_points);
-    else if (m_selType == "line")          upd(m_lines);
-    else if (m_selType == "curve")         upd(m_curves);
-    else if (m_selType == "charge")        upd(m_charges);
-    else if (m_selType == "highPrecision") upd(m_highPrecisionPoints);
     renderMap();
     showFeatureProperties(m_selType, m_selId);
     if (m_tableVisible) refreshTable();
@@ -2165,144 +2925,106 @@ void MapEditWidget::refreshTable()
     }
 }
 
-// ── Save / Edit map ───────────────────────────────────────────────────────────
+// ── Save / Edit / Import map ──────────────────────────────────────────────────
 
-void MapEditWidget::onSaveRoute()
+void MapEditWidget::onImportSmap()
 {
-    // Flush any dragged handle positions to JSON (支持任意阶贝塞尔)
-    for (auto it = m_curveHandles.begin(); it != m_curveHandles.end(); ++it) {
-        auto &lst = it.value();
-        if (lst.size() < 2) continue;
-        const QString &id = it.key();
-        for (int i = 0; i < m_curves.size(); ++i) {
-            QJsonObject cv = m_curves[i].toObject();
-            if (cv.value("id").toString() != id) continue;
+    QString filePath = QFileDialog::getOpenFileName(
+        this,
+        "导入 .smap 地图路网文件",
+        QString(),
+        "SMAP 地图文件 (*.smap);;所有文件 (*.*)");
+    if (filePath.isEmpty()) return;
 
-            // 更新 controlPoints 数组
-            // 注意: 端点手柄可能为 nullptr(已关联节点时由节点显示)，
-            // 需从曲线 JSON 取端点坐标，不能直接 lst[j]->pos()
-            auto handlePos = [&](int idx) -> QPointF {
-                if (lst[idx]) return lst[idx]->pos();
-                // 端点无手柄 → 从 JSON 取端点坐标
-                if (idx == 0)
-                    return worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
-                return worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
-            };
-            QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-            if (!ctrlArr.isEmpty() && lst.size() == ctrlArr.size()) {
-                // 多阶贝塞尔: 逐个更新控制点
-                for (int j = 0; j < lst.size(); ++j) {
-                    QPointF sp = handlePos(j);
-                    QPointF wp = sceneToWorld(sp.x(), sp.y());
-                    QJsonObject pt = ctrlArr[j].toObject();
-                    pt["x"] = wp.x(); pt["y"] = wp.y();
-                    ctrlArr[j] = pt;
-                }
-                cv["controlPoints"] = ctrlArr;
-                // 同步起终点字段
-                QPointF wFirst = sceneToWorld(handlePos(0).x(), handlePos(0).y());
-                QPointF wLast  = sceneToWorld(handlePos(lst.size()-1).x(), handlePos(lst.size()-1).y());
-                cv["x1"] = wFirst.x(); cv["y1"] = wFirst.y();
-                cv["x2"] = wLast.x();  cv["y2"] = wLast.y();
-            } else if (lst.size() == 3) {
-                // 兼容旧格式: 二次贝塞尔 cx/cy
-                QPointF w1 = sceneToWorld(handlePos(0).x(), handlePos(0).y());
-                QPointF wc = sceneToWorld(handlePos(1).x(), handlePos(1).y());
-                QPointF w2 = sceneToWorld(handlePos(2).x(), handlePos(2).y());
-                cv["x1"]=w1.x(); cv["y1"]=w1.y(); cv["cx"]=wc.x();
-                cv["cy"]=wc.y(); cv["x2"]=w2.x(); cv["y2"]=w2.y();
-            }
-            m_curves[i] = cv; break;
-        }
+    if (!m_points.isEmpty() || !m_lines.isEmpty() || !m_curves.isEmpty() || !m_charges.isEmpty() || !m_highPrecisionPoints.isEmpty()) {
+        auto ret = QMessageBox::question(
+            this,
+            "导入确认",
+            "导入 .smap 将覆盖当前未保存的路网数据，是否继续？",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (ret != QMessageBox::Yes) return;
     }
 
-    // Build GeoJSON FeatureCollection (same format as Vue exportFeaturesObj)
-    QJsonArray features;
+    QJsonArray newPoints, newLines, newCurves;
+    QString smapMapName;
+    QString errMsg;
+    QJsonObject smapHeader;
 
-    auto makePointFeat = [](const QJsonObject &obj) -> QJsonObject {
-        QJsonArray coords;
-        coords.append(obj.value("x").toDouble());
-        coords.append(obj.value("y").toDouble());
-        coords.append(0.0);
-        QJsonObject geom; geom["type"] = "Point"; geom["coordinates"] = coords;
-        QJsonObject props = obj; props.remove("x"); props.remove("y");
-        QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
-        return f;
-    };
-
-    for (const auto &v : m_points)              features.append(makePointFeat(v.toObject()));
-    for (const auto &v : m_charges)             features.append(makePointFeat(v.toObject()));
-    for (const auto &v : m_highPrecisionPoints) features.append(makePointFeat(v.toObject()));
-
-    for (const auto &v : m_lines) {
-        QJsonObject ln = v.toObject();
-        QJsonArray ca, cb;
-        ca.append(ln.value("x1").toDouble()); ca.append(ln.value("y1").toDouble());
-        cb.append(ln.value("x2").toDouble()); cb.append(ln.value("y2").toDouble());
-        QJsonArray coords; coords.append(ca); coords.append(cb);
-        QJsonObject geom; geom["type"] = "LineString"; geom["coordinates"] = coords;
-        QJsonObject props = ln;
-        props.remove("x1"); props.remove("y1"); props.remove("x2"); props.remove("y2");
-        QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
-        features.append(f);
+    bool ok = MapPgmUtil::parseSmapFile(filePath, newPoints, newLines, newCurves, smapMapName, &errMsg, &smapHeader);
+    if (!ok) {
+        Toast::error(this, QString("导入失败: %1").arg(errMsg));
+        return;
     }
 
-    for (const auto &v : m_curves) {
-        QJsonObject cv = v.toObject();
-        QJsonArray coords;
+    // 清除现有选区与控制手柄
+    clearSelection();
+    removeAllHandles();
 
-        // 支持多阶贝塞尔曲线: 优先使用 controlPoints 数组
-        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-        if (!ctrlArr.isEmpty()) {
-            for (const auto &pv : ctrlArr) {
-                QJsonObject pt = pv.toObject();
-                QJsonArray c;
-                c.append(pt.value("x").toDouble());
-                c.append(pt.value("y").toDouble());
-                coords.append(c);
-            }
+    m_points = QJsonArray();
+    m_charges = QJsonArray();
+    m_highPrecisionPoints = QJsonArray();
+
+    // 根据点位类型分别归类到普通站点、充电点、精定位点
+    for (const auto &pv : newPoints) {
+        QJsonObject p = pv.toObject();
+        QString type = p.value("type").toString("point");
+        if (type == "charge") {
+            m_charges.append(p);
+        } else if (type == "highPrecision") {
+            m_highPrecisionPoints.append(p);
         } else {
-            // 兼容旧格式: cx/cy 二次贝塞尔(3点)
-            QJsonArray c0, c1, c2;
-            c0.append(cv.value("x1").toDouble()); c0.append(cv.value("y1").toDouble());
-            c1.append(cv.value("cx").toDouble()); c1.append(cv.value("cy").toDouble());
-            c2.append(cv.value("x2").toDouble()); c2.append(cv.value("y2").toDouble());
-            coords.append(c0); coords.append(c1); coords.append(c2);
+            m_points.append(p);
         }
-
-        QJsonObject geom; geom["type"] = "MultiPoint"; geom["coordinates"] = coords;
-        QJsonObject props = cv;
-        props.remove("x1"); props.remove("y1"); props.remove("cx"); props.remove("cy");
-        props.remove("x2"); props.remove("y2"); props.remove("controlPoints");
-        QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
-        features.append(f);
     }
 
-    QJsonObject geojson;
-    geojson["type"]     = "FeatureCollection";
-    geojson["features"] = features;
-    geojson["mapId"]    = m_mapId;
-    geojson["mapName"]  = m_mapName;
+    m_lines   = newLines;
+    m_curves  = newCurves;
+    m_dirty   = true;
 
-    m_saveBtn->setEnabled(false);
-    auto *loading = new LoadingDialog("正在保存路网...", this);
-    loading->show();
-    ApiService::instance().saveEditedMap(geojson, [this, loading](int code, const QJsonObject &resp) {
-        loading->close(); loading->deleteLater();
-        m_saveBtn->setEnabled(true);
-        if (code == 200) {
-            Toast::success(this, "路网保存成功");
-            m_dirty = false;   // 保存成功，清除脏标记
-            // 保存成功后立即刷新路网数据，保证显示与服务器一致
-            loadRouteData();
-        } else {
-            // 显示服务器返回的错误信息
-            QString errMsg = resp.value("msg").toString();
-            if (errMsg.isEmpty()) errMsg = resp.value("message").toString();
-            if (errMsg.isEmpty()) errMsg = QString("保存失败 (HTTP %1)").arg(code);
-            QMessageBox::warning(this, "保存失败", errMsg);
+    // 检查导入路网的边界范围，若超出当前底图范围则提示并自动适配视图
+    if (m_imgW > 0 && (!newPoints.isEmpty() || !newLines.isEmpty() || !newCurves.isEmpty())) {
+        double minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+        auto updateBounds = [&](double x, double y) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        };
+        for (const auto &v : newPoints) {
+            QJsonObject o = v.toObject();
+            updateBounds(o.value("x").toDouble(), o.value("y").toDouble());
         }
-    });
+        for (const auto &v : newLines) {
+            QJsonObject o = v.toObject();
+            updateBounds(o.value("x1").toDouble(), o.value("y1").toDouble());
+            updateBounds(o.value("x2").toDouble(), o.value("y2").toDouble());
+        }
+
+        if (minX < m_worldL || maxX > m_worldR || minY < m_worldB || maxY > m_worldT) {
+            QMessageBox::information(
+                this,
+                "路网范围提示",
+                QString("导入的 .smap 路网范围 [%1, %2]m ~ [%3, %4]m\n"
+                        "超出当前底图范围 [%5, %6]m ~ [%7, %8]m。\n\n"
+                        "已为您自动调整视图以完整展示导入路网。")
+                    .arg(minX, 0, 'f', 2).arg(minY, 0, 'f', 2)
+                    .arg(maxX, 0, 'f', 2).arg(maxY, 0, 'f', 2)
+                    .arg(m_worldL, 0, 'f', 2).arg(m_worldB, 0, 'f', 2)
+                    .arg(m_worldR, 0, 'f', 2).arg(m_worldT, 0, 'f', 2));
+        }
+    }
+
+    renderMap();
+    fitView();
+    if (m_tableVisible) refreshTable();
+
+    Toast::success(this, QString("成功导入 .smap 路网: %1 个普通站点, %2 个充电点, %3 个精定位点, %4 条双向曲线, %5 条直线")
+                            .arg(m_points.size())
+                            .arg(m_charges.size())
+                            .arg(m_highPrecisionPoints.size())
+                            .arg(m_curves.size())
+                            .arg(m_lines.size()));
 }
 
 void MapEditWidget::onEditMap()
@@ -2346,7 +3068,12 @@ void MapEditWidget::onEditMap()
 
 bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
 {
-    if (obj != m_mapView->viewport())
+    if (event->type() == QEvent::KeyPress) {
+        keyPressEvent(static_cast<QKeyEvent*>(event));
+        if (event->isAccepted()) return true;
+    }
+
+    if (obj != m_mapView->viewport() && obj != m_mapView)
         return QWidget::eventFilter(obj, event);
 
     if (event->type() == QEvent::Wheel) {
@@ -2370,6 +3097,80 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             return true;
         }
 
+        if (m_isDraggingNode) {
+            QPointF newWorld = sceneToWorld(sp.x(), sp.y());
+            // 1. 更新被拖动节点自身的坐标
+            auto updatePointPos = [&](QJsonArray &arr) {
+                for (int i = 0; i < arr.size(); ++i) {
+                    QJsonObject o = arr[i].toObject();
+                    if (o.value("id").toString() == m_draggingNodeId) {
+                        o["x"] = newWorld.x();
+                        o["y"] = newWorld.y();
+                        arr[i] = o;
+                        break;
+                    }
+                }
+            };
+            if      (m_draggingNodeType == "point")         updatePointPos(m_points);
+            else if (m_draggingNodeType == "charge")        updatePointPos(m_charges);
+            else if (m_draggingNodeType == "highPrecision") updatePointPos(m_highPrecisionPoints);
+
+            // 2. 实时拉伸/联动所有连接到该节点的直线
+            for (int i = 0; i < m_lines.size(); ++i) {
+                QJsonObject ln = m_lines[i].toObject();
+                bool changed = false;
+                if (ln.value("startid").toString() == m_draggingNodeId) {
+                    ln["x1"] = newWorld.x(); ln["y1"] = newWorld.y();
+                    changed = true;
+                }
+                if (ln.value("endid").toString() == m_draggingNodeId) {
+                    ln["x2"] = newWorld.x(); ln["y2"] = newWorld.y();
+                    changed = true;
+                }
+                if (changed) m_lines[i] = ln;
+            }
+
+            // 3. 实时拉伸/联动所有连接到该节点的曲线端点
+            for (int i = 0; i < m_curves.size(); ++i) {
+                QJsonObject cv = m_curves[i].toObject();
+                bool changed = false;
+                if (cv.value("startid").toString() == m_draggingNodeId) {
+                    cv["x1"] = newWorld.x(); cv["y1"] = newWorld.y();
+                    QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+                    if (!ctrlArr.isEmpty()) {
+                        QJsonObject cp0 = ctrlArr[0].toObject();
+                        cp0["x"] = newWorld.x(); cp0["y"] = newWorld.y();
+                        ctrlArr[0] = cp0;
+                        cv["controlPoints"] = ctrlArr;
+                    }
+                    changed = true;
+                }
+                if (cv.value("endid").toString() == m_draggingNodeId) {
+                    cv["x2"] = newWorld.x(); cv["y2"] = newWorld.y();
+                    QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+                    if (!ctrlArr.isEmpty()) {
+                        int lastIdx = ctrlArr.size() - 1;
+                        QJsonObject cpLast = ctrlArr[lastIdx].toObject();
+                        cpLast["x"] = newWorld.x(); cpLast["y"] = newWorld.y();
+                        ctrlArr[lastIdx] = cpLast;
+                        cv["controlPoints"] = ctrlArr;
+                    }
+                    changed = true;
+                }
+                if (changed) m_curves[i] = cv;
+            }
+
+            // 4. 重绘场景并保持当前节点的高亮选中状态
+            renderMap();
+            m_dirty = true;
+            QString key = m_draggingNodeType + "_" + m_draggingNodeId;
+            if (m_featureItems.contains(key)) {
+                m_selItem = m_featureItems.value(key);
+                applySelectColor(m_selItem);
+            }
+            return true;
+        }
+
         if (m_isDraggingHandle && m_activeHandle) {
             // 端点手柄(0=起点, 2=终点)拖拽时吸附到附近已有的点，使曲线端点与
             // 该点共用同一坐标；控制点手柄(1)不吸附，仅跟随鼠标调整曲率。
@@ -2383,13 +3184,20 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             updateCurveShape(m_handleCurveId);
             return true;
         }
+
+        if (m_isPainting && (m_drawStatus == Brush || m_drawStatus == Eraser)) {
+            paintStroke(m_lastPaintImgPos, sp, false);
+            m_lastPaintImgPos = sp;
+            return true;
+        }
+
         if (m_drawStatus != Drag) {
             // Show snap indicator in draw modes
             SnapResult snap = findSnap(sp);
             updateSnapIndicator(snap);
             updatePreview(snap.valid ? snap.scenePos : sp);
         } else {
-            // Drag mode: hover cursor on handles
+            // Drag mode: hover cursor on handles or stations
             updateSnapIndicator({});
             const double hoverTol = hitTolScene(10.0);
             for (auto &lst : m_curveHandles.values())
@@ -2400,6 +3208,11 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
                         return false;
                     }
                 }
+            SnapResult nodeSnap = findSnap(sp, 0.4);
+            if (nodeSnap.valid && (nodeSnap.type == "point" || nodeSnap.type == "charge" || nodeSnap.type == "highPrecision")) {
+                m_mapView->viewport()->setCursor(Qt::SizeAllCursor);
+                return false;
+            }
             m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
         }
         return false;
@@ -2408,11 +3221,15 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
     if (event->type() == QEvent::MouseButtonPress) {
         auto *me = static_cast<QMouseEvent*>(event);
 
-        // Right-click: complete curve drawing / cancel draw / return to Drag
+        // Right-click: complete curve drawing / cancel line chain / return to Drag
         if (me->button() == Qt::RightButton) {
-            // Curve mode with control points → finalize the curve
             if (m_drawStatus == Curve && m_curveCtrlPts.size() >= 2) {
                 finalizeCurve();
+                return true;
+            }
+            if (m_drawStatus == Line && m_drawHasP1) {
+                cancelDraw();
+                clearPreview();
                 return true;
             }
             if (m_drawStatus != Drag) setDrawMode(Drag);
@@ -2437,6 +3254,14 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
         if (me->button() != Qt::LeftButton) return false;
         QPointF sp = m_mapView->mapToScene(me->pos());
 
+        if (m_drawStatus == Brush || m_drawStatus == Eraser) {
+            pushMapUndo();
+            m_isPainting = true;
+            m_lastPaintImgPos = sp;
+            paintStroke(sp, sp, true);
+            return true;
+        }
+
         // ─ Drag mode ─────────────────────────────────────────────────────────
         if (m_drawStatus == Drag) {
             const double tol = hitTolScene(10.0);
@@ -2455,6 +3280,36 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
                     }
                 }
             }
+
+            // 优先检查是否点击在站点节点上（普通站点/充电点/精定位点），触发节点拖动
+            SnapResult nodeSnap = findSnap(sp, 0.4);
+            if (!nodeSnap.valid) {
+                for (auto *it : m_scene->items(QRectF(sp.x()-tol, sp.y()-tol, tol*2, tol*2))) {
+                    QGraphicsItem *target = it;
+                    if (!target->data(0).isValid() && target->parentItem()) target = target->parentItem();
+                    QString type = target->data(0).toString();
+                    QString id = target->data(1).toString();
+                    if (type == "point" || type == "charge" || type == "highPrecision") {
+                        nodeSnap.valid = true;
+                        nodeSnap.type = type;
+                        nodeSnap.id = id;
+                        nodeSnap.scenePos = target->pos();
+                        nodeSnap.worldPos = sceneToWorld(target->pos().x(), target->pos().y());
+                        break;
+                    }
+                }
+            }
+            if (nodeSnap.valid && (nodeSnap.type == "point" || nodeSnap.type == "charge" || nodeSnap.type == "highPrecision")) {
+                m_isDraggingNode    = true;
+                m_draggingNodeType  = nodeSnap.type;
+                m_draggingNodeId    = nodeSnap.id;
+                m_dragStartScenePos = nodeSnap.scenePos;
+                m_dragStartWorldPos = nodeSnap.worldPos;
+                showFeatureProperties(nodeSnap.type, nodeSnap.id);
+                m_mapView->viewport()->setCursor(Qt::ClosedHandCursor);
+                return true;
+            }
+
             selectFeatureAt(sp);
             return false;
         }
@@ -2469,25 +3324,37 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             if (hasOverlap(sp)) { selectFeatureAt(sp); }  // too close → select
             else { addPoint(sp); }
             break;
-        case Line:
+        case Charge:
+            if (hasOverlap(sp)) { selectFeatureAt(sp); }
+            else { addCharge(sp); }
+            break;
+        case HighPrecision:
+            if (hasOverlap(sp)) { selectFeatureAt(sp); }
+            else { addHighPrecisionPoint(sp); }
+            break;
+        case Line: {
             if (!m_drawHasP1) {
-                // 起点: 优先吸附到已有点，附近无点则直接使用点击位置(不创建新点)
-                m_drawP1   = usePos;
-                m_drawP1Id = useId;
+                // 起点: 优先吸附到已有点，未命中则在空地自动创建新普通站点(LM)
+                SnapResult head = ensureNodeAt(usePos);
+                m_drawP1   = head.scenePos;
+                m_drawP1Id = head.id;
                 m_drawHasP1 = true;
             } else {
-                // 终点: 优先吸附到已有点，附近无点则直接使用点击位置(不创建新点)
-                addLine(m_drawP1, usePos, m_drawP1Id, useId);
-                // Continuous: last endpoint becomes new P1
-                m_drawP1   = usePos;
-                m_drawP1Id = useId;
+                // 终点: 优先吸附到已有点，未命中则在空地自动创建新普通站点(LM)
+                SnapResult tail = ensureNodeAt(usePos);
+                if (tail.id != m_drawP1Id) {
+                    addLine(m_drawP1, tail.scenePos, m_drawP1Id, tail.id);
+                    // 连续连线模式: 刚绘制好的终点自动作为下一条线段的起点
+                    m_drawP1   = tail.scenePos;
+                    m_drawP1Id = tail.id;
+                    m_drawHasP1 = true;
+                }
                 clearPreview();
             }
             break;
+        }
         case Curve: {
-            // 多阶贝塞尔：累积控制点
-            // 起点和终点必须落在已有节点/高精度点上；附近无点时在该位置创建一个
-            // 新节点，而不是让端点悬空。中间控制点为自由放置，不创建节点。
+            // 三阶贝塞尔曲线：最多 4 个控制点 (P0 起点, P1 控制点1, P2 控制点2, P3 终点)
             int n = m_curveCtrlPts.size();
             if (n == 0) {
                 // 起点: 强制吸附或创建节点
@@ -2497,11 +3364,16 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
                 m_drawP1   = head.scenePos;
                 m_drawP1Id = head.id;
                 m_drawHasP1 = true;
-            } else {
-                // 后续点击暂存为自由控制点；是否为终点由右键完成时判定，
-                // 完成时会将最后一个点强制吸附/创建节点。
+            } else if (n < 3) {
+                // 第 2 点 (P1) 或 第 3 点 (P2): 自由中间控制点
                 m_curveCtrlPts.append(usePos);
                 m_curveCtrlIds.append(useId);
+            } else if (n == 3) {
+                // 第 4 点 (P3): 达到三阶上限（4控制点），强制吸附或创建终点节点并自动完成绘制
+                SnapResult tail = ensureNodeAt(usePos);
+                m_curveCtrlPts.append(tail.scenePos);
+                m_curveCtrlIds.append(tail.id);
+                finalizeCurve();
             }
             break;
         }
@@ -2512,10 +3384,23 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
 
     if (event->type() == QEvent::MouseButtonRelease) {
         auto *me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::LeftButton && m_isPainting) {
+            m_isPainting = false;
+            return true;
+        }
         // 手动平移释放
         if (m_panning &&
             (me->button() == Qt::MiddleButton || me->button() == Qt::LeftButton)) {
             m_panning = false;
+            m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
+            return true;
+        }
+        if (me->button() == Qt::LeftButton && m_isDraggingNode) {
+            m_isDraggingNode = false;
+            m_dirty = true;
+            renderMap();
+            showFeatureProperties(m_draggingNodeType, m_draggingNodeId);
+            if (m_tableVisible) refreshTable();
             m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
             return true;
         }
@@ -2732,4 +3617,206 @@ void MapEditWidget::updateRobotMarker()
     double yawRad = (qAbs(m_carYaw) > M_PI * 2) ? qDegreesToRadians(m_carYaw) : m_carYaw;
     m_robotItem->setRotation(90.0 - qRadiansToDegrees(yawRad));
     m_robotItem->setVisible(true);
+}
+
+void MapEditWidget::setupShortcuts()
+{
+    // 撤销 / 重做 (底图涂绘历史)
+    auto *undoSc = new QShortcut(QKeySequence::Undo, this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+    connect(undoSc, &QShortcut::activated, this, &MapEditWidget::onUndo);
+
+    auto *redoSc = new QShortcut(QKeySequence::Redo, this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+    connect(redoSc, &QShortcut::activated, this, &MapEditWidget::onRedo);
+
+    auto *redoSc2 = new QShortcut(QKeySequence("Ctrl+Shift+Z"), this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+    connect(redoSc2, &QShortcut::activated, this, &MapEditWidget::onRedo);
+
+    // 保存地图
+    auto *saveSc = new QShortcut(QKeySequence::Save, this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+    connect(saveSc, &QShortcut::activated, this, &MapEditWidget::onSaveMap);
+
+    auto *saveSc2 = new QShortcut(QKeySequence("Alt+S"), this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+    connect(saveSc2, &QShortcut::activated, this, &MapEditWidget::onSaveMap);
+
+    // 快捷帮助
+    auto *helpSc = new QShortcut(QKeySequence::HelpContents, this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+    connect(helpSc, &QShortcut::activated, this, &MapEditWidget::showHelpDialog);
+}
+
+void MapEditWidget::keyPressEvent(QKeyEvent *event)
+{
+    QWidget *focused = QApplication::focusWidget();
+    bool inInputWidget = (qobject_cast<QLineEdit*>(focused) ||
+                          qobject_cast<QAbstractSpinBox*>(focused) ||
+                          qobject_cast<QComboBox*>(focused));
+
+    if (!inInputWidget) {
+        if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
+            deleteSelected();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Escape) {
+            cancelDraw();
+            clearSelection();
+            setDrawMode(Drag);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_M) {
+            setDrawMode(Point);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_C) {
+            setDrawMode(Charge);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_T) {
+            setDrawMode(HighPrecision);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_P || event->key() == Qt::Key_L) {
+            setDrawMode(Line);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_B) {
+            setDrawMode(Curve);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_E) {
+            setDrawMode(Eraser);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Space) {
+            // 循环切换工具: 拖拽 -> 普通站点 -> 充电点 -> 精定位点 -> 线段 -> 三阶曲线 -> 画笔 -> 橡皮
+            int nextMode = Drag;
+            switch (m_drawStatus) {
+            case Drag:          nextMode = Point; break;
+            case Point:         nextMode = Charge; break;
+            case Charge:        nextMode = HighPrecision; break;
+            case HighPrecision: nextMode = Line; break;
+            case Line:          nextMode = Curve; break;
+            case Curve:         nextMode = Brush; break;
+            case Brush:         nextMode = Eraser; break;
+            case Eraser:        nextMode = Drag; break;
+            default:            nextMode = Drag; break;
+            }
+            setDrawMode(nextMode);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_F1) {
+            showHelpDialog();
+            event->accept();
+            return;
+        }
+    }
+
+    QWidget::keyPressEvent(event);
+}
+
+void MapEditWidget::showHelpDialog()
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle("地图编辑与快捷操作指南");
+    dlg.setMinimumWidth(560);
+    dlg.setStyleSheet(
+        "QDialog { background: #16202e; color: #d0e0f0; font-size: 13px; }"
+        "QGroupBox { font-weight: bold; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; margin-top: 12px; padding: 12px; background: #1a2638; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #5dade2; }"
+        "QLabel { background: transparent; color: #b8d2e8; }"
+        "QPushButton { background: #2471a3; color: white; border: none; border-radius: 4px; padding: 6px 18px; font-weight: bold; font-size: 12px; }"
+        "QPushButton:hover { background: #2980b9; }");
+
+    QVBoxLayout *layout = new QVBoxLayout(&dlg);
+    layout->setSpacing(12);
+    layout->setContentsMargins(18, 18, 18, 18);
+
+    // 1. 快捷键
+    QGroupBox *scBox = new QGroupBox("⌨️ 常用键盘快捷键", &dlg);
+    QVBoxLayout *scLayout = new QVBoxLayout(scBox);
+    scLayout->setSpacing(6);
+    auto addRow = [&](const QString &key, const QString &desc) {
+        QHBoxLayout *row = new QHBoxLayout;
+        QLabel *kLbl = new QLabel(key);
+        kLbl->setFixedWidth(130);
+        kLbl->setStyleSheet("color: #f1c40f; font-family: Consolas, monospace; font-weight: bold;");
+        QLabel *dLbl = new QLabel(desc);
+        dLbl->setStyleSheet("color: #ecf0f1;");
+        row->addWidget(kLbl);
+        row->addWidget(dLbl, 1);
+        scLayout->addLayout(row);
+    };
+    addRow("Esc", "指针模式：选择要素 / 拖拽移动站点与线路");
+    addRow("M", "普通站点工具：点击放置站点 LM（蓝）");
+    addRow("C", "充电点工具：点击放置充电桩站点 CP（金）");
+    addRow("T", "精定位点工具：点击放置高精定位站点 TL（红）");
+    addRow("P / L", "路径/线段工具：空地自动建站，连续连线");
+    addRow("B", "三阶曲线工具：起点 ➔ 控制点 ➔ 终点自动吸附/建站");
+    addRow("E", "橡皮擦：擦除栅格涂改，恢复可通行区域");
+    addRow("Delete / Backspace", "删除当前选中的路网要素（站点、线段、曲线）");
+    addRow("Ctrl + Z", "撤销底图画笔 / 橡皮擦涂改");
+    addRow("Ctrl + Y / Ctrl+Shift+Z", "重做底图涂改操作");
+    addRow("Ctrl + S / Alt + S", "保存地图底图与路网结构");
+    addRow("空格键 (Space)", "循环切换绘图工具");
+    addRow("F1", "打开此地图编辑与快捷操作指南");
+    layout->addWidget(scBox);
+
+    // 2. 鼠标交互
+    QGroupBox *mouseBox = new QGroupBox("🖱️ 鼠标交互与视图操作", &dlg);
+    QVBoxLayout *mLayout = new QVBoxLayout(mouseBox);
+    mLayout->setSpacing(6);
+    auto addMouseRow = [&](const QString &act, const QString &desc) {
+        QHBoxLayout *row = new QHBoxLayout;
+        QLabel *aLbl = new QLabel(act);
+        aLbl->setFixedWidth(130);
+        aLbl->setStyleSheet("color: #3498db; font-weight: bold;");
+        QLabel *dLbl = new QLabel(desc);
+        dLbl->setStyleSheet("color: #ecf0f1;");
+        row->addWidget(aLbl);
+        row->addWidget(dLbl, 1);
+        mLayout->addLayout(row);
+    };
+    addMouseRow("鼠标左键拖拽", "拖动站点（关联的所有线路与曲线实时跟随拉伸）/ 拖动手柄");
+    addMouseRow("鼠标右键", "路径/曲线绘制中断连续连线；或返回指针模式");
+    addMouseRow("中键 / Alt+左键", "平移拖拽地图画布视图");
+    addMouseRow("鼠标滚轮", "以光标所在位置为中心缩放地图");
+    layout->addWidget(mouseBox);
+
+    // 3. 图元与配色说明
+    QGroupBox *colorBox = new QGroupBox("📍 路网图元与配色规范", &dlg);
+    QVBoxLayout *cLayout = new QVBoxLayout(colorBox);
+    cLayout->setSpacing(6);
+    auto addColorRow = [&](const QString &badge, const QString &col, const QString &desc) {
+        QHBoxLayout *row = new QHBoxLayout;
+        QLabel *bLbl = new QLabel(badge);
+        bLbl->setFixedWidth(130);
+        bLbl->setStyleSheet(QString("color: %1; font-weight: bold;").arg(col));
+        QLabel *dLbl = new QLabel(desc);
+        dLbl->setStyleSheet("color: #ecf0f1;");
+        row->addWidget(bLbl);
+        row->addWidget(dLbl, 1);
+        cLayout->addLayout(row);
+    };
+    addColorRow("■ 普通站点 (蓝色)", "#3A8FD0", "标准 AGV 停止位姿（长0.5m x 宽0.25m，含定位十字）");
+    addColorRow("■ 充电点 (金色)", "#FFB800", "充电桩对接站点（支持手动放置或设备相对定位打点）");
+    addColorRow("■ 精定位点 (红色)", "#FF4D4F", "机台移载 / PGV 二维码 / 反光柱高精度对接站点");
+    addColorRow("━ 直线 / 曲线", "#50C878", "标准双向导轨线路，居中带有微型燕尾指示箭头");
+    layout->addWidget(colorBox);
+
+    // 底部按钮
+    QHBoxLayout *btnLayout = new QHBoxLayout;
+    btnLayout->addStretch();
+    QPushButton *okBtn = new QPushButton("确定", &dlg);
+    connect(okBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+    btnLayout->addWidget(okBtn);
+    layout->addLayout(btnLayout);
+
+    dlg.exec();
 }

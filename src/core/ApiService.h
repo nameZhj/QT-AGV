@@ -105,6 +105,8 @@ public:
 
     // ========== 导航/位姿接口 ==========
     void initPose(const QString &carId, const QJsonObject &pose, const Callback &cb);
+    void navigateTo(const QString &locationId, const Callback &cb);
+
 
     // ========== 任务接口 (对应 @/api/robot/task.js) ==========
     void listTask(const QJsonObject &query, const Callback &cb);

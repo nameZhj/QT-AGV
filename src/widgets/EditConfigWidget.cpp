@@ -406,8 +406,6 @@ QPair<QString, QString> EditConfigWidget::fieldMetaFor(const QString &key) {
       {"cylinder_length", {"前后货架腿中心点距离", "单位 m"}},
       {"cylinder_recognition_range", {"货架腿识别范围", ""}},
       {"lift_topic_name", {"顶升话题名称", ""}},
-      {"lift_max", {"顶升最大高度", "单位 m"}},
-      {"lift_min", {"顶升最小高度", "单位 m"}},
       {"cylinder_width", {"左右货架腿中心点距离", "单位 m"}},
       {"dis_goal_error", {"接近点后直线调整距离", "单位 m"}},
       {"length_undock", {"二次出库调整距离", "单位 m"}},
@@ -417,6 +415,12 @@ QPair<QString, QString> EditConfigWidget::fieldMetaFor(const QString &key) {
       {"ignore_area_a", {" 屏蔽区域直径", "单位 m"}},
       {"ignore_area_x", {"屏蔽区域距离车体中心的纵向距离", "单位 m"}},
       {"ignore_area_y", {"屏蔽区域距离车体中心的横向距离", "单位 m"}},
+      {"lead", {"顶升机构丝杠导程", "单位 m"}},
+      {"nx", {"运动电机减速比", ""}},
+      {"lift_nx", {"顶升电机减速比", ""}},
+      {"lift_max", {"顶升最大高度", "单位m，可用于软保护"}},
+      {"lift_min", {"顶升最小高度", "单位m，可用于软保护"}},
+      {"lift_joy_speed", {"遥控顶升速度", "单位rad/s"}},
 
   };
   return meta.value(key, {"", ""});

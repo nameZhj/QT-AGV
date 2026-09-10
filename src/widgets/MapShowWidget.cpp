@@ -3,6 +3,7 @@
 #include "core/AppConfig.h"
 #include "core/MqttService.h"
 #include "core/LoadingDialog.h"
+#include "core/MapPgmUtil.h"
 #include <QPushButton>
 #include <QComboBox>
 #include <QLabel>
@@ -312,62 +313,41 @@ void MapShowWidget::loadMapData()
         m_mapWidth = parseDouble(mapInfo, "mapWidth", 0.0);
         m_mapHeight = parseDouble(mapInfo, "mapHeight", 0.0);
 
-        // Vue: x1 = 0 - offsetX, y1 = 0 - offsetY
-        // Vue: extent = [x1, y1, mapWidth+x1, mapHeight+y1]
-        m_worldL = -m_offsetX;
-        m_worldB = -m_offsetY;
-        m_worldR = m_worldL + m_mapWidth;
-        m_worldT = m_worldB + m_mapHeight;
-
-        qDebug() << "===== Coordinate Parameters (Vue-aligned) =====";
-        qDebug() << "offsetX:" << m_offsetX << "offsetY:" << m_offsetY;
-        qDebug() << "mapWidth:" << m_mapWidth << "mapHeight:" << m_mapHeight;
-        qDebug() << "worldL:" << m_worldL << "worldB:" << m_worldB;
-        qDebug() << "worldR:" << m_worldR << "worldT:" << m_worldT;
-        qDebug() << "worldW:" << (m_worldR - m_worldL) << "worldH:" << (m_worldT - m_worldB);
+        double apiOriginX = -m_offsetX;
+        double apiOriginY = -m_offsetY;
+        double apiPhysW   = m_mapWidth;
+        double apiPhysH   = m_mapHeight;
 
         QString mapHost = AppConfig::instance().mapHost();
-        qDebug() << "mapHost:" << mapHost;
-
+        QString thumbUrl;
         if (!m_tilemapPath.isEmpty()) {
-            // Vue: mapSrc + mapName+'_'+mapId+'/'+tilemapPath + '/{z}/small_image_{x}_{y}.png'
-            // Qt:  mapHost + mapName+'_'+mapId+'/'+tilemapPath + '/thumbnail.png'
-            QString imageUrl = QString("%1%2_%3/%4/thumbnail.png")
-                .arg(mapHost, m_mapName, m_mapId, m_tilemapPath);
-            qDebug() << "Thumbnail URL:" << imageUrl;
+            thumbUrl = QString("%1%2_%3/%4/thumbnail.png").arg(mapHost, m_mapName, m_mapId, m_tilemapPath);
+        }
 
-            ApiService::instance().downloadFile(imageUrl, [this](bool ok, const QByteArray &imgData) {
+        auto useThumbnailFallback = [this, thumbUrl, apiOriginX, apiOriginY, apiPhysW, apiPhysH]() {
+            if (thumbUrl.isEmpty()) return;
+            m_worldL = apiOriginX;
+            m_worldB = apiOriginY;
+            m_worldR = apiOriginX + apiPhysW;
+            m_worldT = apiOriginY + apiPhysH;
+
+            ApiService::instance().downloadFile(thumbUrl, [this](bool ok, const QByteArray &imgData) {
                 if (!ok || imgData.isEmpty()) {
-                    qDebug() << "ERROR: Thumbnail download failed";
                     m_mapInfoLabel->setText("地图图像下载失败");
                     return;
                 }
                 if (!m_mapImage.loadFromData(imgData)) {
-                    qDebug() << "ERROR: Thumbnail parse failed";
                     m_mapInfoLabel->setText("地图图像解析失败");
                     return;
                 }
                 m_imgW = m_mapImage.width();
                 m_imgH = m_mapImage.height();
 
-                // 同步 worldInfo 给 MapCanvas，使其内置的设备定位绘制与其它页面一致
                 if (m_mapView) {
                     m_mapView->setWorldInfo(m_worldL, m_worldB, m_worldR, m_worldT, m_imgW, m_imgH);
                 }
 
-                double mapW = m_worldR - m_worldL;
-                double mapH = m_worldT - m_worldB;
-                double resX = (m_imgW > 0) ? mapW / m_imgW : 0;
-                double resY = (m_imgH > 0) ? mapH / m_imgH : 0;
-
-                qDebug() << "===== Image Loaded =====";
-                qDebug() << "imgW:" << m_imgW << "imgH:" << m_imgH;
-                qDebug() << "resX:" << resX << "m/px, resY:" << resY << "m/px";
-                qDebug() << "Aspect ratio - map:" << (mapW / mapH)
-                         << "image:" << (double(m_imgW) / m_imgH);
-                qDebug() << "World origin (0,0) -> scene:"
-                         << worldToScene(0, 0);
-
+                double resX = (m_imgW > 0) ? (m_worldR - m_worldL) / m_imgW : 0;
                 m_mapInfoLabel->setText(
                     QString("%1[%2] img:%3x%4 分辨率:%5m/px 原点:(%6,%7)m")
                     .arg(m_mapName, m_mapId)
@@ -383,9 +363,56 @@ void MapShowWidget::loadMapData()
                     }
                 });
             });
-        } else {
-            qDebug() << "ERROR: tilemapPath is empty!";
-        }
+        };
+
+        // 主路径：直接拉取并解析原始 carto_map.pgm + carto_map.yaml
+        QString resBase = AppConfig::instance().agvMapResourceHost() + m_mapName + "_" + m_mapId + "/";
+        QString yamlUrl = resBase + "carto_map.yaml";
+        QString pgmUrl  = resBase + "carto_map.pgm";
+
+        ApiService::instance().downloadFile(yamlUrl,
+            [this, pgmUrl, useThumbnailFallback](bool yamlOk, const QByteArray &yamlRaw) {
+                if (!yamlOk) { useThumbnailFallback(); return; }
+                double resolution = 0, originX = 0, originY = 0; bool negate = false;
+                if (!MapPgmUtil::parseMapYaml(QString::fromUtf8(yamlRaw), resolution, originX, originY, negate)
+                    || resolution <= 0) {
+                    useThumbnailFallback(); return;
+                }
+                ApiService::instance().downloadFile(pgmUrl,
+                    [this, resolution, originX, originY, negate, useThumbnailFallback]
+                    (bool pgmOk, const QByteArray &pgmRaw) {
+                        if (!pgmOk) { useThumbnailFallback(); return; }
+                        QImage img = MapPgmUtil::pgmToImage(pgmRaw, negate);
+                        if (img.isNull()) { useThumbnailFallback(); return; }
+
+                        m_mapImage = img;
+                        m_imgW = img.width();
+                        m_imgH = img.height();
+                        m_worldL = originX;
+                        m_worldB = originY;
+                        m_worldR = m_worldL + img.width()  * resolution;
+                        m_worldT = m_worldB + img.height() * resolution;
+
+                        if (m_mapView) {
+                            m_mapView->setWorldInfo(m_worldL, m_worldB, m_worldR, m_worldT, m_imgW, m_imgH);
+                        }
+
+                        m_mapInfoLabel->setText(
+                            QString("%1[%2] img:%3x%4 分辨率:%5m/px 原点:(%6,%7)m")
+                            .arg(m_mapName, m_mapId)
+                            .arg((int)m_imgW).arg((int)m_imgH)
+                            .arg(resolution, 0, 'f', 4)
+                            .arg(m_worldL, 0, 'f', 2).arg(m_worldB, 0, 'f', 2));
+
+                        renderMap();
+                        QTimer::singleShot(0, this, [this]{
+                            if (!m_hasInitialFit && m_scene && m_mapView) {
+                                m_mapView->fitInView(m_scene->sceneRect(), Qt::KeepAspectRatio);
+                                m_hasInitialFit = true;
+                            }
+                        });
+                    });
+            });
     });
 }
 
@@ -416,12 +443,16 @@ void MapShowWidget::loadRouteData()
             QJsonArray coords = geom.value("coordinates").toArray();
             QString ftype = props.value("featureType").toString();
 
-            if (gtype == "Point" && ftype == "point") {
+            if (gtype == "Point" && (ftype == "point" || ftype == "charge" || ftype == "highPrecision" || ftype.isEmpty())) {
                 QJsonObject pt;
                 pt["id"] = props.value("id").toString();
                 pt["x"] = coords[0].toDouble();
                 pt["y"] = coords[1].toDouble();
                 pt["name"] = props.value("name").toString();
+                pt["type"] = ftype.isEmpty() ? "point" : ftype;
+                if (props.contains("yaw")) pt["yaw"] = props.value("yaw").toDouble();
+                else if (props.contains("robotYaw")) pt["yaw"] = props.value("robotYaw").toDouble();
+                else if (props.contains("theta")) pt["yaw"] = props.value("theta").toDouble() * M_PI / 180.0;
                 m_points.append(pt);
             } else if (gtype == "LineString" && ftype == "line") {
                 QJsonObject ln;
@@ -600,6 +631,7 @@ void MapShowWidget::renderMap()
     // 渲染底图
     if (!m_mapImage.isNull()) {
         QGraphicsPixmapItem *bgItem = m_scene->addPixmap(QPixmap::fromImage(m_mapImage));
+        bgItem->setTransformationMode(Qt::SmoothTransformation);
         bgItem->setZValue(-100);
     }
 
@@ -607,44 +639,143 @@ void MapShowWidget::renderMap()
     renderDebugMarkers();
     updateDebugLabel();
 
+    double pxPerMeterX = (m_imgW > 0 && (m_worldR > m_worldL)) ? (m_imgW / (m_worldR - m_worldL)) : 20.0;
+    double pxPerMeterY = (m_imgH > 0 && (m_worldT > m_worldB)) ? (m_imgH / (m_worldT - m_worldB)) : 20.0;
+
     // 渲染路网点 (世界坐标→场景像素坐标)
     for (const auto &item : m_points) {
         QJsonObject pt = item.toObject();
         QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
+        QString id = pt.value("id").toString();
+        QString name = pt.value("name").toString();
+        if (name.isEmpty()) name = id;
 
-        QGraphicsEllipseItem *ellipse = m_scene->addEllipse(sp.x() - 4, sp.y() - 4, 8, 8,
-            QPen(Qt::blue, 1), QBrush(Qt::blue));
-        ellipse->setZValue(10);
-        ellipse->setOpacity(0.6);
+        double rectW = 0, rectH = 0;
+        QPainterPath crossPath;
+        QPainterPath path = MapPgmUtil::createPointPath(pxPerMeterX, pxPerMeterY, &rectW, &rectH, &crossPath, 0.0);
 
-        QGraphicsTextItem *label = m_scene->addText(pt.value("name").toString());
-        label->setPos(sp.x() + 6, sp.y() - 8);
-        label->setZValue(11);
-        label->setOpacity(0.7);
+        QFont f("Segoe UI");
+        double ptSize = qBound(4.0, rectH * 0.35, 7.0);
+        f.setPointSizeF(ptSize);
+        f.setBold(true);
+        QFontMetrics fm(f);
+        int tw = fm.horizontalAdvance(name);
+
+        QString type = pt.value("type").toString("point");
+        QColor fillCol(210, 230, 250, 235);
+        QColor borderCol(41, 128, 185, 240);
+        if (type == "charge") {
+            fillCol = QColor(254, 243, 199, 235);
+            borderCol = QColor(217, 119, 6, 240);
+        } else if (type == "highPrecision") {
+            fillCol = QColor(254, 226, 226, 235);
+            borderCol = QColor(220, 38, 38, 240);
+        }
+
+        auto *itemRect = m_scene->addPath(path, QPen(borderCol, 0.8), QBrush(fillCol));
+        itemRect->setPos(sp);
+        itemRect->setZValue(10);
+
+        // 内部红色实线精确定位小十字 (居中位于 (0,0)，与路线精准交汇，不遮挡文字)
+        QPen crossPen(QColor("#E74C3C"), 0.8, Qt::SolidLine);
+        crossPen.setCapStyle(Qt::FlatCap);
+        auto *crossItem = m_scene->addPath(crossPath, crossPen);
+        crossItem->setParentItem(itemRect);
+        crossItem->setPos(0, 0);
+        crossItem->setAcceptedMouseButtons(Qt::NoButton);
+        crossItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
+
+        // 若配置了车头朝向角，绘制微型方向指针
+        double yawVal = pt.value("yaw").toDouble(0.0);
+        if (yawVal != 0.0) {
+            double angleDeg = 90.0 - yawVal * 180.0 / M_PI;
+            double rad = qDegreesToRadians(angleDeg);
+            double pr = rectW / 2.0 + 2.5;
+            QPointF pHead(std::sin(rad) * pr, -std::cos(rad) * pr);
+            QPolygonF ptr;
+            QPointF norm(-std::cos(rad) * 2.0, -std::sin(rad) * 2.0);
+            ptr << pHead + QPointF(std::sin(rad) * 3.5, -std::cos(rad) * 3.5)
+                << pHead + norm
+                << pHead - norm;
+            auto *pItem = m_scene->addPolygon(ptr, QPen(Qt::NoPen), QBrush(borderCol));
+            pItem->setParentItem(itemRect);
+            pItem->setAcceptedMouseButtons(Qt::NoButton);
+            pItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        }
+
+        // 站点名称：直接绘制在矩形框下部，水平居中，与上方红色十字完全分离无遮挡，深色高对比度，尺寸紧凑工整
+        auto *label = m_scene->addText(name, f);
+        label->document()->setDocumentMargin(0);
+        label->setDefaultTextColor(QColor("#1A1A1A"));
+        label->setParentItem(itemRect);
+        double textY = (rectH >= 12.0) ? (rectH * 0.16) : (rectH / 2.0 + 1.0);
+        label->setPos(-tw / 2.0, textY);
+        label->setAcceptedMouseButtons(Qt::NoButton);
+        label->setFlag(QGraphicsItem::ItemIsSelectable, false);
     }
 
     // 渲染线 (世界坐标→场景像素坐标)
+    QPen linePen(QColor("#1296DB"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     for (const auto &item : m_lines) {
         QJsonObject ln = item.toObject();
         QPointF a = worldToScene(ln.value("x1").toDouble(), ln.value("y1").toDouble());
         QPointF b = worldToScene(ln.value("x2").toDouble(), ln.value("y2").toDouble());
-        QGraphicsLineItem *line = m_scene->addLine(a.x(), a.y(), b.x(), b.y(), QPen(Qt::green, 1));
+        int direct = ln.value("direct").toInt(10);
+        QGraphicsLineItem *line = m_scene->addLine(a.x(), a.y(), b.x(), b.y(), linePen);
         line->setZValue(5);
-        line->setOpacity(0.5);
+
+        // 线路导向标 (单向或双向)
+        QPointF dir = b - a;
+        double len = std::hypot(dir.x(), dir.y());
+        if (len > 1e-3) {
+            dir /= len;
+            QPointF mid = (a + b) / 2.0;
+            QList<QPolygonF> arrows = MapPgmUtil::createDirectionArrows(mid, dir, direct, len);
+            for (const auto &poly : arrows) {
+                auto *arr = m_scene->addPolygon(poly, QPen(Qt::NoPen), QBrush(linePen.color()));
+                arr->setParentItem(line);
+                arr->setZValue(6);
+                arr->setAcceptedMouseButtons(Qt::NoButton);
+            }
+        }
     }
 
     // 渲染曲线 (世界坐标→场景像素坐标)
+    QPen curvePen(QColor("#9B59B6"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     for (const auto &item : m_curves) {
         QJsonObject cv = item.toObject();
-        QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
-        QPointF pc = worldToScene(cv.value("cx").toDouble(), cv.value("cy").toDouble());
-        QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+        int direct = cv.value("direct").toInt(10);
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
         QPainterPath path;
-        path.moveTo(p1);
-        path.quadTo(pc, p2);
-        QGraphicsPathItem *pathItem = m_scene->addPath(path, QPen(Qt::magenta, 1));
+        QList<QPointF> scenePts;
+        if (ctrlArr.size() >= 2) {
+            for (const auto &pv : ctrlArr) {
+                QJsonObject pt = pv.toObject();
+                scenePts.append(worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble()));
+            }
+            path = MapPgmUtil::getBezierPath(scenePts);
+        } else {
+            QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
+            QPointF pc = worldToScene(cv.value("cx").toDouble(), cv.value("cy").toDouble());
+            QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+            scenePts.append(p1); scenePts.append(pc); scenePts.append(p2);
+            path.moveTo(p1);
+            path.quadTo(pc, p2);
+        }
+        QGraphicsPathItem *pathItem = m_scene->addPath(path, curvePen);
         pathItem->setZValue(5);
-        pathItem->setOpacity(0.5);
+
+        if (scenePts.size() >= 2) {
+            double cLen = std::hypot(scenePts.last().x() - scenePts.first().x(),
+                                     scenePts.last().y() - scenePts.first().y());
+            QList<QPolygonF> arrows = MapPgmUtil::createBezierDirectionArrows(scenePts, direct, cLen);
+            for (const auto &poly : arrows) {
+                auto *arr = m_scene->addPolygon(poly, QPen(Qt::NoPen), QBrush(curvePen.color()));
+                arr->setParentItem(pathItem);
+                arr->setZValue(6);
+                arr->setAcceptedMouseButtons(Qt::NoButton);
+            }
+        }
     }
 
     // scene->clear() already deleted all items; null out dangling marker pointers

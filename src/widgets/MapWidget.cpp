@@ -78,7 +78,7 @@ void MapWidget::setupUI()
         QAction *sourceAct = menu.addAction("下载源文件");
         QAction *sendAct = menu.addAction("下发地图资源至设备");
         QAction *deleteAct = menu.addAction("删除地图");
-        QAction *editRouteAct = menu.addAction("编辑路网");
+        QAction *editRouteAct = menu.addAction("编辑地图");
         QAction *navAct = menu.addAction("导航");
 
         bool disabled = mapData.value("delFlag").toString() != "0";

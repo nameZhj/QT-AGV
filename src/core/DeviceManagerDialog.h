@@ -21,6 +21,7 @@ class DeviceCard : public QWidget
     Q_OBJECT
 public:
     explicit DeviceCard(const DeviceProfile &profile, int index, QWidget *parent = nullptr);
+    ~DeviceCard() override;
     void setIndex(int idx) { m_index = idx; }
     void setBusy(bool busy);
     // 异步更新链接状态 UI（true=已链接，false=未链接）
@@ -32,23 +33,25 @@ signals:
     void linkClicked(int index);     // 链接设备 (未链接状态下显示)
 
 private:
-    void checkOnlineStatus(const QString &ip, const QString &carId);
+    void startMqttMonitor(const QString &ip, const QString &carId);
     void setOnlineUI(bool online);
-    void finishProbe();
+    void updateCardDisplay();
 
     int m_index = 0;
+    DeviceProfile m_profile;
     QPushButton *m_connectBtn  = nullptr;
     QPushButton *m_linkBtn     = nullptr;   // 链接设备按钮 (未链接时显示)
     QLabel      *m_warnLabel   = nullptr;   // "⚠ 未链接" 警告标签
     QLabel      *m_onlineDot   = nullptr;
     QLabel      *m_onlineLabel = nullptr;
+    QLabel      *m_nameLabel   = nullptr;   // 设备名称标签
+    QLabel      *m_mapLabel    = nullptr;   // 绑定的地图名称标签
+    QLabel      *m_verLabel    = nullptr;   // 版本号标签
     QHBoxLayout *m_footerLay   = nullptr;   // footer 布局，供 setLinkStatus 动态调整
 
-    // 临时探测连接：通过实际订阅设备的 MQTT 信息主题判断是否真正在线，
-    // 与应用主连接(MqttService)互不干扰，探测完成后即销毁。
-    QMqttClient *m_probeClient  = nullptr;
-    QTimer      *m_probeTimer   = nullptr;
-    bool         m_probeResolved = false;
+    // 自动连接该设备专属 MQTT，持续订阅 /rob/{carId}/info 实时更新与缓存设备信息
+    QMqttClient *m_mqttClient  = nullptr;
+    QTimer      *m_heartbeatTimer = nullptr;
 };
 
 // ── Main device-manager dialog ────────────────────────────────────────────────

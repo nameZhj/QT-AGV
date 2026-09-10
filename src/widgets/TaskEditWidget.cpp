@@ -1167,64 +1167,130 @@ void TaskEditWidget::renderMap()
     // 渲染底图
     if (!m_mapImage.isNull()) {
         QGraphicsPixmapItem *bgItem = m_scene->addPixmap(QPixmap::fromImage(m_mapImage));
+        bgItem->setTransformationMode(Qt::SmoothTransformation);
         bgItem->setZValue(-100);
     }
+
+    double pxPerMeterX = (m_imgW > 0 && (m_worldR > m_worldL)) ? (m_imgW / (m_worldR - m_worldL)) : 20.0;
+    double pxPerMeterY = (m_imgH > 0 && (m_worldT > m_worldB)) ? (m_imgH / (m_worldT - m_worldB)) : 20.0;
 
     // 渲染路网点
     for (const auto &item : m_points) {
         QJsonObject pt = item.toObject();
         QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
-        auto *e = m_scene->addEllipse(-4,-4,8,8, QPen(QColor("#4a9fd4").darker(120),1), QBrush(QColor("#4a9fd4")));
-        e->setPos(sp); e->setZValue(10); e->setOpacity(0.7);
+        QPainterPath crossPath;
+        QPainterPath path = MapPgmUtil::createPointPath(pxPerMeterX, pxPerMeterY, nullptr, nullptr, &crossPath);
+        auto *e = m_scene->addPath(path, QPen(QColor(41, 128, 185, 240), 0.8), QBrush(QColor(210, 230, 250, 235)));
+        e->setPos(sp); e->setZValue(10);
+
+        QPen crossPen(QColor("#E74C3C"), 0.8, Qt::SolidLine);
+        crossPen.setCapStyle(Qt::FlatCap);
+        auto *crossItem = m_scene->addPath(crossPath, crossPen);
+        crossItem->setParentItem(e);
+        crossItem->setPos(0, 0);
+        crossItem->setAcceptedMouseButtons(Qt::NoButton);
+        crossItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
     }
 
     // 渲染充电点
     for (const auto &item : m_charges) {
         QJsonObject pt = item.toObject();
         QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
-        auto *e = m_scene->addEllipse(-5,-5,10,10, QPen(QColor("#f39c12").darker(120),1.5), QBrush(QColor("#f39c12")));
-        e->setPos(sp); e->setZValue(10); e->setOpacity(0.85);
+        QPainterPath crossPath;
+        QPainterPath path = MapPgmUtil::createPointPath(pxPerMeterX, pxPerMeterY, nullptr, nullptr, &crossPath);
+        auto *e = m_scene->addPath(path, QPen(QColor(217, 119, 6, 240), 0.8), QBrush(QColor(254, 243, 199, 235)));
+        e->setPos(sp); e->setZValue(10);
+
+        QPen crossPen(QColor("#E74C3C"), 0.8, Qt::SolidLine);
+        crossPen.setCapStyle(Qt::FlatCap);
+        auto *crossItem = m_scene->addPath(crossPath, crossPen);
+        crossItem->setParentItem(e);
+        crossItem->setPos(0, 0);
+        crossItem->setAcceptedMouseButtons(Qt::NoButton);
+        crossItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
     }
 
-    // 渲染高精度点：黄色圆点，与普通点统一大小和样式
+    // 渲染高精度点
     for (const auto &item : m_highPrecisionPoints) {
         QJsonObject pt = item.toObject();
         QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
-        auto *e = m_scene->addEllipse(-5,-5,10,10, QPen(QColor("#f2c200").darker(120),1), QBrush(QColor("#f2c200")));
-        e->setPos(sp); e->setZValue(10); e->setOpacity(0.85);
+        QPainterPath crossPath;
+        QPainterPath path = MapPgmUtil::createPointPath(pxPerMeterX, pxPerMeterY, nullptr, nullptr, &crossPath);
+        auto *e = m_scene->addPath(path, QPen(QColor(220, 38, 38, 240), 0.8), QBrush(QColor(254, 226, 226, 235)));
+        e->setPos(sp); e->setZValue(10);
+
+        QPen crossPen(QColor("#E74C3C"), 0.8, Qt::SolidLine);
+        crossPen.setCapStyle(Qt::FlatCap);
+        auto *crossItem = m_scene->addPath(crossPath, crossPen);
+        crossItem->setParentItem(e);
+        crossItem->setPos(0, 0);
+        crossItem->setAcceptedMouseButtons(Qt::NoButton);
+        crossItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
     }
 
     // 渲染线
+    QPen linePen(QColor("#1296DB"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     for (const auto &item : m_lines) {
         QJsonObject ln = item.toObject();
         QPointF a = worldToScene(ln.value("x1").toDouble(), ln.value("y1").toDouble());
         QPointF b = worldToScene(ln.value("x2").toDouble(), ln.value("y2").toDouble());
-        auto *li = m_scene->addLine(a.x(),a.y(),b.x(),b.y(), QPen(QColor("#1abc9c"),1.5));
-        li->setZValue(5); li->setOpacity(0.65);
+        int direct = ln.value("direct").toInt(10);
+        auto *li = m_scene->addLine(a.x(), a.y(), b.x(), b.y(), linePen);
+        li->setZValue(5);
+
+        QPointF dir = b - a;
+        double len = std::hypot(dir.x(), dir.y());
+        if (len > 1e-3) {
+            dir /= len;
+            QPointF mid = (a + b) / 2.0;
+            QList<QPolygonF> arrows = MapPgmUtil::createDirectionArrows(mid, dir, direct, len);
+            for (const auto &poly : arrows) {
+                auto *arr = m_scene->addPolygon(poly, QPen(Qt::NoPen), QBrush(linePen.color()));
+                arr->setParentItem(li);
+                arr->setZValue(6);
+                arr->setAcceptedMouseButtons(Qt::NoButton);
+            }
+        }
     }
 
-    // 渲染曲线(支持多阶贝塞尔)
+    QPen curvePen(QColor("#9B59B6"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     for (const auto &item : m_curves) {
         QJsonObject cv = item.toObject();
+        int direct = cv.value("direct").toInt(10);
         QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        QPainterPath path;
+        QList<QPointF> scenePts;
+        QGraphicsPathItem *pi = nullptr;
         if (ctrlArr.size() >= 2) {
             // 多阶贝塞尔: 使用 MapPgmUtil::getBezierPath
-            QList<QPointF> scenePts;
             for (const auto &pv : ctrlArr) {
                 QJsonObject pt = pv.toObject();
                 scenePts.append(worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble()));
             }
-            QPainterPath path = MapPgmUtil::getBezierPath(scenePts);
-            auto *pi = m_scene->addPath(path, QPen(QColor("#6c5ce7"),1.5));
-            pi->setZValue(5); pi->setOpacity(0.65);
+            path = MapPgmUtil::getBezierPath(scenePts);
+            pi = m_scene->addPath(path, curvePen);
+            pi->setZValue(5);
         } else {
             // 兼容旧格式: 3点二次贝塞尔
             QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
             QPointF pc = worldToScene(cv.value("cx").toDouble(), cv.value("cy").toDouble());
             QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
-            QPainterPath path; path.moveTo(p1); path.quadTo(pc, p2);
-            auto *pi = m_scene->addPath(path, QPen(QColor("#6c5ce7"),1.5));
-            pi->setZValue(5); pi->setOpacity(0.65);
+            scenePts.append(p1); scenePts.append(pc); scenePts.append(p2);
+            path.moveTo(p1); path.quadTo(pc, p2);
+            pi = m_scene->addPath(path, curvePen);
+            pi->setZValue(5);
+        }
+
+        if (scenePts.size() >= 2 && pi) {
+            double cLen = std::hypot(scenePts.last().x() - scenePts.first().x(),
+                                     scenePts.last().y() - scenePts.first().y());
+            QList<QPolygonF> arrows = MapPgmUtil::createBezierDirectionArrows(scenePts, direct, cLen);
+            for (const auto &poly : arrows) {
+                auto *arr = m_scene->addPolygon(poly, QPen(Qt::NoPen), QBrush(curvePen.color()));
+                arr->setParentItem(pi);
+                arr->setZValue(6);
+                arr->setAcceptedMouseButtons(Qt::NoButton);
+            }
         }
     }
 

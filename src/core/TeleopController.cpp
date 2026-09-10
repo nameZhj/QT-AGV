@@ -56,9 +56,9 @@ void TeleopController::setActive(bool on)
         emit motionChanged(0.0, 0.0);
         emit brakeChanged(false);
         emit hoistChanged(0);
-        if (wasHoisting) {
-            publishHoistStatus("2");
-        }
+        // if (wasHoisting) {
+        //     publishHoistStatus("2");
+        // }
     }
 
     emit activeChanged(m_active);
@@ -68,7 +68,7 @@ bool TeleopController::eventFilter(QObject *obj, QEvent *event)
 {
     if (!m_active) return QObject::eventFilter(obj, event);
 
-    // 遥控启用时，拦截上下左右/空格的 ShortcutOverride，防止组件通过快捷键系统消费
+    // 遥控启用时，拦截 WASD/空格的 ShortcutOverride，防止组件通过快捷键系统消费
     if (event->type() == QEvent::ShortcutOverride) {
         QKeyEvent *ke = static_cast<QKeyEvent *>(event);
         if (isMovementKey(ke->key())) {
@@ -115,10 +115,10 @@ bool TeleopController::eventFilter(QObject *obj, QEvent *event)
 bool TeleopController::isMovementKey(int key) const
 {
     switch (key) {
-    case Qt::Key_Up:
-    case Qt::Key_Down:
-    case Qt::Key_Left:
-    case Qt::Key_Right:
+    case Qt::Key_W:
+    case Qt::Key_S:
+    case Qt::Key_A:
+    case Qt::Key_D:
     case Qt::Key_Space:
         return true;
     default:
@@ -129,10 +129,10 @@ bool TeleopController::isMovementKey(int key) const
 bool TeleopController::isTeleopKey(int key) const
 {
     switch (key) {
-    case Qt::Key_Up:
-    case Qt::Key_Down:
-    case Qt::Key_Left:
-    case Qt::Key_Right:
+    case Qt::Key_W:
+    case Qt::Key_S:
+    case Qt::Key_A:
+    case Qt::Key_D:
     case Qt::Key_Space:
     case Qt::Key_P:
     case Qt::Key_L:
@@ -158,10 +158,10 @@ bool TeleopController::focusIsTextInput() const
 bool TeleopController::handleKeyEvent(QKeyEvent *event, bool pressed)
 {
     switch (event->key()) {
-    case Qt::Key_Up:    m_keyForward   = pressed; break;
-    case Qt::Key_Down:  m_keyBack      = pressed; break;
-    case Qt::Key_Left:  m_keyLeft      = pressed; break;
-    case Qt::Key_Right: m_keyRight     = pressed; break;
+    case Qt::Key_W:     m_keyForward   = pressed; break;
+    case Qt::Key_S:     m_keyBack      = pressed; break;
+    case Qt::Key_A:     m_keyLeft      = pressed; break;
+    case Qt::Key_D:     m_keyRight     = pressed; break;
     case Qt::Key_Space: m_keyBrake     = pressed; break;
     case Qt::Key_P:     m_keyHoistUp   = pressed; break;
     case Qt::Key_L:     m_keyHoistDown = pressed; break;
@@ -183,7 +183,7 @@ bool TeleopController::handleKeyEvent(QKeyEvent *event, bool pressed)
         } else if (m_wasHoisting) {
             // 抬手不再按下控制顶升的按键：只发送一次 2（停止指令）
             m_wasHoisting = false;
-            publishHoistStatus("2");
+            // publishHoistStatus("2");
         }
     }
 

@@ -47,8 +47,10 @@ void ApiService::handleReply(QNetworkReply *reply, const Callback &cb)
         reply->deleteLater();
         QString urlStr = reply->url().toString();
         if (reply->error() != QNetworkReply::NoError) {
-            qWarning().noquote() << QString("[HTTP ERROR] %1 -> %2").arg(urlStr, reply->errorString());
-            cb(500, QJsonObject{{"msg", reply->errorString()}});
+            // 不使用 errorString() (受 Qt 中文翻译影响), 用 error code 代替
+            QString errStr = QString("Network error %1").arg(static_cast<int>(reply->error()));
+            qWarning().noquote() << QString("[HTTP ERROR] %1 -> %2").arg(urlStr, errStr);
+            cb(500, QJsonObject{{"msg", errStr}});
             return;
         }
         QByteArray data = reply->readAll();
@@ -71,7 +73,8 @@ void ApiService::handleRawReply(QNetworkReply *reply, const RawCallback &cb)
         reply->deleteLater();
         QString urlStr = reply->url().toString();
         if (reply->error() != QNetworkReply::NoError) {
-            qWarning().noquote() << QString("[HTTP RAW ERROR] %1 -> %2").arg(urlStr, reply->errorString());
+            QString errStr = QString("Network error %1").arg(static_cast<int>(reply->error()));
+            qWarning().noquote() << QString("[HTTP RAW ERROR] %1 -> %2").arg(urlStr, errStr);
             cb(500, QByteArray());
             return;
         }
@@ -87,7 +90,8 @@ void ApiService::handleFileReply(QNetworkReply *reply, const FileCallback &cb)
         reply->deleteLater();
         QString urlStr = reply->url().toString();
         if (reply->error() != QNetworkReply::NoError) {
-            qWarning().noquote() << QString("[HTTP FILE ERROR] %1 -> %2").arg(urlStr, reply->errorString());
+            QString errStr = QString("Network error %1").arg(static_cast<int>(reply->error()));
+            qWarning().noquote() << QString("[HTTP FILE ERROR] %1 -> %2").arg(urlStr, errStr);
             cb(false, QByteArray());
             return;
         }
@@ -591,6 +595,16 @@ void ApiService::initPose(const QString &carId, const QJsonObject &pose, const C
     data["carId"] = carId;
     post("/robot/navigation/initPose", data, cb);
 }
+
+void ApiService::navigateTo(const QString &locationId, const Callback &cb)
+{
+    QString url = "/robot/navigation/navigate/to";
+    QUrlQuery q;
+    q.addQueryItem("locationId", locationId);
+    url += "?" + q.toString();
+    post(url, QJsonObject(), cb);
+}
+
 
 // ========== 便捷重载 ==========
 void ApiService::listCarAll(const Callback &cb)

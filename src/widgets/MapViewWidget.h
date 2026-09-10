@@ -76,6 +76,7 @@ private slots:
     void onSceneMoved(const QPointF &scenePos);
     void onSceneReleased(const QPointF &scenePos, Qt::MouseButton btn);
     void onResetView();
+    void onToggleNavMode();
 
 private:
     void setupUI();
@@ -144,8 +145,12 @@ private:
     QToolButton *m_createMapBtn = nullptr;
     QToolButton *m_switchMapBtn = nullptr;
     QToolButton *m_relocBtn     = nullptr;
+    QToolButton *m_navModeBtn   = nullptr;
     QToolButton *m_resetViewBtn = nullptr;
     QPushButton *m_gridBtn      = nullptr;
+
+    // Navigation mode
+    bool        m_navMode          = false;
 
     // Relocalization mode (click+drag to set position and heading)
     bool        m_relocMode        = false;

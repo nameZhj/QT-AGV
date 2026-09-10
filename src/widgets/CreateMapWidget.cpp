@@ -260,7 +260,7 @@ void CreateMapWidget::setupUI()
 
     QLabel *kbHint = new QLabel(
         "<small style='color:#7a8a99;'>"
-        "键盘: ↑↓←→ 移动 &nbsp;|&nbsp; Space 刹车<br>"
+        "键盘: W A S D 移动 &nbsp;|&nbsp; Space 刹车<br>"
         "Ctrl 加速 &nbsp;|&nbsp; P 升降上 &nbsp;|&nbsp; L 升降下"
         "</small>");
     kbHint->setTextFormat(Qt::RichText);

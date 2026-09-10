@@ -1,4 +1,5 @@
 #include "AppConfig.h"
+#include "TestPortMapping.h"
 #include <QVariant>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -30,6 +31,8 @@ QList<DeviceProfile> AppConfig::deviceList() const
         p.token         = m_settings.value("token").toString();
         p.lastConnected = m_settings.value("lastConnected").toDateTime();
         p.linkStatus    = m_settings.value("linkStatus").toString();
+        p.mapName       = m_settings.value("mapName").toString();
+        p.version       = m_settings.value("version").toString();
         list.append(p);
     }
     m_settings.endArray();
@@ -48,6 +51,8 @@ void AppConfig::saveDeviceList(const QList<DeviceProfile> &list)
         m_settings.setValue("token",         p.token);
         m_settings.setValue("lastConnected", p.lastConnected);
         m_settings.setValue("linkStatus",    p.linkStatus);
+        m_settings.setValue("mapName",       p.mapName);
+        m_settings.setValue("version",       p.version);
     }
     m_settings.endArray();
     m_settings.sync();
@@ -59,7 +64,13 @@ void AppConfig::saveDevice(const DeviceProfile &dev)
     // Update existing entry by IP
     for (DeviceProfile &p : list) {
         if (p.ip == dev.ip) {
+            QString keepMap  = dev.mapName.isEmpty() ? p.mapName : dev.mapName;
+            QString keepVer  = dev.version.isEmpty() ? p.version : dev.version;
+            QString keepName = dev.name.isEmpty() ? p.name : dev.name;
             p = dev;
+            p.mapName = keepMap;
+            p.version = keepVer;
+            p.name    = keepName;
             saveDeviceList(list);
             return;
         }
@@ -188,7 +199,7 @@ void AppConfig::setDeptId(int id)
 
 QString AppConfig::baseApiUrl() const
 {
-    return "http://" + serverIp() + ":8048";
+    return "http://" + serverIp() + ":" + QString::number(mapPort(8048));
 }
 
 QString AppConfig::robotApiUrl(int port) const
@@ -198,6 +209,37 @@ QString AppConfig::robotApiUrl(int port) const
 
 int AppConfig::mapPort(int internalPort)
 {
-    // 已取消端口映射，直接使用原始端口连接服务器
-    return internalPort;
+    return TestPortMapping::instance().mapPort(internalPort);
+}
+
+// ========== Test mode ==========
+
+bool AppConfig::testMode() const
+{
+    return m_settings.value("testMode", false).toBool();
+}
+
+void AppConfig::setTestMode(bool enabled)
+{
+    m_settings.setValue("testMode", enabled);
+    m_settings.sync();
+}
+
+void AppConfig::ensureTestDevice()
+{
+    // 确保存在一个用于测试的模拟设备
+    const QString testIp = "127.0.0.1";
+    QList<DeviceProfile> list = deviceList();
+    for (const auto &dev : list) {
+        if (dev.ip == testIp) return;   // 已存在
+    }
+    DeviceProfile dev;
+    dev.name          = "Test Device";
+    dev.ip            = testIp;
+    dev.carId         = "test-car-001";
+    dev.token         = "test-token";
+    dev.lastConnected = QDateTime::currentDateTime();
+    dev.linkStatus    = "0";   // 已链接
+    list.append(dev);
+    saveDeviceList(list);
 }

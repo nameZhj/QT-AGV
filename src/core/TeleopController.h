@@ -7,7 +7,7 @@
 // 全局遥控控制器（单例）
 //
 // 把 CreateMapWidget 中"键盘遥控"逻辑提取为全局组件：
-//   - 通过 qApp->installEventFilter 在任意界面拦截遥控键（↑↓←→/Space/P/L）
+//   - 通过 qApp->installEventFilter 在任意界面拦截遥控键（WASD/Space/P/L）
 //     返回 true 阻止事件传递到目标控件，因此遥控键优先级最高，
 //     自然解决与子控件（地图编辑、表格方向键等）的键盘冲突。
 //   - 100ms 定时器周期性发布速度指令到 MQTT：

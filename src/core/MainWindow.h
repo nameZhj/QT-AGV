@@ -15,6 +15,7 @@ class MapEditWidget;
 class TaskWidget;
 class TaskEditWidget;
 class TaskLogWidget;
+class TaskChainWidget;
 class QToolBar;
 class QAction;
 class QActionGroup;
@@ -68,6 +69,7 @@ protected:
     MapViewWidget    *m_mapPage        = nullptr;
     TaskWidget       *m_taskPage       = nullptr;
     TaskLogWidget    *m_taskLogPage    = nullptr;
+    TaskChainWidget  *m_taskChainPage   = nullptr;
 
     QMap<QString, QWidget *> m_dynamicPages;
 

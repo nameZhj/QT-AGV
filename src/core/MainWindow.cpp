@@ -8,6 +8,7 @@
 #include "widgets/TaskWidget.h"
 #include "widgets/TaskEditWidget.h"
 #include "widgets/TaskLogWidget.h"
+#include "widgets/TaskChainWidget.h"
 #include "core/AppConfig.h"
 #include "core/MqttService.h"
 #include "core/WebSocketService.h"
@@ -434,8 +435,9 @@ void MainWindow::setupHeaderBar()
     // entry inside "地图管理" (see MapViewWidget's toolbar / onCreateMap()).
     struct SectionDef { QString text; int pageIndex; };
     const QList<SectionDef> sections = {
-        {"  地图管理  ", 1},
-        {"  任务管理  ", 3},
+        {"  地图与控制", 1},
+        // {"  任务管理  ", 3},  // 暂不需要任务管理功能，已隐藏
+        {"  任务链  ", 6},
         {"  参数配置  ", 5},
         {"  设备信息  ", 0},
         {"  任务日志  ", 4},
@@ -478,6 +480,7 @@ void MainWindow::initPages()
     m_mapPage        = new MapViewWidget;
     m_taskPage       = new TaskWidget;
     m_taskLogPage    = new TaskLogWidget;
+    m_taskChainPage  = new TaskChainWidget;
 
     m_stack->addWidget(m_agvInfoPage);     // 0 设备信息
     m_stack->addWidget(m_mapPage);         // 1 地图列表
@@ -485,6 +488,7 @@ void MainWindow::initPages()
     m_stack->addWidget(m_taskPage);        // 3 任务管理
     m_stack->addWidget(m_taskLogPage);     // 4 任务日志
     m_stack->addWidget(m_editConfigPage);  // 5 参数配置
+    m_stack->addWidget(m_taskChainPage);   // 6 任务链
 
     connect(m_taskPage,    &TaskWidget::navigateRequested,
             this, &MainWindow::onNavigateRequested);
@@ -526,16 +530,16 @@ void MainWindow::setupStatusBar()
     sb->addWidget(m_sbCarId);
     sb->addWidget(m_sbConn);
 
-    // 底部"开始遥控"按钮：点击启用/停用全局键盘遥控
-    // 启用后用户在任意界面（除文本输入控件焦点外）通过键盘 ↑↓←→ 移动、Space 刹车、
+    // 底部"抢占控制权"按钮：选中=暂停导航(抢占)，非选中=恢复导航
+    // 选中后用户在任意界面（除文本输入控件焦点外）通过键盘 WASD 移动、Space 刹车、
     // Ctrl 加速、P/L 升降；遥控键优先级最高，会拦截其他控件的相同按键。
-    m_teleopBtn = new QPushButton("▶ 开始遥控");
+    m_teleopBtn = new QPushButton("抢占控制权");
     m_teleopBtn->setCursor(Qt::PointingHandCursor);
     m_teleopBtn->setFocusPolicy(Qt::NoFocus);   // 不抢焦点，避免影响键盘遥控
     m_teleopBtn->setToolTip(
-        "点击启用全局键盘遥控\n"
-        "键盘: ↑↓←→ 移动 | Space 刹车 | Ctrl 加速 | P 升降上 | L 升降下\n"
-        "启用后遥控键优先级最高，会拦截其他控件的相同按键");
+        "点击抢占控制权（暂停导航），再次点击恢复导航\n"
+        "键盘: W A S D 移动 | Space 刹车 | Ctrl 加速 | P 升降上 | L 升降下\n"
+        "抢占后遥控键优先级最高，会拦截其他控件的相同按键");
     m_teleopBtn->setStyleSheet(
         "QPushButton{background:#252a35;border:1px solid #3a3f4a;color:#c8d0d8;"
         "padding:3px 14px;border-radius:3px;font-size:12px;font-weight:600;}"
@@ -564,9 +568,12 @@ void MainWindow::connectServices()
     QString ip = AppConfig::instance().serverIp();
     if (ip.isEmpty()) return;
 
-    MqttService::instance().connectToHost(ip, 1883);
+    // 测试模式跳过 MQTT/WebSocket 连接
+    if (AppConfig::instance().testMode()) return;
 
-    QString wsUrl = QString("ws://%1:8048/websocket/message").arg(ip);
+    MqttService::instance().connectToHost(ip, AppConfig::mapPort(1883));
+
+    QString wsUrl = QString("ws://%1:%2/websocket/message").arg(ip).arg(AppConfig::mapPort(8048));
     WebSocketService::instance().connectToServer(wsUrl);
 }
 
@@ -637,6 +644,7 @@ void MainWindow::switchToPage(const QString &pageKey)
         {"task",        3},
         {"tasklog",     4},
         {"edit_config", 5},
+        {"taskchain",   6},
     };
     auto it = pageMap.find(pageKey);
     if (it != pageMap.end()) {
@@ -670,26 +678,11 @@ void MainWindow::onNavigateRequested(const QString &target, const QString &id)
         // Secondary page under 地图管理 — no tab to highlight, leave it as-is.
         m_stack->setCurrentWidget(m_createMapPage);
 
-    } else if (target == "map_edit") {
+    } else if (target == "map_edit" || target == "map_image_edit") {
         QString key = QString("map_edit_%1").arg(id);
         if (!m_dynamicPages.contains(key)) {
             MapEditWidget *w = new MapEditWidget(id);
             connect(w, &MapEditWidget::goBack, this, [this, key]() {
-                m_stack->setCurrentWidget(m_mapPage);
-                if (m_mapPage) m_mapPage->refreshData();
-                QWidget *p = m_dynamicPages.take(key);
-                if (p) { m_stack->removeWidget(p); p->deleteLater(); }
-            });
-            m_dynamicPages[key] = w;
-            m_stack->addWidget(w);
-        }
-        m_stack->setCurrentWidget(m_dynamicPages[key]);
-
-    } else if (target == "map_image_edit") {
-        QString key = QString("map_image_edit_%1").arg(id);
-        if (!m_dynamicPages.contains(key)) {
-            MapImageEditWidget *w = new MapImageEditWidget(id);
-            connect(w, &MapImageEditWidget::goBack, this, [this, key]() {
                 m_stack->setCurrentWidget(m_mapPage);
                 if (m_mapPage) m_mapPage->refreshData();
                 QWidget *p = m_dynamicPages.take(key);
@@ -753,6 +746,13 @@ void MainWindow::onAbout()
 
 void MainWindow::updateStatusBar()
 {
+    // 测试模式状态栏
+    if (AppConfig::instance().testMode()) {
+        m_sbConn->setText("● TEST MODE");
+        m_sbConn->setStyleSheet("color:#f0a060; background:transparent; border-right:1px solid #2d3340;");
+        return;
+    }
+
     bool mqttOk = MqttService::instance().isConnected();
     if (mqttOk) {
         m_sbConn->setText("● MQTT: 已连接");
@@ -811,27 +811,27 @@ void MainWindow::onTeleopActiveChanged(bool active)
 {
     if (!m_teleopBtn) return;
     if (active) {
-        m_teleopBtn->setText("■ 停止遥控");
+        m_teleopBtn->setText("■ 恢复导航");
         m_teleopBtn->setObjectName("teleopBtnActive");
         // 强制刷新样式（objectName 改变后需要重新 polish）
         m_teleopBtn->style()->unpolish(m_teleopBtn);
         m_teleopBtn->style()->polish(m_teleopBtn);
-        Toast::info(this, "遥控已启用：↑↓←→ 移动 | Space 刹车 | Ctrl 加速 | P/L 升降");
+        Toast::info(this, "已抢占控制权：WASD 移动 | Space 刹车 | Ctrl 加速 | P/L 升降");
         // 启用遥控前先暂停巡航，避免遥控与自动巡航冲突
         ApiService::instance().suspendWork([](int code, const QJsonObject &) {
             if (code != 200) {
-                qWarning("暂停巡航失败 (HTTP %d)，遥控可能受影响", code);
+                qWarning("暂停导航失败 (HTTP %d)，遥控可能受影响", code);
             }
         });
     } else {
-        m_teleopBtn->setText("▶ 开始遥控");
+        m_teleopBtn->setText("抢占控制权");
         m_teleopBtn->setObjectName("");
         m_teleopBtn->style()->unpolish(m_teleopBtn);
         m_teleopBtn->style()->polish(m_teleopBtn);
         // 停止遥控后恢复巡航
         ApiService::instance().continueWork([](int code, const QJsonObject &) {
             if (code != 200) {
-                qWarning("恢复巡航失败 (HTTP %d)", code);
+                qWarning("恢复导航失败 (HTTP %d)", code);
             }
         });
     }

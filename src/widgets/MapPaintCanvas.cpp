@@ -20,7 +20,7 @@ double MapPaintCanvas::fitScale() const
 
 void MapPaintCanvas::setImage(const QImage &image)
 {
-    m_image = image.convertToFormat(QImage::Format_Grayscale8);
+    m_image = image.convertToFormat(QImage::Format_RGB32);
     m_originalImage = m_image;   // 保存原始地图数据，橡皮擦时恢复
     m_undoStack.clear();
     m_redoStack.clear();
@@ -103,53 +103,37 @@ QPointF MapPaintCanvas::widgetToImage(const QPoint &pos) const
 void MapPaintCanvas::paintStroke(const QPointF &from, const QPointF &to, bool isPoint)
 {
     if (m_image.isNull()) return;
-    if (m_tool == Tool::Eraser && !m_originalImage.isNull()) {
-        // 橡皮擦：从原始地图恢复像素数据，而不是涂白
-        QPainter painter(&m_image);
-        painter.setClipRegion(QRegion(QRect(0, 0, m_image.width(), m_image.height())));
-        QPen pen(Qt::NoPen);
-        painter.setPen(pen);
-        double r = m_brushSize / 2.0;
-        if (isPoint) {
-            QRectF srcRect(to.x() - r, to.y() - r, m_brushSize, m_brushSize);
-            QRectF dstRect = srcRect.intersected(QRectF(0, 0, m_image.width(), m_image.height()));
-            if (!dstRect.isEmpty() && m_originalImage.rect().contains(dstRect.toRect())) {
-                painter.drawImage(dstRect, m_originalImage, dstRect);
-            }
-        } else {
-            // 沿线段恢复原始像素：用 clip path 限制绘制区域
-            QPainterPath clipPath;
-            clipPath.moveTo(from);
-            QPainterPathStroker stroker;
-            stroker.setWidth(m_brushSize);
-            stroker.setCapStyle(Qt::RoundCap);
-            stroker.setJoinStyle(Qt::RoundJoin);
-            QPainterPath linePath;
-            linePath.moveTo(from);
-            linePath.lineTo(to);
-            clipPath = stroker.createStroke(linePath);
-            painter.setClipPath(clipPath);
-            painter.drawImage(QPointF(0, 0), m_originalImage);
-        }
-        return;
+
+    if (m_image.format() != QImage::Format_RGB32 && m_image.format() != QImage::Format_ARGB32_Premultiplied) {
+        m_image = m_image.convertToFormat(QImage::Format_RGB32);
     }
-    // 画笔：涂黑（标记障碍/墙体）
+
+    // 画笔 (Brush): 涂黑 (RGB 0, 0, 0 / 标记障碍/墙体)
+    // 橡皮 (Eraser): 擦除为纯白 (RGB 255, 255, 255 / 标记为可通行自由空间)
     QPainter painter(&m_image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
     QColor color = (m_tool == Tool::Brush) ? QColor(0, 0, 0) : QColor(255, 255, 255);
     QPen pen(color, m_brushSize, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-    painter.setPen(pen);
-    painter.setBrush(color);
     if (isPoint) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QBrush(color));
         double r = m_brushSize / 2.0;
         painter.drawEllipse(to, r, r);
     } else {
+        painter.setPen(pen);
+        painter.setBrush(QBrush(color));
         painter.drawLine(from, to);
     }
+    painter.end();
 }
 
 void MapPaintCanvas::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     painter.fillRect(rect(), QColor(0, 0, 0));
 
     if (!m_image.isNull()) {
@@ -162,7 +146,7 @@ void MapPaintCanvas::paintEvent(QPaintEvent *)
 
     if (m_cursorInside && !m_image.isNull() && m_tool != Tool::Move) {
         double r = m_brushSize * m_scale / 2.0;
-        painter.setPen(QPen(QColor(24, 144, 255), 1));
+        painter.setPen(QPen(QColor(24, 144, 255), 1, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         painter.setBrush(Qt::NoBrush);
         painter.drawEllipse(QPointF(m_cursorPos), r, r);
     }

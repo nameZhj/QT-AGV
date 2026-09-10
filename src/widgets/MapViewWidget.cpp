@@ -445,7 +445,7 @@ void MapViewWidget::setupToolbar(QWidget *parent)
         return b;
     };
 
-    m_createMapBtn = addBtn("add", "创建地图", SLOT(onCreateMap()));
+    m_createMapBtn = addBtn("add", "2D建图", SLOT(onCreateMap()));
 
     auto *sepCreate = new QFrame; sepCreate->setFrameShape(QFrame::VLine);
     sepCreate->setStyleSheet("color:#2d3340;"); lay->addWidget(sepCreate);
@@ -454,11 +454,14 @@ void MapViewWidget::setupToolbar(QWidget *parent)
     m_switchMapBtn->setStyleSheet(kToolBtnPrimary);
 
     m_relocBtn = addBtn("target", "重定位", SLOT(onRelocalize()));
+    m_relocBtn->setCheckable(true);
+
+    m_navModeBtn = addBtn("route", "路径导航", SLOT(onToggleNavMode()));
+    m_navModeBtn->setCheckable(true);
 
     auto *sep2 = new QFrame; sep2->setFrameShape(QFrame::VLine);
     sep2->setStyleSheet("color:#2d3340;"); lay->addWidget(sep2);
 
-    addBtn("route",         "编辑路网",   SLOT(onEditRoute()));
     addBtn("edit",          "编辑地图",   SLOT(onEditMap()));
     addBtn("tag",           "重命名",     SLOT(onRenameMap()));
     addBtn("file-download", "下载原文件", SLOT(onDownloadSource()));
@@ -729,6 +732,7 @@ void MapViewWidget::installMapPixmap(const QPixmap &pix)
     m_mapBg = m_robotItem = m_routeLayer = m_axesLayer = nullptr;
 
     auto *bgItem = m_scene->addPixmap(pix);
+    bgItem->setTransformationMode(Qt::SmoothTransformation);
     bgItem->setZValue(-100);
     m_mapBg = bgItem;
 
@@ -922,22 +926,41 @@ void MapViewWidget::renderRoute()
         item->setZValue(20);
     };
 
-    QPen linePen(QColor(80, 200, 120, 200), 1.5);
+    QPen linePen(QColor("#1296DB"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     for (const auto &v : m_lines) {
         QJsonObject ln = v.toObject();
         QPointF a = worldToScene(ln.value("x1").toDouble(), ln.value("y1").toDouble());
         QPointF b = worldToScene(ln.value("x2").toDouble(), ln.value("y2").toDouble());
-        addRoute(m_scene->addLine(a.x(), a.y(), b.x(), b.y(), linePen));
+        int direct = ln.value("direct").toInt(10);
+        auto *lineItem = m_scene->addLine(a.x(), a.y(), b.x(), b.y(), linePen);
+        addRoute(lineItem);
+
+        // 线路导向标 (单向或双向)
+        QPointF dir = b - a;
+        double len = std::hypot(dir.x(), dir.y());
+        if (len > 1e-3) {
+            dir /= len;
+            QPointF mid = (a + b) / 2.0;
+            QList<QPolygonF> arrows = MapPgmUtil::createDirectionArrows(mid, dir, direct, len);
+            for (const auto &poly : arrows) {
+                auto *arrItem = m_scene->addPolygon(poly, QPen(Qt::NoPen), QBrush(linePen.color()));
+                arrItem->setParentItem(lineItem);
+                arrItem->setZValue(6);
+                arrItem->setAcceptedMouseButtons(Qt::NoButton);
+                addRoute(arrItem);
+            }
+        }
     }
 
-    QPen curvePen(QColor(180, 120, 240, 200), 1.5);
+    QPen curvePen(QColor("#9B59B6"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     for (const auto &v : m_curves) {
         QJsonObject cv = v.toObject();
+        int direct = cv.value("direct").toInt(10);
         QPainterPath path;
+        QList<QPointF> pts;
         QJsonArray ctrlArr = cv.value("controlPoints").toArray();
         if (ctrlArr.size() >= 2) {
             // 多阶贝塞尔曲线
-            QList<QPointF> pts;
             for (const auto &pv : ctrlArr)
                 pts.append(worldToScene(pv.toObject().value("x").toDouble(),
                                         pv.toObject().value("y").toDouble()));
@@ -947,46 +970,107 @@ void MapViewWidget::renderRoute()
             QPointF p1 = worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
             QPointF pc = worldToScene(cv.value("cx").toDouble(),  cv.value("cy").toDouble());
             QPointF p2 = worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
+            pts.append(p1); pts.append(pc); pts.append(p2);
             path.moveTo(p1); path.quadTo(pc, p2);
         }
-        addRoute(m_scene->addPath(path, curvePen));
-    }
+        auto *pathItem = m_scene->addPath(path, curvePen);
+        addRoute(pathItem);
 
-    // 路网点
-    for (const auto &v : m_points) {
-        QJsonObject pt = v.toObject();
-        QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
-        auto *ell = m_scene->addEllipse(sp.x()-5, sp.y()-5, 10, 10,
-            QPen(QColor(60, 160, 255), 1), QBrush(QColor(60, 160, 255, 180)));
-        addRoute(ell);
-
-        QString name = pt.value("name").toString();
-        if (!name.isEmpty()) {
-            auto *lbl = m_scene->addText(name);
-            lbl->setDefaultTextColor(QColor(200, 220, 255));
-            lbl->setPos(sp.x() + 7, sp.y() - 10);
-            lbl->setFont(QFont("Microsoft YaHei UI", 8));
-            addRoute(lbl);
+        if (pts.size() >= 2) {
+            double cLen = std::hypot(pts.last().x() - pts.first().x(),
+                                     pts.last().y() - pts.first().y());
+            QList<QPolygonF> arrows = MapPgmUtil::createBezierDirectionArrows(pts, direct, cLen);
+            for (const auto &poly : arrows) {
+                auto *arrItem = m_scene->addPolygon(poly, QPen(Qt::NoPen), QBrush(curvePen.color()));
+                arrItem->setParentItem(pathItem);
+                arrItem->setZValue(6);
+                arrItem->setAcceptedMouseButtons(Qt::NoButton);
+                addRoute(arrItem);
+            }
         }
     }
 
-    // 充电桩
-    for (const auto &v : m_charges) {
-        QJsonObject pt = v.toObject();
-        QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
-        auto *ell = m_scene->addEllipse(sp.x()-6, sp.y()-6, 12, 12,
-            QPen(QColor("#e8a020"), 1.5), QBrush(QColor(232, 160, 32, 200)));
-        addRoute(ell);
-    }
+    double pxPerMeterX = (m_imgW > 0 && (m_worldR > m_worldL)) ? (m_imgW / (m_worldR - m_worldL)) : 20.0;
+    double pxPerMeterY = (m_imgH > 0 && (m_worldT > m_worldB)) ? (m_imgH / (m_worldT - m_worldB)) : 20.0;
 
-    // 高精度点：黄色圆点，与其他界面统一大小和样式
-    for (const auto &v : m_highPrecisionPoints) {
-        QJsonObject pt = v.toObject();
+    auto addPointData = [](QGraphicsItem *item, const QString &id, const QString &type, const QString &name, const QPointF &wPos) {
+        item->setData(0, 2);                      // Route layer
+        item->setData(1, id);                     // Point ID
+        item->setData(2, type);                   // Point type ("point", "charge", "highPrecision")
+        item->setData(3, name);                   // Point Name
+        item->setData(4, wPos);                   // World position
+        item->setZValue(20);
+    };
+
+    // 路网站点渲染 (普通站点 / 充电点 / 精定位点)
+    auto addStationNode = [&](const QJsonObject &pt, const QColor &fillCol, const QColor &borderCol, const QString &type) {
         QPointF sp = worldToScene(pt.value("x").toDouble(), pt.value("y").toDouble());
-        auto *ell = m_scene->addEllipse(sp.x()-5, sp.y()-5, 10, 10,
-            QPen(QColor("#f2c200"), 1), QBrush(QColor(242, 194, 0, 180)));
-        addRoute(ell);
-    }
+        QString id = pt.value("id").toString();
+        QString name = pt.value("name").toString();
+        if (name.isEmpty()) name = id;
+
+        double rectW = 0, rectH = 0;
+        QPainterPath crossPath;
+        QPainterPath path = MapPgmUtil::createPointPath(pxPerMeterX, pxPerMeterY, &rectW, &rectH, &crossPath, 0.0);
+
+        QFont f("Segoe UI");
+        double ptSize = qBound(4.0, rectH * 0.35, 7.0);
+        f.setPointSizeF(ptSize);
+        f.setBold(true);
+        QFontMetrics fm(f);
+        int tw = fm.horizontalAdvance(name);
+
+        auto *item = m_scene->addPath(path, QPen(borderCol, 0.8), QBrush(fillCol));
+        item->setPos(sp);
+
+        QPointF wPos(pt.value("x").toDouble(), pt.value("y").toDouble());
+        addPointData(item, id, type, name, wPos);
+
+        // 内部红色实线精确定位小十字 (居中位于 (0,0)，与路线精准交汇，不遮挡文字)
+        QPen crossPen(QColor("#E74C3C"), 0.8, Qt::SolidLine);
+        crossPen.setCapStyle(Qt::FlatCap);
+        auto *crossItem = m_scene->addPath(crossPath, crossPen);
+        crossItem->setParentItem(item);
+        crossItem->setPos(0, 0);
+        crossItem->setAcceptedMouseButtons(Qt::NoButton);
+        crossItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
+
+        // 若配置了车头朝向角，绘制微型方向指针
+        double yawVal = 0.0;
+        if (pt.contains("yaw")) yawVal = pt.value("yaw").toDouble();
+        else if (pt.contains("robotYaw")) yawVal = pt.value("robotYaw").toDouble();
+        else if (pt.contains("theta")) yawVal = pt.value("theta").toDouble() * M_PI / 180.0;
+        if (yawVal != 0.0) {
+            double angleDeg = 90.0 - yawVal * 180.0 / M_PI;
+            double rad = qDegreesToRadians(angleDeg);
+            double pr = rectW / 2.0 + 2.5;
+            QPointF pHead(std::sin(rad) * pr, -std::cos(rad) * pr);
+            QPolygonF ptr;
+            QPointF norm(-std::cos(rad) * 2.0, -std::sin(rad) * 2.0);
+            ptr << pHead + QPointF(std::sin(rad) * 3.5, -std::cos(rad) * 3.5)
+                << pHead + norm
+                << pHead - norm;
+            auto *pItem = m_scene->addPolygon(ptr, QPen(Qt::NoPen), QBrush(borderCol));
+            pItem->setParentItem(item);
+            pItem->setAcceptedMouseButtons(Qt::NoButton);
+            pItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        }
+
+        // 站点名称：直接绘制在矩形框下部，水平居中，与上方红色十字完全分离无遮挡，深色高对比度，尺寸紧凑工整
+        auto *lbl = m_scene->addText(name, f);
+        lbl->document()->setDocumentMargin(0);
+        lbl->setDefaultTextColor(QColor("#1A1A1A"));
+        lbl->setParentItem(item);
+        double textY = (rectH >= 12.0) ? (rectH * 0.16) : (rectH / 2.0 + 1.0);
+        lbl->setPos(-tw / 2.0, textY);
+        lbl->setAcceptedMouseButtons(Qt::NoButton);
+        lbl->setFlag(QGraphicsItem::ItemIsSelectable, false);
+        addRoute(lbl);
+    };
+
+    for (const auto &v : m_points)              addStationNode(v.toObject(), QColor(210, 230, 250, 235), QColor(41, 128, 185, 240), "point");
+    for (const auto &v : m_charges)             addStationNode(v.toObject(), QColor(254, 243, 199, 235), QColor(217, 119, 6, 240), "charge");
+    for (const auto &v : m_highPrecisionPoints) addStationNode(v.toObject(), QColor(254, 226, 226, 235), QColor(220, 38, 38, 240), "highPrecision");
 }
 
 void MapViewWidget::renderRobot()
@@ -1136,6 +1220,31 @@ void MapViewWidget::onResetView()
     onViewTransformChanged();
 }
 
+void MapViewWidget::onToggleNavMode()
+{
+    m_navMode = m_navModeBtn ? m_navModeBtn->isChecked() : false;
+    if (m_navMode) {
+        m_navModeBtn->setStyleSheet(kToolBtnPrimary);
+        if (m_relocMode && m_relocBtn) {
+            m_relocMode = false;
+            m_relocBtn->setChecked(false);
+            m_relocBtn->setStyleSheet(kToolBtnStyle);
+        }
+        if (m_canvas) {
+            m_canvas->setPanWithLeftButton(false);
+            m_canvas->setCursor(Qt::PointingHandCursor);
+        }
+        setStatus("路径导航模式已开启: 请在地图上点击任意路网点发起导航", "#00bcd4");
+    } else {
+        if (m_navModeBtn) m_navModeBtn->setStyleSheet(kToolBtnStyle);
+        if (m_canvas) {
+            m_canvas->setPanWithLeftButton(!m_relocMode);
+            m_canvas->setCursor(Qt::CrossCursor);
+        }
+        setStatus("已退出路径导航模式");
+    }
+}
+
 void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
 {
     QPointF world = sceneToWorld(scenePos.x(), scenePos.y());
@@ -1145,6 +1254,82 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
     m_coordLabel->adjustSize();
 
     if (btn != Qt::LeftButton) return;
+
+    if (m_navMode) {
+        // 使用单点 scenePos 检索鼠标指针【精确落在其形状/长方形范围内部】的图元
+        QGraphicsItem *targetItem = nullptr;
+        for (auto *it : m_scene->items(scenePos)) {
+            QGraphicsItem *cur = it;
+            if (!cur->data(1).isValid() && cur->parentItem()) cur = cur->parentItem();
+            if (cur->data(0).toInt() == 2 && cur->data(1).isValid()) {
+                targetItem = cur;
+                break;
+            }
+        }
+
+        // 只有鼠标点击位置精确落在点及绘制的长方形范围内部时才响应；在长方形范围之外点击直接静默忽略
+        if (!targetItem) {
+            return;
+        }
+
+        QString ptId   = targetItem->data(1).toString();
+        QString ptType = targetItem->data(2).toString();
+        QString ptName = targetItem->data(3).toString();
+        QPointF wPos   = targetItem->data(4).toPointF();
+
+        if (ptName.isEmpty()) ptName = ptId;
+
+        QString typeCN = (ptType == "charge") ? "充电点" : (ptType == "highPrecision" ? "精定位点" : "普通站点");
+
+        // 弹出对话框确认导航
+        QMessageBox navBox(this);
+        navBox.setWindowTitle("路径导航");
+        navBox.setIcon(QMessageBox::Question);
+        navBox.setText(QString("是否导航到 “%1”？").arg(ptName));
+        navBox.setInformativeText(
+            QString("点位类型: %1\n点位编号: %2\n目标坐标: (%3, %4)")
+            .arg(typeCN, ptId)
+            .arg(wPos.x(), 0, 'f', 2)
+            .arg(wPos.y(), 0, 'f', 2));
+        QPushButton *startBtn = navBox.addButton("导航到 " + ptName, QMessageBox::AcceptRole);
+        QPushButton *cancelBtn = navBox.addButton("取消", QMessageBox::RejectRole);
+        navBox.setDefaultButton(startBtn);
+
+        navBox.exec();
+        if (navBox.clickedButton() == startBtn) {
+            QString carId = AppConfig::instance().currentDevice().carId;
+            if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+            if (carId.isEmpty()) carId = "88";
+
+            // 1. HTTP API 下发路径导航指令 (POST /robot/navigation/navigate/to?locationId=...)
+            ApiService::instance().navigateTo(ptId, [this, ptName](int code, const QJsonObject &resp) {
+                if (code == 200) {
+                    Toast::success(this, QString("已开始导航至点位 “%1”").arg(ptName));
+                } else {
+                    QString msg = resp.value("msg").toString("导航服务响应失败");
+                    Toast::error(this, QString("导航请求失败(%1): %2").arg(code).arg(msg));
+                }
+            });
+
+
+            // 2. MQTT 协议实时发布导航目标指令
+            QJsonObject mqttData;
+            mqttData["command"] = "navigate";
+            mqttData["point_id"] = ptId;
+            mqttData["point_name"] = ptName;
+            mqttData["target_x"] = wPos.x();
+            mqttData["target_y"] = wPos.y();
+            mqttData["sender"] = "QT-AGV";
+
+            MqttService::instance().publish(
+                QString("/rob/%1/navigation").arg(carId),
+                QJsonDocument(mqttData).toJson(QJsonDocument::Compact));
+
+            setStatus(QString("已下发导航指令至点位 “%1” (%2, %3)").arg(ptName).arg(wPos.x(), 0, 'f', 2).arg(wPos.y(), 0, 'f', 2), "#00e676");
+            Toast::success(this, QString("导航指令已下发: “%1”").arg(ptName));
+        }
+        return;
+    }
 
     if (m_relocMode) {
         if (m_robot.carId.isEmpty()) { setStatus("无设备ID，无法重定位", "#e05555"); return; }
@@ -1529,8 +1714,15 @@ void MapViewWidget::onSwitchMap()
 
 void MapViewWidget::onRelocalize()
 {
-    m_relocMode = !m_relocMode;
-    m_canvas->setPanWithLeftButton(!m_relocMode);
+    m_relocMode = m_relocBtn ? m_relocBtn->isChecked() : !m_relocMode;
+    if (m_relocMode && m_navMode && m_navModeBtn) {
+        m_navMode = false;
+        m_navModeBtn->setChecked(false);
+        m_navModeBtn->setStyleSheet(kToolBtnStyle);
+    }
+    if (m_canvas) {
+        m_canvas->setPanWithLeftButton(!m_relocMode && !m_navMode);
+    }
     if (m_relocMode) {
         m_relocBtn->setStyleSheet(kToolBtnPrimary);
         setStatus("点击地图选择位置，拖拽设定朝向 (再次点击按钮取消)", "#4a9eff");
@@ -1553,7 +1745,7 @@ void MapViewWidget::onEditRoute()
 void MapViewWidget::onEditMap()
 {
     if (m_mapId.isEmpty()) { setStatus("请先加载地图", "#f0a060"); return; }
-    emit navigateRequested("map_image_edit", m_mapId);
+    emit navigateRequested("map_edit", m_mapId);
 }
 
 void MapViewWidget::onRenameMap()

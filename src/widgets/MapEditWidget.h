@@ -16,6 +16,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
+#include <QCheckBox>
 #include <QSet>
 #include <QResizeEvent>
 
@@ -36,10 +37,14 @@ signals:
     void goBack();
 
 private slots:
-    void onSaveRoute();
+    void onSaveMap();
+    void onImportSmap();
+    void onUndo();
+    void onRedo();
     void onEditMap();
     void onTableToggle();
     void onDeleteFeature();
+    void showHelpDialog();
 
 private:
     void setupUI();
@@ -51,7 +56,7 @@ private:
     void addPoint(const QPointF &sp);
     void addCharge(const QPointF &sp, double epcX = 0, double epcY = 0, double epcTheta = 0, double yaw = 0, double theta = 0);
     void addHighPrecisionPoint(const QPointF &sp, double epcX = 0, double epcY = 0, double epcTheta = 0, double yaw = 0, double theta = 0);
-    // 设备打点: 通过设备相对定位(epc)添加充电桩/高精度点
+    // 设备打点: 通过设备相对定位(epc)添加充电点/精定位点
     // type: "charge" 或 "highPrecision"
     void addDevicePoint(const QString &type);
     void addLine(const QPointF &a, const QPointF &b,
@@ -65,6 +70,13 @@ private:
     void updateCurveShape(const QString &id);            // update path item in-place
     void rebuildCurveHandles(const QString &id);         // sync handle items to JSON
     void removeAllHandles();                              // clears m_curveHandles from scene
+
+    // 栅格地图画笔/橡皮涂绘
+    void paintStroke(const QPointF &from, const QPointF &to, bool isPoint);
+    void pushMapUndo();
+    void undoMap();
+    void redoMap();
+    void updateHistoryButtons();
 
     // Snap helpers
     struct SnapResult {
@@ -110,26 +122,34 @@ private:
     QPointF worldToScene(double wx, double wy) const;
     QPointF sceneToWorld(double sx, double sy) const;
 
+    void setupShortcuts();
+
     bool eventFilter(QObject *obj, QEvent *event) override;
     void resizeEvent(QResizeEvent *e) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
     // 从已有数组中找出指定前缀的 ID 里最大的数字编号，返回 max+1
     // 保证删除再新增时不产生重复 ID
     static int nextIdNum(const QJsonArray &arr, const QString &prefix);
 
 
-    enum DrawStatus { Drag=0, Point=1, Line=2, Curve=3, Charge=4, HighPrecision=5 };
+    enum DrawStatus { Drag=0, Point=1, Line=2, Curve=3, Brush=4, Eraser=5, Charge=6, HighPrecision=7 };
 
     // Map view
-    MapCanvas      *m_mapView      = nullptr;
-    QGraphicsScene *m_scene        = nullptr;
-    QLabel         *m_coordLabel   = nullptr;
-    QLabel         *m_mapInfoLabel = nullptr;
+    MapCanvas            *m_mapView      = nullptr;
+    QGraphicsScene       *m_scene        = nullptr;
+    QGraphicsPixmapItem  *m_mapBgItem    = nullptr;
+    QLabel               *m_coordLabel   = nullptr;
+    QLabel               *m_mapInfoLabel = nullptr;
 
     // Toolbar: mode → button
     QMap<int, QPushButton*> m_toolBtns;
-    QPushButton *m_saveBtn      = nullptr;
-    QPushButton *m_editMapBtn   = nullptr;
+    QPushButton *m_saveBtn       = nullptr;
+    QPushButton *m_importSmapBtn = nullptr;
+    QPushButton *m_undoBtn       = nullptr;
+    QPushButton *m_redoBtn       = nullptr;
+    QComboBox   *m_brushSizeCombo= nullptr;
+    QPushButton *m_editMapBtn    = nullptr;
     QPushButton *m_tableModeBtn = nullptr;
     QPushButton *m_resetViewBtn = nullptr;
     QPushButton  *m_gridBtn     = nullptr;
@@ -144,27 +164,57 @@ private:
     QTableWidget *m_featureTable   = nullptr;
     QComboBox    *m_tableTypeCombo = nullptr;
 
-    // Properties panel
-    QWidget   *m_propsPanel      = nullptr;
-    QLabel    *m_propTypeLabel   = nullptr;
-    QLineEdit *m_propIdEdit      = nullptr;
-    QLineEdit *m_propNameEdit    = nullptr;
-    QWidget   *m_propDirectRow   = nullptr;
-    QComboBox *m_propDirectCombo = nullptr;
-    QWidget   *m_propKindRow     = nullptr;   // 点类型切换行(普通点/高精度点/充电桩)
-    QComboBox *m_propKindCombo   = nullptr;   // 点类型下拉框
-    QWidget   *m_propCoordRow    = nullptr;   // 坐标编辑行(仅点类型显示)
-    QDoubleSpinBox *m_propXSpin = nullptr;   // 点的 X 坐标(普通点可编辑;充电椒/高精度点只读)
-    QDoubleSpinBox *m_propYSpin = nullptr;   // 点的 Y 坐标(普通点可编辑;充电椒/高精度点只读)
-    QWidget        *m_propYawRow  = nullptr;  // Yaw 显示行(充电椒/高精度点专属)
-    QLabel         *m_propYawLabel = nullptr; // Yaw 值显示（只读）
-    QWidget        *m_propEpcRow  = nullptr;  // epc_x/epc_y 显示行(充电桩/高精度点专属，只读)
-    QLabel         *m_propEpcXLabel = nullptr;
-    QLabel         *m_propEpcYLabel = nullptr;
+    // Properties panel (工业级图元属性编辑器，分别对齐 WidgetMarkPPTW 与 WidgetBezierPPTW 规范)
+    QWidget        *m_propsPanel         = nullptr;
+    QLabel         *m_propHeaderTitle    = nullptr;
+    QLabel         *m_propHeaderBadge    = nullptr;
+
+    // --- 站点专属属性组 (WidgetMarkPPTW) ---
+    QWidget        *m_stationPropGroup   = nullptr;
+    QComboBox      *m_stationTypeCombo   = nullptr; // 普通站点 LM / 充电桩 CP / 高精定位 TL
+    QLineEdit      *m_stationIdEdit      = nullptr;
+    QLineEdit      *m_stationLabelEdit   = nullptr;
+    QDoubleSpinBox *m_stationXSpin       = nullptr;
+    QDoubleSpinBox *m_stationYSpin       = nullptr;
+    QDoubleSpinBox *m_stationYawSpin     = nullptr;
+    QCheckBox      *m_stationDockableChk = nullptr; // 允许停靠 rdsDockable
+    QCheckBox      *m_stationRotateChk   = nullptr; // 允许转身 allowRotate
+    QCheckBox      *m_stationPgvChk      = nullptr; // 使用下视 PGV
+    QWidget        *m_stationEpcGroup    = nullptr; // EPC相对定位数据
+    QLabel         *m_stationEpcXLabel   = nullptr;
+    QLabel         *m_stationEpcYLabel   = nullptr;
+    QLabel         *m_stationEpcYawLabel = nullptr;
+
+    // --- 线路专属属性组 (WidgetBezierPPTW) ---
+    QWidget        *m_linePropGroup      = nullptr;
+    QComboBox      *m_lineTypeCombo      = nullptr; // 直线 / 贝塞尔曲线
+    QLineEdit      *m_lineIdEdit         = nullptr;
+    QLineEdit      *m_lineNameEdit       = nullptr;
+    QLabel         *m_lineStartLabel     = nullptr; // 起点 (如 LM1)
+    QLabel         *m_lineEndLabel       = nullptr; // 终点 (如 LM2)
+    QComboBox      *m_lineDirectCombo    = nullptr; // 双向 ↔ / 单向前进 → / 单向倒走 ←
+    QPushButton    *m_lineFlipDirBtn     = nullptr; // 翻转方向 ⇄
+    QDoubleSpinBox *m_lineMaxSpeedSpin   = nullptr; // 最大速度 m/s
+    QDoubleSpinBox *m_lineMaxAccSpin     = nullptr; // 最大加速度 m/s²
+    QDoubleSpinBox *m_lineMaxDecSpin     = nullptr; // 最大减速度 m/s²
+    QDoubleSpinBox *m_lineMaxRotSpin     = nullptr; // 最大旋转速度 °/s
+    QDoubleSpinBox *m_lineReachDistSpin  = nullptr; // 到达距离精度 m
+    QDoubleSpinBox *m_lineReachAngleSpin = nullptr; // 到达角度精度 °
+    QDoubleSpinBox *m_lineRoadWidthSpin  = nullptr; // 路线宽度 m
+
+    // 操作按钮
+    QPushButton    *m_propApplyBtn       = nullptr;
+    QPushButton    *m_propDeleteBtn      = nullptr;
 
     // Data
     QString    m_mapId, m_mapName;
     QImage     m_mapImage;
+    QImage     m_originalMapImage;
+    int        m_brushSize     = 4;
+    bool       m_isPainting    = false;
+    QPointF    m_lastPaintImgPos;
+    QList<QImage> m_undoStack;
+    QList<QImage> m_redoStack;
     QJsonArray m_points, m_lines, m_curves, m_charges, m_highPrecisionPoints;
 
     // Coordinate transform (world extent + thumbnail size)
@@ -213,6 +263,13 @@ private:
     QString               m_handleCurveId;
     int                   m_handleIndex      = -1;  // 0=P1, 1=ctrl, 2=P2
     bool                  m_isDraggingHandle = false;
+
+    // Station node drag state
+    bool                  m_isDraggingNode   = false;
+    QString               m_draggingNodeType;
+    QString               m_draggingNodeId;
+    QPointF               m_dragStartScenePos;
+    QPointF               m_dragStartWorldPos;
 
     // Manual pan state (替代 QGraphicsView::ScrollHandDrag，避免与手柄拖拽冲突)
     bool    m_panning     = false;
