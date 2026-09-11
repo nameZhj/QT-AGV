@@ -94,9 +94,18 @@ public:
     void delMap(const QString &mapId, const Callback &cb);
 
     // ========== PCD / 地图文件接口 (对应 @/api/robot/pcd.js) ==========
+    struct IndoorMapUploadParams {
+        QString mapName;
+        QString pgmFilePath;
+        QString yamlFilePath;
+        QString pbStreamFilePath;
+        QString reflectorBinFilePath;   // 可选
+        QString reflectorJsonFilePath;  // 可选
+    };
     void downloadPcd(const QJsonObject &query, const Callback &cb);
     void addAgvMap(const QJsonObject &data, const Callback &cb);
-    void sendMap2Car(const QJsonObject &params, const Callback &cb);
+    void uploadIndoorMap(const IndoorMapUploadParams &params, const Callback &cb, int port = 8048);
+    void uploadSmap(const QString &mapName, const QString &filePath, const Callback &cb, int port = 8048);
 
     // ========== 地图编辑接口 (对应 @/api/robot/mapEdit.js) ==========
     void saveEditedMap(const QJsonObject &data, const Callback &cb);

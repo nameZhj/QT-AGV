@@ -79,6 +79,20 @@ void AppConfig::saveDevice(const DeviceProfile &dev)
     saveDeviceList(list);
 }
 
+void AppConfig::updateDevice(int index, const DeviceProfile &dev)
+{
+    QList<DeviceProfile> list = deviceList();
+    if (index >= 0 && index < list.size()) {
+        QString oldIp = list[index].ip;
+        list[index] = dev;
+        saveDeviceList(list);
+
+        if (!oldIp.isEmpty() && serverIp() == oldIp) {
+            setServerIp(dev.ip);
+        }
+    }
+}
+
 void AppConfig::removeDevice(int index)
 {
     QList<DeviceProfile> list = deviceList();

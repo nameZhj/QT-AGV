@@ -4,6 +4,7 @@
 #include <QNetworkReply>
 #include <QFile>
 #include <QFileInfo>
+#include <QDir>
 #include <QDebug>
 #include <QUrlQuery>
 
@@ -443,21 +444,102 @@ void ApiService::downloadPcd(const QJsonObject &query, const Callback &cb)
     get(url, cb);
 }
 
+static QString cleanLocalFilePath(QString p)
+{
+    if (p.startsWith("file:///")) p = p.mid(8);
+    else if (p.startsWith("file://")) p = p.mid(7);
+    return QDir::cleanPath(p.trimmed());
+}
+
+static bool appendMultiPartFile(QHttpMultiPart *multiPart, const QString &fieldName, const QString &filePath)
+{
+    QString cleanPath = cleanLocalFilePath(filePath);
+    QFile *file = new QFile(cleanPath);
+    if (!file->open(QIODevice::ReadOnly)) {
+        delete file;
+        return false;
+    }
+    QHttpPart part;
+    QString fileName = QFileInfo(cleanPath).fileName();
+    part.setHeader(QNetworkRequest::ContentDispositionHeader,
+                   QVariant(QString("form-data; name=\"%1\"; filename=\"%2\"").arg(fieldName, fileName)));
+    part.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("application/octet-stream"));
+    part.setBodyDevice(file);
+    file->setParent(multiPart);
+    multiPart->append(part);
+    return true;
+}
+
+static void appendMultiPartText(QHttpMultiPart *multiPart, const QString &fieldName, const QString &text)
+{
+    QHttpPart part;
+    part.setHeader(QNetworkRequest::ContentDispositionHeader,
+                   QVariant(QString("form-data; name=\"%1\"").arg(fieldName)));
+    part.setBody(text.toUtf8());
+    multiPart->append(part);
+}
+
 void ApiService::addAgvMap(const QJsonObject &data, const Callback &cb)
 {
     post("/robot/indoor/map/web/add", data, cb);
 }
 
-void ApiService::sendMap2Car(const QJsonObject &params, const Callback &cb)
+void ApiService::uploadIndoorMap(const IndoorMapUploadParams &params, const Callback &cb, int port)
 {
-    QString url = "/robot/indoor/map/agv/manual/upload";
-    if (!params.isEmpty()) {
-        QUrlQuery q;
-        for (auto it = params.begin(); it != params.end(); ++it)
-            q.addQueryItem(it.key(), it.value().toString());
-        url += "?" + q.toString();
+    QHttpMultiPart *multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    appendMultiPartText(multiPart, "mapName", params.mapName);
+
+    if (!appendMultiPartFile(multiPart, "pgmFile", params.pgmFilePath)) {
+        delete multiPart;
+        cb(500, QJsonObject{{"msg", "无法读取PGM/图片文件: " + params.pgmFilePath}});
+        return;
     }
-    post(url, QJsonObject(), cb);
+    if (!appendMultiPartFile(multiPart, "yamlFile", params.yamlFilePath)) {
+        delete multiPart;
+        cb(500, QJsonObject{{"msg", "无法读取YAML文件: " + params.yamlFilePath}});
+        return;
+    }
+    if (!appendMultiPartFile(multiPart, "pbStreamFile", params.pbStreamFilePath)) {
+        delete multiPart;
+        cb(500, QJsonObject{{"msg", "无法读取PBStream文件: " + params.pbStreamFilePath}});
+        return;
+    }
+    if (!params.reflectorBinFilePath.trimmed().isEmpty()) {
+        QString binPath = cleanLocalFilePath(params.reflectorBinFilePath);
+        if (QFile::exists(binPath)) {
+            appendMultiPartFile(multiPart, "reflectorBinFile", binPath);
+        }
+    }
+    if (!params.reflectorJsonFilePath.trimmed().isEmpty()) {
+        QString jsonPath = cleanLocalFilePath(params.reflectorJsonFilePath);
+        if (QFile::exists(jsonPath)) {
+            appendMultiPartFile(multiPart, "reflectorJsonFile", jsonPath);
+        }
+    }
+
+    QNetworkRequest req = buildRequest(buildUrl("/robot/indoor/map/web/add", port));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QVariant()); // let QNetworkAccessManager set multipart boundary
+    QNetworkReply *reply = m_manager->post(req, multiPart);
+    multiPart->setParent(reply);
+    handleReply(reply, cb);
+}
+
+void ApiService::uploadSmap(const QString &mapName, const QString &filePath, const Callback &cb, int port)
+{
+    QHttpMultiPart *multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    appendMultiPartText(multiPart, "mapName", mapName);
+
+    if (!appendMultiPartFile(multiPart, "file", filePath)) {
+        delete multiPart;
+        cb(500, QJsonObject{{"msg", "无法读取smap文件: " + filePath}});
+        return;
+    }
+
+    QNetworkRequest req = buildRequest(buildUrl("/robot/map/smap/upload", port));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QVariant()); // let QNetworkAccessManager set multipart boundary
+    QNetworkReply *reply = m_manager->post(req, multiPart);
+    multiPart->setParent(reply);
+    handleReply(reply, cb);
 }
 
 // ========== 地图编辑接口 ==========

@@ -76,7 +76,6 @@ void MapWidget::setupUI()
         QAction *renameAct = menu.addAction("重命名地图");
         QAction *downloadAct = menu.addAction("下载地图");
         QAction *sourceAct = menu.addAction("下载源文件");
-        QAction *sendAct = menu.addAction("下发地图资源至设备");
         QAction *deleteAct = menu.addAction("删除地图");
         QAction *editRouteAct = menu.addAction("编辑地图");
         QAction *navAct = menu.addAction("导航");
@@ -91,7 +90,6 @@ void MapWidget::setupUI()
         if (selected == renameAct) showRenameDialog(mapData);
         else if (selected == downloadAct) downloadMap(mapData);
         else if (selected == sourceAct) downloadSourceFiles(mapData);
-        else if (selected == sendAct) sendMapToCar(mapData);
         else if (selected == deleteAct) deleteMap(mapData);
         else if (selected == editRouteAct) editMapRoute(mapData);
         else if (selected == navAct) navigateToMap(mapData);
@@ -338,17 +336,6 @@ void MapWidget::downloadSourceFiles(const QJsonObject &mapData)
         QString url = AppConfig::instance().mapHost() + mapName + "_" + mapId;
         QDesktopServices::openUrl(QUrl(url));
     }
-}
-
-void MapWidget::sendMapToCar(const QJsonObject &mapData)
-{
-    QJsonObject params;
-    params["mapId"] = mapData.value("mapId");
-    ApiService::instance().sendMap2Car(params, [this](int code, const QJsonObject &) {
-        if (code == 200) {
-            QMessageBox::information(this, "成功", "已下发地图资源至设备");
-        }
-    });
 }
 
 void MapWidget::navigateToMap(const QJsonObject &mapData)

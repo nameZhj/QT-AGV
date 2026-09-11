@@ -31,6 +31,7 @@ signals:
     void connectClicked(int index);
     void removeClicked(int index);
     void linkClicked(int index);     // 链接设备 (未链接状态下显示)
+    void networkConfigClicked(int index); // 远程网络配置 (SSH)
 
 private:
     void startMqttMonitor(const QString &ip, const QString &carId);
@@ -68,6 +69,7 @@ private slots:
     void onConnectCard(int index);
     void onRemoveCard(int index);
     void onLinkCard(int index);     // 重新链接未链接的设备
+    void onNetworkConfig(int index); // 远程网络配置 (SSH)
     void onRefreshAll();
 
 private:

@@ -12,7 +12,7 @@ class QButtonGroup;
 class QAbstractButton;
 class MapPaintCanvas;
 
-// 编辑地图：在已加载的栅格图(pgm)上用画笔/橡皮直接涂改，保存后上传并下发到设备。
+// 编辑地图：在已加载的栅格图(pgm)上用画笔/橡皮直接涂改，保存后上传。
 // 对应 Vue editMap.vue：画笔=涂黑(标记障碍)，橡皮=涂白(标记可通行)，不做任何
 // negate/分辨率换算——纯像素级编辑，与 Vue 参考完全一致。
 class MapImageEditWidget : public QWidget

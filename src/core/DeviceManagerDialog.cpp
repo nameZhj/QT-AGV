@@ -1,4 +1,5 @@
 #include "DeviceManagerDialog.h"
+#include "widgets/NetworkConfigDialog.h"
 #include "ApiService.h"
 #include "AppConfig.h"
 #include "TestPortMapping.h"
@@ -40,7 +41,7 @@ static QString extractLinkStatus(const QJsonObject &obj, const QString &key = "l
 DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
     : QWidget(parent), m_index(index), m_profile(profile)
 {
-    setFixedSize(260, 320);
+    setFixedSize(280, 320);
     setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet(
         "DeviceCard {"
@@ -207,6 +208,22 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
     fl->setSpacing(8);
     m_footerLay = fl;
 
+    auto *netBtn = new QPushButton("🌐 网络配置");
+    netBtn->setCursor(Qt::PointingHandCursor);
+    netBtn->setToolTip("远程 SSH 配置 AGV 网络参数 (IP/掩码/网关)");
+    netBtn->setStyleSheet(
+        "QPushButton{"
+        "  background:#1e2a38; color:#00bcd4; border:1px solid #2d4060;"
+        "  border-radius:4px; padding:6px 10px;"
+        "  font-size:12px; font-weight:600;"
+        "}"
+        "QPushButton:hover{background:#26364a; color:#ffffff; border-color:#00bcd4;}"
+        "QPushButton:pressed{background:#16202c;}");
+    connect(netBtn, &QPushButton::clicked, this, [this]{ emit networkConfigClicked(m_index); });
+    fl->addWidget(netBtn);
+
+    fl->addStretch();
+
     if (profile.carId.isEmpty()) {
         auto *warn = new QLabel("⚠ 未同步");
         warn->setStyleSheet("color:#f0a060; font-size:11px; background:transparent;");
@@ -216,7 +233,6 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
         m_warnLabel->setStyleSheet("color:#f0a060; font-size:11px; background:transparent;");
         fl->addWidget(m_warnLabel);
     }
-    fl->addStretch();
 
     if (!profile.carId.isEmpty() && profile.linkStatus != "0") {
         m_linkBtn = new QPushButton("链接设备");
@@ -828,9 +844,10 @@ void DeviceManagerDialog::refreshCards()
     const int cols = 3;
     for (int i = 0; i < list.size(); ++i) {
         auto *card = new DeviceCard(list[i], i, m_cardsContainer);
-        connect(card, &DeviceCard::connectClicked, this, &DeviceManagerDialog::onConnectCard);
-        connect(card, &DeviceCard::removeClicked,  this, &DeviceManagerDialog::onRemoveCard);
-        connect(card, &DeviceCard::linkClicked,     this, &DeviceManagerDialog::onLinkCard);
+        connect(card, &DeviceCard::connectClicked,       this, &DeviceManagerDialog::onConnectCard);
+        connect(card, &DeviceCard::removeClicked,        this, &DeviceManagerDialog::onRemoveCard);
+        connect(card, &DeviceCard::linkClicked,          this, &DeviceManagerDialog::onLinkCard);
+        connect(card, &DeviceCard::networkConfigClicked, this, &DeviceManagerDialog::onNetworkConfig);
         m_cardsGrid->addWidget(card, i / cols, i % cols);
         m_cards.append(card);
 
@@ -1309,6 +1326,25 @@ void DeviceManagerDialog::connectDevice(int index)
                 setStatus("连接失败，请检查网络或服务器地址", "#e05555");
             }
         });
+}
+
+void DeviceManagerDialog::onNetworkConfig(int index)
+{
+    const QList<DeviceProfile> list = AppConfig::instance().deviceList();
+    if (index < 0 || index >= list.size()) return;
+    DeviceProfile profile = list[index];
+
+    NetworkConfigDialog dlg(profile.ip, profile.name.isEmpty() ? profile.carId : profile.name, this);
+    if (dlg.exec() == QDialog::Accepted && dlg.isIpChanged()) {
+        QString oldIp = profile.ip;
+        QString newIp = dlg.newIp().trimmed();
+        if (!newIp.isEmpty() && newIp != oldIp) {
+            profile.ip = newIp;
+            AppConfig::instance().updateDevice(index, profile);
+            setStatus(QString("已更新设备 [%1] 的 IP 地址为 %2").arg(profile.name.isEmpty() ? profile.carId : profile.name, newIp), "#4caf7a");
+            refreshCards();
+        }
+    }
 }
 
 void DeviceManagerDialog::setStatus(const QString &msg, const QString &color)

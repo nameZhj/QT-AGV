@@ -28,7 +28,6 @@ private:
     void deleteMap(const QJsonObject &mapData);
     void downloadMap(const QJsonObject &mapData);
     void downloadSourceFiles(const QJsonObject &mapData);
-    void sendMapToCar(const QJsonObject &mapData);
     void navigateToMap(const QJsonObject &mapData);
     void editMapRoute(const QJsonObject &mapData);
 

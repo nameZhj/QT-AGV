@@ -299,12 +299,12 @@ void MapImageEditWidget::onSave()
     ApiService::instance().uploadMapPgm(m_mapId, pgmData, [this](int code, const QJsonObject &) {
         m_saveBtn->setEnabled(true);
         if (code == 200) {
-            m_statusLabel->setText("已保存并下发到设备");
+            m_statusLabel->setText("已保存");
             Toast::success(this, "保存成功");
             // 保存成功后重新加载地图，刷新为保存后的数据(同步 m_originalImage)
             loadMap();
         } else {
-            m_statusLabel->setText("下发失败");
+            m_statusLabel->setText("保存失败");
             Toast::error(this, "保存失败");
         }
     });

@@ -18,6 +18,8 @@ static const QString kBtnPrimary = "background:#2980b9; color:white; border-radi
 
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
+#include "MapUploadDialog.h"
+#include "SmapUploadDialog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -143,6 +145,41 @@ QPixmap drawMapToolIcon(const QString &name, const QColor &col, int sz = 20)
         p.drawPolygon(arrow);
         p.setPen(QPen(col, 1.6));
         p.drawLine(QPointF(sz*0.16, sz*0.10), QPointF(sz*0.84, sz*0.10));
+    } else if (name == "map-upload") {
+        // 地图上传图标：折页地图 + 向上箭头
+        p.setPen(QPen(col, 1.3)); p.setBrush(Qt::NoBrush);
+        QPolygonF mapSheet;
+        mapSheet << QPointF(sz*0.16, sz*0.28) << QPointF(sz*0.38, sz*0.20)
+                 << QPointF(sz*0.62, sz*0.28) << QPointF(sz*0.84, sz*0.20)
+                 << QPointF(sz*0.84, sz*0.82) << QPointF(sz*0.62, sz*0.90)
+                 << QPointF(sz*0.38, sz*0.82) << QPointF(sz*0.16, sz*0.90);
+        p.drawPolygon(mapSheet);
+        p.drawLine(QPointF(sz*0.38, sz*0.20), QPointF(sz*0.38, sz*0.82));
+        p.drawLine(QPointF(sz*0.62, sz*0.28), QPointF(sz*0.62, sz*0.90));
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(c, sz*0.74), QPointF(c, sz*0.42));
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow; arrow << QPointF(sz*0.34, sz*0.52) << QPointF(sz*0.66, sz*0.52) << QPointF(c, sz*0.32);
+        p.drawPolygon(arrow);
+    } else if (name == "smap-upload") {
+        // smap 上传图标：文档轮廓 + 向上箭头 + 'S' 标
+        p.setPen(QPen(col, 1.3)); p.setBrush(Qt::NoBrush);
+        QPolygonF file;
+        file << QPointF(sz*0.18, sz*0.14) << QPointF(sz*0.56, sz*0.14)
+             << QPointF(sz*0.82, sz*0.36) << QPointF(sz*0.82, sz*0.88)
+             << QPointF(sz*0.18, sz*0.88);
+        p.drawPolygon(file);
+        p.drawLine(QPointF(sz*0.56, sz*0.14), QPointF(sz*0.56, sz*0.36));
+        p.drawLine(QPointF(sz*0.56, sz*0.36), QPointF(sz*0.82, sz*0.36));
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(sz*0.50, sz*0.76), QPointF(sz*0.50, sz*0.46));
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow; arrow << QPointF(sz*0.36, sz*0.54) << QPointF(sz*0.64, sz*0.54) << QPointF(sz*0.50, sz*0.36);
+        p.drawPolygon(arrow);
+        p.setPen(col);
+        QFont f("Consolas", 6, QFont::Bold);
+        p.setFont(f);
+        p.drawText(QRectF(sz*0.22, sz*0.20, sz*0.30, sz*0.30), Qt::AlignCenter, "S");
     } else if (name == "trash") {
         p.setPen(QPen(col, 1.5)); p.setBrush(Qt::NoBrush);
         p.drawRect(QRectF(sz*0.24, sz*0.32, sz*0.52, sz*0.56));
@@ -446,6 +483,8 @@ void MapViewWidget::setupToolbar(QWidget *parent)
     };
 
     m_createMapBtn = addBtn("add", "2D建图", SLOT(onCreateMap()));
+    m_uploadMapBtn = addBtn("map-upload", "地图上传", SLOT(onUploadMap()));
+    m_uploadSmapBtn = addBtn("smap-upload", "smap上传", SLOT(onUploadSmap()));
 
     auto *sepCreate = new QFrame; sepCreate->setFrameShape(QFrame::VLine);
     sepCreate->setStyleSheet("color:#2d3340;"); lay->addWidget(sepCreate);
@@ -465,7 +504,6 @@ void MapViewWidget::setupToolbar(QWidget *parent)
     addBtn("edit",          "编辑地图",   SLOT(onEditMap()));
     addBtn("tag",           "重命名",     SLOT(onRenameMap()));
     addBtn("file-download", "下载原文件", SLOT(onDownloadSource()));
-    addBtn("upload",        "下发到设备", SLOT(onSendToCar()));
     addBtn("trash",         "删除地图",   SLOT(onDeleteMap()));
 
     auto *sep3 = new QFrame; sep3->setFrameShape(QFrame::VLine);
@@ -1436,6 +1474,26 @@ void MapViewWidget::onCreateMap()
     emit navigateRequested("create_map", QString());
 }
 
+void MapViewWidget::onUploadMap()
+{
+    auto *dlg = new MapUploadDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &MapUploadDialog::uploadSucceeded, this, [this]() {
+        refreshData();
+    });
+    dlg->exec();
+}
+
+void MapViewWidget::onUploadSmap()
+{
+    auto *dlg = new SmapUploadDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &SmapUploadDialog::uploadSucceeded, this, [this]() {
+        refreshData();
+    });
+    dlg->exec();
+}
+
 void MapViewWidget::onSwitchMap()
 {
     QDialog dlg(this);
@@ -1788,21 +1846,6 @@ void MapViewWidget::onDownloadSource()
                 QDesktopServices::openUrl(QUrl(
                     AppConfig::instance().mapHost() + m_mapName + "_" + m_mapId));
             }
-        });
-}
-
-void MapViewWidget::onSendToCar()
-{
-    if (m_mapId.isEmpty()) return;
-    auto *loading = new LoadingDialog("正在下发地图到设备...", this);
-    loading->show();
-    ApiService::instance().sendMap2Car(
-        QJsonObject{{"mapId", m_mapId}},
-        [this, loading](int code, const QJsonObject &) {
-            loading->close();
-            loading->deleteLater();
-            if (code == 200) { setStatus("地图已下发到设备"); Toast::success(this, "地图已下发到设备"); }
-            else QMessageBox::warning(this, "错误", "下发地图失败");
         });
 }
 

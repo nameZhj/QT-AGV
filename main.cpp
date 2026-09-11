@@ -105,8 +105,15 @@ int main(int argc, char *argv[])
 
     // Log file
     QString logPath = app.applicationDirPath() + "/qt-agv.log";
+    bool fileExisted = QFile::exists(logPath);
     g_logFile = new QFile(logPath);
-    g_logFile->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+    if (g_logFile->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        if (!fileExisted || g_logFile->size() == 0) {
+            static const unsigned char bom[] = {0xEF, 0xBB, 0xBF};
+            g_logFile->write(reinterpret_cast<const char *>(bom), sizeof(bom));
+            g_logFile->flush();
+        }
+    }
 
     qInfo() << "QT-AGV starting";
 

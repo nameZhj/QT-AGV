@@ -62,13 +62,14 @@ protected:
 
 private slots:
     void onCreateMap();
+    void onUploadMap();
+    void onUploadSmap();
     void onSwitchMap();
     void onRelocalize();
     void onEditRoute();
     void onEditMap();
     void onRenameMap();
     void onDownloadSource();
-    void onSendToCar();
     void onDeleteMap();
     void onMqttMessage(const QString &topic, const QByteArray &payload);
     void onViewTransformChanged();
@@ -143,6 +144,8 @@ private:
 
     // Toolbar buttons
     QToolButton *m_createMapBtn = nullptr;
+    QToolButton *m_uploadMapBtn = nullptr;
+    QToolButton *m_uploadSmapBtn = nullptr;
     QToolButton *m_switchMapBtn = nullptr;
     QToolButton *m_relocBtn     = nullptr;
     QToolButton *m_navModeBtn   = nullptr;

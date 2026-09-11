@@ -30,6 +30,7 @@ public:
     // ========== Multi-device profile management ==========
     QList<DeviceProfile> deviceList() const;
     void saveDevice(const DeviceProfile &dev);   // add or update by IP
+    void updateDevice(int index, const DeviceProfile &dev);
     void removeDevice(int index);
     void clearDevices();
 
