@@ -2,7 +2,9 @@
 #include "widgets/NetworkConfigDialog.h"
 #include "ApiService.h"
 #include "AppConfig.h"
-#include "TestPortMapping.h"
+#include "MqttService.h"
+#include "WebSocketService.h"
+#include <QMouseEvent>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -20,6 +22,8 @@
 #include <QTimer>
 #include <QProgressDialog>
 #include <QPointer>
+#include <QTcpSocket>
+#include <QElapsedTimer>
 #include "Toast.h"
 
 // 从 QJsonObject 提取 linkStatus (可能是字符串 "0"/"1" 或数値 0/1)
@@ -35,290 +39,510 @@ static QString extractLinkStatus(const QJsonObject &obj, const QString &key = "l
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  BatteryBadge
+// ═══════════════════════════════════════════════════════════════════════════════
+
+BatteryBadge::BatteryBadge(QWidget *parent)
+    : QWidget(parent)
+{
+    setFixedSize(36, 16);
+}
+
+void BatteryBadge::setBattery(int level)
+{
+    m_level = level;
+    update();
+}
+
+void BatteryBadge::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    // 电池外框
+    QRectF body(1, 1, 28, 14);
+    p.setPen(QPen(QColor(255, 255, 255, 220), 1.2));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(body, 2, 2);
+
+    // 电池正极极柱
+    QRectF tip(29, 4.5, 2.5, 7);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(255, 255, 255, 220));
+    p.drawRoundedRect(tip, 1, 1);
+
+    // 电池内部电量文本
+    p.setPen(QColor("#ffffff"));
+    QFont f = font();
+    f.setPixelSize(10);
+    f.setBold(true);
+    p.setFont(f);
+    QString txt = (m_level >= 0) ? QString::number(m_level) : "--";
+    p.drawText(body, Qt::AlignCenter, txt);
+}
+
+static QPixmap makeSlidersIcon(int size = 18, const QColor &color = QColor("#ffffff"))
+{
+    QPixmap pm(size, size);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap));
+
+    p.drawLine(QPointF(2, 4), QPointF(size - 2, 4));
+    p.setBrush(color);
+    p.drawEllipse(QPointF(6, 4), 2, 2);
+
+    p.drawLine(QPointF(2, 9), QPointF(size - 2, 9));
+    p.drawEllipse(QPointF(size - 6, 9), 2, 2);
+
+    p.drawLine(QPointF(2, 14), QPointF(size - 2, 14));
+    p.drawEllipse(QPointF(8, 14), 2, 2);
+
+    p.end();
+    return pm;
+}
+
+static QPixmap makeRobotHeadIcon(int size = 26, const QColor &color = QColor("#00e5ff"))
+{
+    QPixmap pm(size, size);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap));
+
+    p.drawLine(QPointF(size / 2.0, 1.5), QPointF(size / 2.0, 6.0));
+    p.setBrush(color);
+    p.drawEllipse(QPointF(size / 2.0, 2.0), 1.5, 1.5);
+
+    QRectF head(3.5, 6.0, size - 7.0, size - 10.0);
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(head, 2.5, 2.5);
+
+    p.setBrush(color);
+    p.drawEllipse(QPointF(size / 2.0 - 4.5, 11.5), 1.5, 1.5);
+    p.drawEllipse(QPointF(size / 2.0 + 4.5, 11.5), 1.5, 1.5);
+
+    p.drawLine(QPointF(size / 2.0 - 3.0, 16.5), QPointF(size / 2.0 + 3.0, 16.5));
+
+    p.end();
+    return pm;
+}
+
+static QPixmap makeBaseStationIcon(int w = 26, int h = 20, const QColor &color = QColor("#00e5ff"))
+{
+    QPixmap pm(w, h);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    p.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap));
+    p.setBrush(Qt::NoBrush);
+    p.drawArc(QRectF(w / 2.0 - 8, 2, 16, 12), 45 * 16, 90 * 16);
+    p.drawArc(QRectF(w / 2.0 - 4.5, 5, 9, 8), 45 * 16, 90 * 16);
+
+    p.drawRoundedRect(QRectF(3.5, 13.5, w - 7, 5), 1.5, 1.5);
+
+    p.end();
+    return pm;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  DeviceCard
 // ═══════════════════════════════════════════════════════════════════════════════
 
 DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
-    : QWidget(parent), m_index(index), m_profile(profile)
+    : QFrame(parent), m_index(index), m_profile(profile)
 {
-    setFixedSize(280, 320);
-    setAttribute(Qt::WA_StyledBackground, true);
-    setStyleSheet(
-        "DeviceCard {"
-        "  background: #252a35;"
-        "  border: 1px solid #3a4050;"
-        "  border-radius: 8px;"
-        "}");
+    setObjectName("deviceCard");
+    setFrameShape(QFrame::StyledPanel);
+    setFixedSize(260, 335);
+
+    // 整卡立体投影效果：让整个 item 从弹窗底色中清晰凸起，形成明确的卡片感
+    m_shadow = new QGraphicsDropShadowEffect(this);
+    m_shadow->setBlurRadius(16);
+    m_shadow->setOffset(0, 4);
+    m_shadow->setColor(QColor(0, 0, 0, 160));
+    setGraphicsEffect(m_shadow);
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    // ── Header bar ──────────────────────────────────────────────────────────
-    auto *hdr = new QWidget;
-    hdr->setFixedHeight(38);
-    hdr->setStyleSheet(
-        "background: #1e2228;"
-        "border-radius: 8px 8px 0 0;"
-        "border-bottom: 1px solid #3a4050;");
-    auto *hl = new QHBoxLayout(hdr);
+    // ── Header bar (参考图顶部栏：☐ 已连接 🟢 机器人  🎛️  [47]) ─────────────────
+    m_hdrWidget = new QWidget;
+    m_hdrWidget->setFixedHeight(32);
+    auto *hl = new QHBoxLayout(m_hdrWidget);
     hl->setContentsMargins(10, 0, 8, 0);
-    hl->setSpacing(5);
+    hl->setSpacing(6);
 
-    // Status dot
-    m_onlineDot = new QLabel;
-    m_onlineDot->setFixedSize(10, 10);
-    m_onlineDot->setStyleSheet("background:#4a5568; border-radius:5px;");
-    hl->addWidget(m_onlineDot);
+    // 1. Checkbox icon (白框方形)
+    auto *chkBox = new QLabel;
+    chkBox->setFixedSize(12, 12);
+    chkBox->setStyleSheet("border:1.5px solid #ffffff; border-radius:2px; background:transparent;");
+    hl->addWidget(chkBox);
 
-    m_onlineLabel = new QLabel("检测中...");
-    m_onlineLabel->setStyleSheet("color:#8898a8; font-size:11px; background:transparent;");
+    // 2. 连接文字
+    m_onlineLabel = new QLabel("已连接");
+    m_onlineLabel->setStyleSheet("color:#ffffff; font-size:12px; font-weight:bold; background:transparent;");
     hl->addWidget(m_onlineLabel);
 
-    hl->addSpacing(6);
+    // 3. 状态指示灯 (圆形绿点)
+    m_onlineDot = new QLabel;
+    m_onlineDot->setFixedSize(10, 10);
+    m_onlineDot->setStyleSheet("background:#44db22; border-radius:5px;");
+    hl->addWidget(m_onlineDot);
 
-    auto *typeLbl = new QLabel("AGV");
-    typeLbl->setStyleSheet("color:#c8d0d8; font-size:11px; font-weight:600; background:transparent;");
-    hl->addWidget(typeLbl);
+    // 4. "机器人" 文本
+    m_robLabel = new QLabel("机器人");
+    m_robLabel->setStyleSheet("color:#ffffff; font-size:12px; font-weight:500; background:transparent;");
+    hl->addWidget(m_robLabel);
 
     hl->addStretch();
 
-    auto mkDelBtn = []() {
-        QPixmap pm(20, 20);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing);
-        QColor col("#e8e8e8");
-        p.setPen(QPen(col, 1.5, Qt::SolidLine, Qt::RoundCap));
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(QRectF(5, 7, 10, 11), 1.5, 1.5);
-        p.drawLine(QPointF(3.5, 7), QPointF(16.5, 7));
-        p.drawLine(QPointF(7, 4.5), QPointF(13, 4.5));
-        p.drawLine(QPointF(8, 4.5), QPointF(8, 7));
-        p.drawLine(QPointF(12, 4.5), QPointF(12, 7));
-        p.drawLine(QPointF(8.5, 9), QPointF(8.5, 16));
-        p.drawLine(QPointF(11.5, 9), QPointF(11.5, 16));
-        p.end();
+    // 5. 调优/网络配置滑块图标 🎛️ (可点击直接打开 SSH 网络配置)
+    m_configBtn = new QPushButton;
+    m_configBtn->setFlat(true);
+    m_configBtn->setFixedSize(22, 22);
+    m_configBtn->setIcon(QIcon(makeSlidersIcon(18, QColor("#ffffff"))));
+    m_configBtn->setIconSize(QSize(16, 16));
+    m_configBtn->setCursor(Qt::PointingHandCursor);
+    m_configBtn->setToolTip("网络参数配置 (SSH)");
+    m_configBtn->setStyleSheet("QPushButton{background:transparent;border:none;border-radius:3px;}"
+                               "QPushButton:hover{background:rgba(255,255,255,0.25);}");
+    connect(m_configBtn, &QPushButton::clicked, this, [this]{ emit networkConfigClicked(m_index); });
+    hl->addWidget(m_configBtn);
 
-        auto *b = new QPushButton;
-        b->setFlat(true);
-        b->setFixedSize(28, 28);
-        b->setIcon(QIcon(pm));
-        b->setIconSize(QSize(16, 16));
-        b->setCursor(Qt::PointingHandCursor);
-        b->setStyleSheet(
-            "QPushButton{background:#3a4450;border:1px solid #5a6070;border-radius:4px;}"
-            "QPushButton:hover{background:#4a1414;border-color:#e05555;}"
-            "QPushButton:pressed{background:#2a0a0a;}");
-        return b;
-    };
+    // 6. 电池电量组件
+    m_batteryBadge = new BatteryBadge;
+    hl->addWidget(m_batteryBadge);
 
-    auto *delBtn = mkDelBtn();
+    // 7. 小尺寸删除按钮
+    auto *delBtn = new QPushButton("✕");
+    delBtn->setFixedSize(18, 18);
+    delBtn->setCursor(Qt::PointingHandCursor);
+    delBtn->setToolTip("从列表中移除该设备");
+    delBtn->setStyleSheet(
+        "QPushButton{background:transparent;color:rgba(255,255,255,0.7);border:none;font-size:11px;font-weight:bold;}"
+        "QPushButton:hover{background:rgba(239,68,68,0.85);color:#fff;border-radius:3px;}");
     connect(delBtn, &QPushButton::clicked, this, [this]{ emit removeClicked(m_index); });
     hl->addWidget(delBtn);
 
-    root->addWidget(hdr);
+    root->addWidget(m_hdrWidget);
 
     // ── Body ────────────────────────────────────────────────────────────────
     auto *body = new QWidget;
     body->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *bl = new QVBoxLayout(body);
-    bl->setContentsMargins(12, 12, 12, 10);
-    bl->setSpacing(8);
+    bl->setContentsMargins(14, 10, 14, 6);
+    bl->setSpacing(6);
 
-    // Top row: Robot icon + Device name + IP
+    // 1. 首行: 青色机器人图标 + IP + [ 潜伏底盘 ] (固定写死机器人类型)
     auto *topRow = new QHBoxLayout;
-    topRow->setSpacing(10);
+    topRow->setSpacing(6);
 
-    auto *iconLbl = new QLabel("🤖");
-    iconLbl->setFixedSize(46, 46);
-    iconLbl->setAlignment(Qt::AlignCenter);
-    iconLbl->setStyleSheet(
-        "font-size:24px;"
-        "background:#00304a;"
-        "border-radius:23px;"
-        "border:2px solid #00bcd4;");
-    topRow->addWidget(iconLbl);
+    m_robotIcon = new QLabel;
+    m_robotIcon->setFixedSize(26, 26);
+    m_robotIcon->setPixmap(makeRobotHeadIcon(26, QColor("#00e5ff")));
+    m_robotIcon->setStyleSheet("background:transparent;");
+    topRow->addWidget(m_robotIcon);
 
-    auto *nameCol = new QVBoxLayout;
-    nameCol->setSpacing(2);
-    nameCol->setAlignment(Qt::AlignVCenter);
+    m_ipLabel = new QLabel(profile.ip);
+    m_ipLabel->setStyleSheet("color:#ffffff; font-size:13px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
+    topRow->addWidget(m_ipLabel);
 
-    m_nameLabel = new QLabel;
-    m_nameLabel->setStyleSheet("color:#ffffff; font-size:14px; font-weight:700; background:transparent;");
-    nameCol->addWidget(m_nameLabel);
+    topRow->addStretch();
 
-    auto *ipLbl = new QLabel(profile.ip);
-    ipLbl->setStyleSheet("color:#90a4ae; font-size:12px; font-family:Consolas,monospace; background:transparent;");
-    nameCol->addWidget(ipLbl);
+    m_typeTag = new QLabel("潜伏底盘");
+    m_typeTag->setStyleSheet(
+        "color:#00e5ff; font-size:11px; font-weight:bold; background:transparent;"
+        "border:1.2px solid #00e5ff; border-radius:2px; padding:1px 5px;");
+    topRow->addWidget(m_typeTag);
 
-    topRow->addLayout(nameCol, 1);
     bl->addLayout(topRow);
 
-    // Badges row: Car ID
-    auto *tagRow = new QHBoxLayout;
-    tagRow->setSpacing(6);
-    auto *idBadge = new QLabel(QString("ID: %1").arg(profile.carId.isEmpty() ? "未注册" : profile.carId));
-    idBadge->setStyleSheet(
-        "color:#7ab0d8; font-size:11px;"
-        "background:#1e2a3a; border:1px solid #2d4060; border-radius:3px; padding:2px 8px;");
-    tagRow->addWidget(idBadge);
-    tagRow->addStretch();
-    bl->addLayout(tagRow);
+    // 2. 橙色置信度底色块 (0.35) + 绿色通讯延迟 (9ms)
+    auto *metricsRow = new QHBoxLayout;
+    metricsRow->setSpacing(8);
 
-    // Info details panel (Map + Version, cached locally)
-    auto *infoBox = new QFrame;
-    infoBox->setStyleSheet(
-        "QFrame { background:#1a1e27; border:1px solid #2c3240; border-radius:6px; }");
-    auto *grid = new QGridLayout(infoBox);
-    grid->setContentsMargins(8, 6, 8, 6);
-    grid->setHorizontalSpacing(6);
-    grid->setVerticalSpacing(5);
+    m_confBadge = new QLabel("--");
+    m_confBadge->setAlignment(Qt::AlignCenter);
+    m_confBadge->setFixedHeight(22);
+    m_confBadge->setStyleSheet(
+        "background:#ff6600; color:#ffffff; font-size:12px; font-weight:bold; "
+        "border-radius:3px; padding:0 8px; min-width:42px;");
+    metricsRow->addWidget(m_confBadge);
 
-    auto *mapTitle = new QLabel("🗺 绑定地图:");
-    mapTitle->setStyleSheet("color:#8898a8; font-size:11px; background:transparent;");
-    m_mapLabel = new QLabel;
-    m_mapLabel->setStyleSheet("color:#e2e8f0; font-size:11px; font-weight:600; background:transparent;");
+    m_latencyLabel = new QLabel("--");
+    m_latencyLabel->setStyleSheet("color:#44db22; font-size:12px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
+    metricsRow->addWidget(m_latencyLabel);
 
-    auto *verTitle = new QLabel("🏷 软件版本:");
-    verTitle->setStyleSheet("color:#8898a8; font-size:11px; background:transparent;");
-    m_verLabel = new QLabel;
-    m_verLabel->setStyleSheet("color:#e2e8f0; font-size:11px; font-weight:600; background:transparent;");
+    metricsRow->addStretch();
+    bl->addLayout(metricsRow);
 
-    grid->addWidget(mapTitle, 0, 0);
-    grid->addWidget(m_mapLabel, 0, 1);
-    grid->addWidget(verTitle, 1, 0);
-    grid->addWidget(m_verLabel, 1, 1);
-    grid->setColumnStretch(1, 1);
+    // 3. 信息列表: 地图、名称、备注、版本、固件版本
+    auto *infoLay = new QVBoxLayout;
+    infoLay->setSpacing(4);
+    infoLay->setContentsMargins(0, 2, 0, 0);
 
-    bl->addWidget(infoBox);
+    auto mkRow = [](const QString &keyTxt, QLabel *&valLbl) {
+        auto *row = new QHBoxLayout;
+        row->setSpacing(4);
+        auto *kl = new QLabel(keyTxt);
+        kl->setStyleSheet("color:#cbd5e1; font-size:12px; background:transparent;");
+        row->addWidget(kl);
+
+        valLbl = new QLabel("--");
+        valLbl->setStyleSheet("color:#f1f5f9; font-size:12px; font-weight:500; background:transparent;");
+        row->addWidget(valLbl, 1);
+        return row;
+    };
+
+    infoLay->addLayout(mkRow("地图:", m_mapLabel));
+    infoLay->addLayout(mkRow("名称:", m_nameLabel));
+    infoLay->addLayout(mkRow("备注:", m_remarkLabel));
+    infoLay->addLayout(mkRow("版本:", m_verLabel));
+    infoLay->addLayout(mkRow("固件版本:", m_fwVerLabel));
+
+    bl->addLayout(infoLay);
+
+    // 4. 青色基站/无线图标 (参考图红框下方左侧基站图标)
+    m_baseIcon = new QLabel;
+    m_baseIcon->setFixedSize(26, 20);
+    m_baseIcon->setPixmap(makeBaseStationIcon(26, 20, QColor("#00e5ff")));
+    m_baseIcon->setStyleSheet("background:transparent;");
+    bl->addWidget(m_baseIcon, 0, Qt::AlignLeft);
+
     bl->addStretch();
-
     root->addWidget(body, 1);
 
     // ── Footer ──────────────────────────────────────────────────────────────
     auto *ftr = new QWidget;
-    ftr->setFixedHeight(48);
-    ftr->setStyleSheet(
-        "background:#1e2228;"
-        "border-radius:0 0 8px 8px;"
-        "border-top:1px solid #3a4050;");
+    ftr->setFixedHeight(42);
+    ftr->setStyleSheet("background:transparent; border:none;");
     auto *fl = new QHBoxLayout(ftr);
-    fl->setContentsMargins(10, 0, 10, 0);
-    fl->setSpacing(8);
-    m_footerLay = fl;
+    fl->setContentsMargins(10, 0, 10, 6);
+    fl->setSpacing(10);
 
-    auto *netBtn = new QPushButton("🌐 网络配置");
-    netBtn->setCursor(Qt::PointingHandCursor);
-    netBtn->setToolTip("远程 SSH 配置 AGV 网络参数 (IP/掩码/网关)");
-    netBtn->setStyleSheet(
+    // 左侧: [✓] 已同步 按钮 (对应参考图左下角)
+    m_syncBtn = new QPushButton("✓ 已同步");
+    m_syncBtn->setCursor(Qt::PointingHandCursor);
+    m_syncBtn->setStyleSheet(
         "QPushButton{"
-        "  background:#1e2a38; color:#00bcd4; border:1px solid #2d4060;"
-        "  border-radius:4px; padding:6px 10px;"
-        "  font-size:12px; font-weight:600;"
+        "  background:#333842; color:#38bdf8; border:1px solid #4a5160;"
+        "  border-radius:3px; padding:4px 10px; font-size:11px; font-weight:bold;"
         "}"
-        "QPushButton:hover{background:#26364a; color:#ffffff; border-color:#00bcd4;}"
-        "QPushButton:pressed{background:#16202c;}");
-    connect(netBtn, &QPushButton::clicked, this, [this]{ emit networkConfigClicked(m_index); });
-    fl->addWidget(netBtn);
+        "QPushButton:hover{background:#3f4756;}");
+    fl->addWidget(m_syncBtn);
 
     fl->addStretch();
 
-    if (profile.carId.isEmpty()) {
-        auto *warn = new QLabel("⚠ 未同步");
-        warn->setStyleSheet("color:#f0a060; font-size:11px; background:transparent;");
-        fl->addWidget(warn);
-    } else if (profile.linkStatus != "0") {
-        m_warnLabel = new QLabel("⚠ 未链接");
-        m_warnLabel->setStyleSheet("color:#f0a060; font-size:11px; background:transparent;");
-        fl->addWidget(m_warnLabel);
-    }
-
-    if (!profile.carId.isEmpty() && profile.linkStatus != "0") {
-        m_linkBtn = new QPushButton("链接设备");
-        m_linkBtn->setCursor(Qt::PointingHandCursor);
-        m_linkBtn->setStyleSheet(
-            "QPushButton{"
-            "  background:#6a4f1e; color:#ffd699; border:none;"
-            "  border-radius:4px; padding:6px 12px;"
-            "  font-size:12px; font-weight:700;"
-            "}"
-            "QPushButton:hover{background:#8a6f2e;}"
-            "QPushButton:disabled{background:#2d3340; color:#556677;}");
-        connect(m_linkBtn, &QPushButton::clicked, this, [this]{ emit linkClicked(m_index); });
-        fl->addWidget(m_linkBtn);
-    }
-
-    m_connectBtn = new QPushButton("进入控制");
+    // 右侧: 断开连接 按钮 (仅在连接成功后显示，未连接时不显示任何按钮)
+    m_connectBtn = new QPushButton("断开连接");
     m_connectBtn->setCursor(Qt::PointingHandCursor);
     m_connectBtn->setStyleSheet(
         "QPushButton{"
-        "  background:#1e6fd4; color:#fff; border:none;"
-        "  border-radius:4px; padding:6px 16px;"
-        "  font-size:12px; font-weight:700;"
+        "  background:#333842; color:#f87171; border:1px solid #7f1d1d;"
+        "  border-radius:3px; padding:4px 12px; font-size:11px; font-weight:bold;"
         "}"
-        "QPushButton:hover{background:#2980e8;}"
-        "QPushButton:disabled{background:#2d3340; color:#556677;}");
-    connect(m_connectBtn, &QPushButton::clicked, this, [this]{ emit connectClicked(m_index); });
-    m_connectBtn->setVisible(profile.linkStatus == "0");
+        "QPushButton:hover{background:#450a0a; color:#fca5a5;}");
+    m_connectBtn->setVisible(false); // 默认隐藏，不再显示"进入控制"
+    connect(m_connectBtn, &QPushButton::clicked, this, [this]{ emit disconnectClicked(m_index); });
     fl->addWidget(m_connectBtn);
 
     root->addWidget(ftr);
 
-    // 初始化渲染已缓存的信息 (离线也可正常显示)
+    // 设置整卡手型光标与双击进入主页提示
+    setCursor(Qt::PointingHandCursor);
+    setToolTip("双击卡片进入主页");
+
+    // 默认版本与固件版本统一为 v2.1.1
+    if (m_profile.version.isEmpty() || m_profile.version.startsWith("v3.4.8")) {
+        m_profile.version = "v2.1.1";
+    }
+    m_fwVersion = "v2.1.1";
+
+    // 初始化样式与数据显示
+    setOnlineUI(false);
     updateCardDisplay();
 
+    // 为卡片内部所有非按钮子控件安装事件过滤器，确保双击任何非按钮位置均能进入主页
+    const auto widgets = findChildren<QWidget*>();
+    for (QWidget *w : widgets) {
+        if (!qobject_cast<QAbstractButton*>(w)) {
+            w->installEventFilter(this);
+        }
+    }
+
     // 自动连接 MQTT 监听设备基本信息
-    if (!profile.ip.isEmpty() && !profile.carId.isEmpty() && !AppConfig::instance().testMode()) {
+    if (!profile.ip.isEmpty() && !profile.carId.isEmpty()) {
         startMqttMonitor(profile.ip, profile.carId);
-    } else if (AppConfig::instance().testMode()) {
-        setOnlineUI(true);
-        if (m_profile.mapName.isEmpty()) m_profile.mapName = "测试地图_01";
-        if (m_profile.version.isEmpty()) m_profile.version = "v2.1.0-release";
-        updateCardDisplay();
-    } else {
-        setOnlineUI(false);
     }
 }
 
 DeviceCard::~DeviceCard()
 {
-    if (m_heartbeatTimer) {
-        m_heartbeatTimer->stop();
+    if (m_latencyTimer) {
+        m_latencyTimer->stop();
     }
     if (m_mqttClient) {
         m_mqttClient->disconnectFromHost();
     }
 }
 
-void DeviceCard::setBusy(bool busy)
+void DeviceCard::mouseDoubleClickEvent(QMouseEvent *event)
 {
-    m_connectBtn->setEnabled(!busy);
-    m_connectBtn->setText(busy ? "连接中..." : "进入控制");
+    if (event->button() == Qt::LeftButton) {
+        // 检查双击位置是否在任何已知按钮上，防止误触发
+        QWidget *child = childAt(event->pos());
+        while (child && child != this) {
+            if (qobject_cast<QAbstractButton*>(child)) {
+                QFrame::mouseDoubleClickEvent(event);
+                return;
+            }
+            child = child->parentWidget();
+        }
+        emit doubleClicked(m_index);
+        event->accept();
+        return;
+    }
+    QFrame::mouseDoubleClickEvent(event);
 }
 
-void DeviceCard::setLinkStatus(bool linked)
+bool DeviceCard::eventFilter(QObject *watched, QEvent *event)
 {
-    if (m_warnLabel)  m_warnLabel->setVisible(!linked);
-    if (m_linkBtn)    m_linkBtn->setVisible(!linked);
-    if (m_connectBtn) m_connectBtn->setVisible(linked);
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        auto *mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::LeftButton) {
+            if (!qobject_cast<QAbstractButton*>(watched)) {
+                emit doubleClicked(m_index);
+                return true;
+            }
+        }
+    }
+    return QFrame::eventFilter(watched, event);
+}
+
+void DeviceCard::disconnectDevice()
+{
+    if (m_latencyTimer) {
+        m_latencyTimer->stop();
+    }
+    if (m_mqttClient) {
+        m_mqttClient->disconnectFromHost();
+        m_mqttClient->deleteLater();
+        m_mqttClient = nullptr;
+    }
+    m_latency = -1;
+    m_confidence = -1.0;
+    setOnlineUI(false);
+}
+
+void DeviceCard::setBusy(bool busy)
+{
+    if (busy) {
+        m_connectBtn->setVisible(true);
+        m_connectBtn->setEnabled(false);
+        m_connectBtn->setText("进入中...");
+    } else {
+        m_connectBtn->setEnabled(true);
+        m_connectBtn->setText("断开连接");
+    }
+}
+
+void DeviceCard::setLinkStatus(bool /*linked*/)
+{
 }
 
 void DeviceCard::setOnlineUI(bool online)
 {
+    m_isOnline = online;
     if (online) {
-        m_onlineDot->setStyleSheet("background:#4caf7a; border-radius:5px;");
-        m_onlineLabel->setText("在线");
-        m_onlineLabel->setStyleSheet("color:#4caf7a; font-size:11px; background:transparent;");
+        setStyleSheet(
+            "QFrame#deviceCard {"
+            "  background: #252a35;"
+            "  border: 2px solid #0091da;"
+            "  border-radius: 8px;"
+            "}"
+            "QFrame#deviceCard:hover {"
+            "  background: #28303e;"
+            "  border-color: #00b4d8;"
+            "}");
+        if (m_hdrWidget) {
+            m_hdrWidget->setStyleSheet("background: #0091da; border-top-left-radius: 6px; border-top-right-radius: 6px;");
+        }
+        if (m_shadow) {
+            m_shadow->setColor(QColor(0, 145, 218, 80));
+            m_shadow->setBlurRadius(20);
+            m_shadow->setOffset(0, 4);
+        }
+        if (m_onlineDot) {
+            m_onlineDot->setStyleSheet("background: #44db22; border-radius: 5px;");
+        }
+        if (m_onlineLabel) {
+            m_onlineLabel->setText("已连接");
+            m_onlineLabel->setStyleSheet("color: #ffffff; font-size: 12px; font-weight: bold; background: transparent;");
+        }
+        if (m_robotIcon) {
+            m_robotIcon->setPixmap(makeRobotHeadIcon(26, QColor("#00e5ff")));
+        }
+        if (m_ipLabel) {
+            m_ipLabel->setStyleSheet("color: #ffffff; font-size: 13px; font-weight: bold; font-family: Consolas,monospace; background: transparent;");
+        }
+        if (m_typeTag) {
+            m_typeTag->setStyleSheet("color: #00e5ff; font-size: 11px; font-weight: bold; background: transparent; border: 1.2px solid #00e5ff; border-radius: 2px; padding: 1px 5px;");
+        }
+        if (m_baseIcon) {
+            m_baseIcon->setPixmap(makeBaseStationIcon(26, 20, QColor("#00e5ff")));
+        }
     } else {
-        m_onlineDot->setStyleSheet("background:#4a5568; border-radius:5px;");
-        m_onlineLabel->setText("离线");
-        m_onlineLabel->setStyleSheet("color:#8898a8; font-size:11px; background:transparent;");
+        setStyleSheet(
+            "QFrame#deviceCard {"
+            "  background: #1f232c;"
+            "  border: 1.5px solid #475569;"
+            "  border-radius: 8px;"
+            "}"
+            "QFrame#deviceCard:hover {"
+            "  background: #242934;"
+            "  border-color: #64748b;"
+            "}");
+        if (m_hdrWidget) {
+            m_hdrWidget->setStyleSheet("background: #2d3544; border-top-left-radius: 6px; border-top-right-radius: 6px;");
+        }
+        if (m_shadow) {
+            m_shadow->setColor(QColor(0, 0, 0, 160));
+            m_shadow->setBlurRadius(16);
+            m_shadow->setOffset(0, 4);
+        }
+        if (m_onlineDot) {
+            m_onlineDot->setStyleSheet("background: #718096; border-radius: 5px;");
+        }
+        if (m_onlineLabel) {
+            m_onlineLabel->setText("未连接");
+            m_onlineLabel->setStyleSheet("color: #94a3b8; font-size: 12px; font-weight: bold; background: transparent;");
+        }
+        if (m_robotIcon) {
+            m_robotIcon->setPixmap(makeRobotHeadIcon(26, QColor("#718096")));
+        }
+        if (m_ipLabel) {
+            m_ipLabel->setStyleSheet("color: #94a3b8; font-size: 13px; font-weight: bold; font-family: Consolas,monospace; background: transparent;");
+        }
+        if (m_typeTag) {
+            m_typeTag->setStyleSheet("color: #718096; font-size: 11px; font-weight: bold; background: transparent; border: 1.2px solid #4a5568; border-radius: 2px; padding: 1px 5px;");
+        }
+        if (m_baseIcon) {
+            m_baseIcon->setPixmap(makeBaseStationIcon(26, 20, QColor("#4a5568")));
+        }
+        m_confidence = -1.0;
+        m_battery = -1;
+        m_latency = -1;
+        updateCardDisplay();
     }
 }
 
 void DeviceCard::updateCardDisplay()
 {
+    // 1. 设备名称 (如 AMB-01)
     QString displayName = m_profile.name.trimmed();
     if (displayName.isEmpty()) {
         displayName = m_profile.carId.isEmpty() ? "未注册设备" : QString("AGV-%1").arg(m_profile.carId);
@@ -331,105 +555,181 @@ void DeviceCard::updateCardDisplay()
         m_nameLabel->setToolTip(displayName);
     }
 
+    // 2. 绑定地图名称 (如 qlyy)
     QString mapName = m_profile.mapName.trimmed();
     if (mapName.isEmpty()) {
-        m_mapLabel->setText("未绑定 / 离线缓存空");
-        m_mapLabel->setStyleSheet("color:#718096; font-size:11px; background:transparent;");
+        m_mapLabel->setText("--");
     } else {
-        if (mapName.length() > 13) {
-            m_mapLabel->setText(mapName.left(12) + "…");
+        if (mapName.length() > 14) {
+            m_mapLabel->setText(mapName.left(13) + "…");
             m_mapLabel->setToolTip(mapName);
         } else {
             m_mapLabel->setText(mapName);
             m_mapLabel->setToolTip(mapName);
         }
-        m_mapLabel->setStyleSheet("color:#48bb78; font-size:11px; font-weight:600; background:transparent;");
     }
 
+    // 3. 备注 (如空则显示空白)
+    if (m_remarkLabel) {
+        m_remarkLabel->setText(m_remark.trimmed());
+    }
+
+    // 4. 软件版本 (版本改为：v2.1.1)
     QString ver = m_profile.version.trimmed();
-    if (ver.isEmpty()) {
-        m_verLabel->setText("未知 / 离线缓存空");
-        m_verLabel->setStyleSheet("color:#718096; font-size:11px; background:transparent;");
-    } else {
-        if (ver.length() > 13) {
-            m_verLabel->setText(ver.left(12) + "…");
-            m_verLabel->setToolTip(ver);
-        } else {
-            m_verLabel->setText(ver);
-            m_verLabel->setToolTip(ver);
-        }
-        m_verLabel->setStyleSheet("color:#63b3ed; font-size:11px; font-weight:600; background:transparent;");
+    if (ver.isEmpty() || ver == "未知" || ver.startsWith("v3.4.8")) {
+        ver = "v2.1.1";
+    }
+    m_verLabel->setText(ver);
+
+    // 5. 固件版本 (固件版本改为：v2.1.1)
+    QString fwVer = m_fwVersion.trimmed();
+    if (fwVer.isEmpty() || fwVer == "未知" || fwVer.startsWith("v22A")) {
+        fwVer = "v2.1.1";
+    }
+    m_fwVerLabel->setText(fwVer);
+
+    // 6. 机器人类型 (固定写死：潜伏底盘)
+    if (m_typeTag) {
+        m_typeTag->setText("潜伏底盘");
     }
 
-    bool isCurrent = (AppConfig::instance().currentDeviceIndex() == m_index);
-    if (m_connectBtn) {
-        if (isCurrent) {
-            m_connectBtn->setText("✓ 当前设备");
-            m_connectBtn->setStyleSheet(
-                "QPushButton{"
-                "  background:#234e38; color:#68d391; border:1px solid #38a169;"
-                "  border-radius:4px; padding:6px 14px;"
-                "  font-size:12px; font-weight:700;"
-                "}"
-                "QPushButton:hover{background:#2f6848;}");
+    // 7. 位置置信度 badge (如 0.35)
+    if (m_confBadge) {
+        if (m_confidence >= 0.0) {
+            m_confBadge->setText(QString::number(m_confidence, 'f', 2));
+            m_confBadge->setStyleSheet("background:#ff6600; color:#ffffff; font-size:12px; font-weight:bold; border-radius:3px; padding:0 8px; min-width:42px;");
         } else {
-            m_connectBtn->setText("进入控制");
+            m_confBadge->setText("--");
+            m_confBadge->setStyleSheet("background:#374151; color:#9ca3af; font-size:12px; font-weight:bold; border-radius:3px; padding:0 8px; min-width:42px;");
+        }
+    }
+
+    // 8. 通讯延迟 (如 9ms)
+    if (m_latencyLabel) {
+        if (m_latency >= 0) {
+            m_latencyLabel->setText(QString("%1ms").arg(m_latency));
+            m_latencyLabel->setStyleSheet("color:#44db22; font-size:12px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
+        } else {
+            m_latencyLabel->setText("--");
+            m_latencyLabel->setStyleSheet("color:#64748b; font-size:12px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
+        }
+    }
+
+    // 9. 电量 (如 47)
+    if (m_batteryBadge) {
+        m_batteryBadge->setBattery(m_battery);
+    }
+
+    // 10. 底部状态与操作按钮
+    bool isCurrent = (AppConfig::instance().currentDeviceIndex() == m_index);
+    if (m_syncBtn) {
+        if (isCurrent) {
+            m_syncBtn->setText("✓ 已同步");
+            m_syncBtn->setStyleSheet(
+                "QPushButton{"
+                "  background:#1e3a5f; color:#38bdf8; border:1px solid #0284c7;"
+                "  border-radius:3px; padding:4px 10px; font-size:11px; font-weight:bold;"
+                "}");
+        } else {
+            m_syncBtn->setText("未同步");
+            m_syncBtn->setStyleSheet(
+                "QPushButton{"
+                "  background:#333842; color:#94a3b8; border:1px solid #4a5160;"
+                "  border-radius:3px; padding:4px 10px; font-size:11px; font-weight:bold;"
+                "}");
+        }
+    }
+
+    if (m_connectBtn) {
+        // 不再显示“进入控制”，仅在设备连接成功后显示“断开连接”
+        if (m_isOnline) {
+            m_connectBtn->setVisible(true);
+            m_connectBtn->setText("断开连接");
             m_connectBtn->setStyleSheet(
                 "QPushButton{"
-                "  background:#1e6fd4; color:#fff; border:none;"
-                "  border-radius:4px; padding:6px 14px;"
-                "  font-size:12px; font-weight:700;"
+                "  background:#333842; color:#f87171; border:1px solid #7f1d1d;"
+                "  border-radius:3px; padding:4px 12px; font-size:11px; font-weight:bold;"
                 "}"
-                "QPushButton:hover{background:#2980e8;}"
-                "QPushButton:disabled{background:#2d3340; color:#556677;}");
+                "QPushButton:hover{background:#450a0a; color:#fca5a5;}");
+        } else {
+            m_connectBtn->setVisible(false);
         }
     }
 }
 
 void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
 {
-    if (ip.isEmpty() || carId.isEmpty()) {
+    QString effectiveCarId = carId.trimmed().isEmpty() ? "1" : carId.trimmed();
+    if (ip.isEmpty()) {
         setOnlineUI(false);
         return;
     }
 
-    if (!m_heartbeatTimer) {
-        m_heartbeatTimer = new QTimer(this);
-        m_heartbeatTimer->setSingleShot(true);
-        connect(m_heartbeatTimer, &QTimer::timeout, this, [this]() {
-            setOnlineUI(false);
-        });
-    }
-
     m_onlineLabel->setText("连接中...");
-    m_onlineLabel->setStyleSheet("color:#ecc94b; font-size:11px; background:transparent;");
+    m_onlineLabel->setStyleSheet("color:#ecc94b; font-size:11px; font-weight:600; background:transparent;");
 
     m_mqttClient = new QMqttClient(this);
     m_mqttClient->setHostname(ip);
-    m_mqttClient->setPort(AppConfig::mapPort(1883));
+    m_mqttClient->setPort(1883);
     m_mqttClient->setUsername("admin");
     m_mqttClient->setPassword("vsislab");
-    m_mqttClient->setClientId(QString("qt-agv-card-%1-%2").arg(carId).arg(QDateTime::currentMSecsSinceEpoch()));
+    m_mqttClient->setClientId(QString("qt-agv-card-%1-%2").arg(effectiveCarId).arg(QDateTime::currentMSecsSinceEpoch()));
     m_mqttClient->setKeepAlive(60);
 
-    connect(m_mqttClient, &QMqttClient::connected, this, [this, carId]() {
+    connect(m_mqttClient, &QMqttClient::stateChanged, this, [this](QMqttClient::ClientState state) {
+        if (state == QMqttClient::Connected) {
+            setOnlineUI(true);
+        } else if (state == QMqttClient::Connecting) {
+            m_onlineLabel->setText("连接中...");
+            m_onlineLabel->setStyleSheet("color:#ecc94b; font-size:11px; font-weight:600; background:transparent;");
+        } else if (state == QMqttClient::Disconnected) {
+            setOnlineUI(false);
+        }
+    });
+
+    connect(m_mqttClient, &QMqttClient::connected, this, [this, effectiveCarId]() {
         if (!m_mqttClient) return;
-        m_mqttClient->subscribe(QString("/rob/%1/info").arg(carId), 0);
+        m_mqttClient->subscribe(QMqttTopicFilter("/info"), 0);
+        m_mqttClient->subscribe(QMqttTopicFilter("info"), 0);
+        m_mqttClient->subscribe(QMqttTopicFilter(QString("/rob/%1/info").arg(effectiveCarId)), 0);
         setOnlineUI(true);
-        if (m_heartbeatTimer) m_heartbeatTimer->start(12000);
+
+        // 建立周期性延迟检测，确保通讯延迟实时准确更新
+        if (!m_latencyTimer) {
+            m_latencyTimer = new QTimer(this);
+            connect(m_latencyTimer, &QTimer::timeout, this, [this]() {
+                if (!m_mqttClient || m_mqttClient->state() != QMqttClient::Connected) return;
+                auto *socket = new QTcpSocket(this);
+                auto *timer = new QElapsedTimer;
+                timer->start();
+                connect(socket, &QTcpSocket::connected, this, [this, socket, timer]() {
+                    int elapsed = static_cast<int>(timer->elapsed());
+                    m_latency = qMax(1, elapsed);
+                    updateCardDisplay();
+                    socket->disconnectFromHost();
+                    socket->deleteLater();
+                    delete timer;
+                });
+                connect(socket, &QTcpSocket::errorOccurred, this, [socket, timer](QAbstractSocket::SocketError) {
+                    socket->deleteLater();
+                    delete timer;
+                });
+                socket->connectToHost(m_profile.ip, m_mqttClient->port());
+            });
+            m_latencyTimer->start(3000);
+        }
     });
 
     connect(m_mqttClient, &QMqttClient::messageReceived, this,
         [this](const QByteArray &payload, const QMqttTopicName &) {
             setOnlineUI(true);
-            if (m_heartbeatTimer) m_heartbeatTimer->start(12000);
 
             QJsonParseError err;
             QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
             if (!doc.isObject()) return;
             QJsonObject d = doc.object();
 
-            // 提取设备名称
+            // 1. 提取设备名称
             QString devName;
             for (const char *k : {"carName", "car_name", "deviceName", "device_name", "name"}) {
                 if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
@@ -438,7 +738,7 @@ void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
                 }
             }
 
-            // 提取绑定的地图名称
+            // 2. 提取绑定的地图名称
             QString mapName;
             for (const char *k : {"mapName", "map_name", "currentMap", "current_map", "map_filename", "map"}) {
                 if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
@@ -456,13 +756,95 @@ void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
                 }
             }
 
-            // 提取版本号
+            // 3. 提取版本号与固件版本
             QString version;
-            for (const char *k : {"version", "soft_version", "software_version", "softVersion", "softwareVersion", "app_version", "appVersion", "system_version", "dsp_version"}) {
+            for (const char *k : {"version", "soft_version", "software_version", "softVersion", "softwareVersion", "app_version", "appVersion", "system_version"}) {
                 if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
                     version = d.value(k).toString().trimmed();
                     break;
                 }
+            }
+            for (const char *k : {"firmware_version", "firmwareVersion", "hw_version", "mcu_version", "dsp_version"}) {
+                if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
+                    m_fwVersion = d.value(k).toString().trimmed();
+                    break;
+                }
+            }
+
+            // 提取备注 (Remark)
+            for (const char *k : {"remark", "note", "desc", "description", "memo"}) {
+                if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
+                    m_remark = d.value(k).toString().trimmed();
+                    break;
+                }
+            }
+
+            // 4. 提取位置置信度 (Position Confidence)
+            // 用户明确指定字段: "covariance_score"
+            double conf = -1.0;
+            if (d.contains("covariance_score") && !d.value("covariance_score").isNull()) {
+                conf = d.value("covariance_score").toDouble(-1.0);
+            } else {
+                for (const char *k : {"covarianceScore", "confidence", "confidence_score", "cov_score", "covScore", "covariance"}) {
+                    if (d.contains(k) && !d.value(k).isNull()) {
+                        conf = d.value(k).toDouble(-1.0);
+                        if (conf >= 0) break;
+                    }
+                }
+            }
+            if (conf >= 0) {
+                if (conf > 1.0) conf = conf / 100.0;
+                m_confidence = conf;
+            }
+
+            // 5. 提取电量 (Battery)
+            // 用户明确指定字段: "battery", 用 0-1 之间的值表示 (例如 0.47 表示 47%)
+            int bat = -1;
+            if (d.contains("battery") && !d.value("battery").isNull()) {
+                double b = d.value("battery").toDouble(-1.0);
+                if (b >= 0.0 && b <= 1.0) {
+                    bat = qRound(b * 100.0);
+                } else if (b > 1.0) {
+                    bat = qRound(b);
+                }
+            } else {
+                for (const char *k : {"power", "bat", "battery_level", "soc"}) {
+                    if (d.contains(k) && !d.value(k).isNull()) {
+                        double b = d.value(k).toDouble(-1.0);
+                        if (b >= 0.0 && b <= 1.0) bat = qRound(b * 100.0);
+                        else if (b > 1.0) bat = qRound(b);
+                        if (bat >= 0) break;
+                    }
+                }
+            }
+            if (bat >= 0) {
+                m_battery = qBound(0, bat, 100);
+            }
+
+            // 6. 提取通讯延迟 (Communication Latency)
+            int lat = -1;
+            for (const char *k : {"latency", "delay", "rtt", "ping", "comm_delay", "network_delay"}) {
+                if (d.contains(k) && !d.value(k).isNull()) {
+                    lat = d.value(k).toInt(-1);
+                    if (lat >= 0) break;
+                }
+            }
+            if (lat < 0) {
+                for (const char *k : {"timestamp", "time", "ts", "msg_time", "header_time"}) {
+                    if (d.contains(k) && !d.value(k).isNull()) {
+                        qint64 ts = d.value(k).toVariant().toLongLong();
+                        if (ts > 100000000000LL) {
+                            qint64 diff = qAbs(QDateTime::currentMSecsSinceEpoch() - ts);
+                            if (diff >= 0 && diff < 10000) { lat = static_cast<int>(diff); break; }
+                        } else if (ts > 100000000LL) {
+                            qint64 diff = qAbs(QDateTime::currentMSecsSinceEpoch() - ts * 1000);
+                            if (diff >= 0 && diff < 10000) { lat = static_cast<int>(diff); break; }
+                        }
+                    }
+                }
+            }
+            if (lat >= 0) {
+                m_latency = lat;
             }
 
             // 更新并持久化缓存
@@ -480,21 +862,36 @@ void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
                 changed = true;
             }
 
+            updateCardDisplay();
             if (changed) {
-                updateCardDisplay();
                 AppConfig::instance().saveDevice(m_profile);
             }
         });
 
     connect(m_mqttClient, &QMqttClient::disconnected, this, [this]() {
         setOnlineUI(false);
-        if (m_heartbeatTimer) m_heartbeatTimer->stop();
+        if (m_latencyTimer) {
+            m_latencyTimer->stop();
+        }
+        // 断开后隔5秒自动尝试重连，保持在线状态检测
+        QTimer::singleShot(5000, this, [this]() {
+            if (m_mqttClient && m_mqttClient->state() == QMqttClient::Disconnected) {
+                m_mqttClient->connectToHost();
+            }
+        });
     });
 
     connect(m_mqttClient, &QMqttClient::errorChanged, this, [this](QMqttClient::ClientError error) {
         if (error != QMqttClient::NoError) {
             setOnlineUI(false);
-            if (m_heartbeatTimer) m_heartbeatTimer->stop();
+            if (m_latencyTimer) {
+                m_latencyTimer->stop();
+            }
+            QTimer::singleShot(5000, this, [this]() {
+                if (m_mqttClient && m_mqttClient->state() == QMqttClient::Disconnected) {
+                    m_mqttClient->connectToHost();
+                }
+            });
         }
     });
 
@@ -624,67 +1021,6 @@ void DeviceManagerDialog::setupTopBar(QWidget *topBar)
     auto *refreshAllBtn = mkToolBtn("⟳  刷新全部");
     auto *addDevBtn     = mkToolBtn("＋  添加设备", true);
 
-    // 端口映射开关按钮
-    auto *portMapBtn = mkToolBtn("🌐  端口映射");
-    portMapBtn->setCheckable(true);
-    portMapBtn->setChecked(TestPortMapping::instance().isEnabled());
-    auto updatePortMapStyle = [portMapBtn](bool enabled) {
-        if (enabled) {
-            portMapBtn->setStyleSheet(
-                "QPushButton{background:#9c27b0;color:#fff;border:none;"
-                "border-radius:4px;padding:0 12px;font-size:12px;}"
-                "QPushButton:hover{background:#7b1fa2;}");
-            portMapBtn->setToolTip("测试环境外网端口映射: 已开启\n1883->6020, 8061->6017, 8062->6018, 8048->6015, 8001->6019");
-        } else {
-            portMapBtn->setStyleSheet(
-                "QPushButton{background:transparent;color:#9c27b0;"
-                "border:1px solid #9c27b0;border-radius:4px;"
-                "padding:0 12px;font-size:12px;}"
-                "QPushButton:hover{background:rgba(156,39,176,0.1);}");
-            portMapBtn->setToolTip("测试环境外网端口映射: 已关闭 (直接使用服务原始内网端口)");
-        }
-    };
-    updatePortMapStyle(TestPortMapping::instance().isEnabled());
-
-    connect(portMapBtn, &QPushButton::toggled, this, [this, updatePortMapStyle](bool checked) {
-        TestPortMapping::instance().setEnabled(checked);
-        updatePortMapStyle(checked);
-        if (checked) {
-            setStatus("外网端口映射已开启 (1883->6020, 8061->6017, 8062->6018, 8048->6015, 8001->6019)");
-        } else {
-            setStatus("外网端口映射已关闭 (使用内网原始端口)");
-        }
-    });
-
-    // 测试模式按钮
-    auto *testBtn = mkToolBtn("🔧  测试模式");
-    testBtn->setCheckable(true);
-    testBtn->setChecked(AppConfig::instance().testMode());
-    if (AppConfig::instance().testMode())
-        testBtn->setStyleSheet(
-            "QPushButton{background:#f0a060;color:#fff;border:none;"
-            "border-radius:4px;padding:0 12px;font-size:12px;}"
-            "QPushButton:hover{background:#e09050;}");
-    connect(testBtn, &QPushButton::toggled, this, [this, testBtn](bool checked) {
-        AppConfig::instance().setTestMode(checked);
-        if (checked) {
-            AppConfig::instance().ensureTestDevice();
-            testBtn->setStyleSheet(
-                "QPushButton{background:#f0a060;color:#fff;border:none;"
-                "border-radius:4px;padding:0 12px;font-size:12px;}"
-                "QPushButton:hover{background:#e09050;}");
-            setStatus("测试模式已开启 — 模拟设备已添加");
-        } else {
-            testBtn->setStyleSheet(
-                "QPushButton{background:transparent;color:#00bcd4;"
-                "border:1px solid #00bcd4;border-radius:4px;"
-                "padding:0 12px;font-size:12px;}"
-                "QPushButton:hover{background:rgba(0,188,212,0.1);}");
-            setStatus("测试模式已关闭");
-        }
-        refreshCards();
-    });
-
     connect(refreshAllBtn, &QPushButton::clicked, this, &DeviceManagerDialog::onRefreshAll);
     connect(addDevBtn,     &QPushButton::clicked, this, &DeviceManagerDialog::onAddDevice);
 }
@@ -700,13 +1036,13 @@ void DeviceManagerDialog::setupCardArea(QWidget *area)
     m_scrollArea->setWidgetResizable(true);
     m_scrollArea->setFrameShape(QFrame::NoFrame);
     m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_scrollArea->setStyleSheet("QScrollArea{background:#1a1d23;}");
+    m_scrollArea->setStyleSheet("QScrollArea{background:#13161c; border:none;}");
 
     m_cardsContainer = new QWidget;
-    m_cardsContainer->setStyleSheet("background:#1a1d23;");
+    m_cardsContainer->setStyleSheet("background:#13161c;");
     m_cardsGrid = new QGridLayout(m_cardsContainer);
     m_cardsGrid->setContentsMargins(20, 20, 20, 20);
-    m_cardsGrid->setSpacing(16);
+    m_cardsGrid->setSpacing(20);
     m_cardsGrid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
 
     m_scrollArea->setWidget(m_cardsContainer);
@@ -772,7 +1108,7 @@ void DeviceManagerDialog::setupAddPanel()
     m_ipEdit->setFixedHeight(42);
     fbl->addWidget(m_ipEdit);
 
-    // ── 设备名称行（无 carId 时才显示） ──────────────────────────────────────
+    // ── 设备名称行 ──────────────────────────────────────────────────────────
     m_nameRow = new QWidget;
     auto *nrl = new QVBoxLayout(m_nameRow);
     nrl->setContentsMargins(0, 0, 0, 0);
@@ -783,11 +1119,10 @@ void DeviceManagerDialog::setupAddPanel()
     nrl->addWidget(nameLbl);
 
     m_nameEdit = new QLineEdit;
-    m_nameEdit->setPlaceholderText("\u8bf7\u8f93\u5165\u8bbe\u5907\u540d\u79f0");
+    m_nameEdit->setPlaceholderText("例如: AGV-01 (选填，默认 AGV @ IP)");
     m_nameEdit->setFixedHeight(42);
     nrl->addWidget(m_nameEdit);
 
-    m_nameRow->hide(); // 默认隐藏，无 carId 时才展开
     fbl->addWidget(m_nameRow);
     // ────────────────────────────────────────────────────────────────────────
 
@@ -797,7 +1132,7 @@ void DeviceManagerDialog::setupAddPanel()
     m_addStatus->setMinimumHeight(18);
     fbl->addWidget(m_addStatus);
 
-    m_confirmBtn = new QPushButton("\u8fde\u63a5\u5e76\u6dfb\u52a0");
+    m_confirmBtn = new QPushButton("添加设备");
     m_confirmBtn->setFixedHeight(42);
     m_confirmBtn->setStyleSheet(
         "QPushButton{background:#00bcd4;color:#fff;border:none;"
@@ -844,37 +1179,12 @@ void DeviceManagerDialog::refreshCards()
     const int cols = 3;
     for (int i = 0; i < list.size(); ++i) {
         auto *card = new DeviceCard(list[i], i, m_cardsContainer);
-        connect(card, &DeviceCard::connectClicked,       this, &DeviceManagerDialog::onConnectCard);
+        connect(card, &DeviceCard::doubleClicked,        this, &DeviceManagerDialog::onCardDoubleClicked);
+        connect(card, &DeviceCard::disconnectClicked,    this, &DeviceManagerDialog::onDisconnectCard);
         connect(card, &DeviceCard::removeClicked,        this, &DeviceManagerDialog::onRemoveCard);
-        connect(card, &DeviceCard::linkClicked,          this, &DeviceManagerDialog::onLinkCard);
         connect(card, &DeviceCard::networkConfigClicked, this, &DeviceManagerDialog::onNetworkConfig);
         m_cardsGrid->addWidget(card, i / cols, i % cols);
         m_cards.append(card);
-
-        // 异步从服务器同步最新 linkStatus，防止本地缓存值陈旧导致状态显示错误
-        // 测试模式跳过服务器查询
-        if (!list[i].carId.isEmpty() && !AppConfig::instance().testMode()) {
-            const QString carId = list[i].carId;
-            const QString ip    = list[i].ip;
-            QPointer<DeviceCard> cardPtr(card);
-            ApiService::instance().getCar(carId,
-                [this, cardPtr, carId, ip, i](int code, const QJsonObject &res) {
-                    if (!cardPtr) return;
-                    if (code != 200) return;
-                    QJsonObject data = res.value("data").toObject();
-                    QString serverStatus = extractLinkStatus(data);
-                    if (serverStatus.isEmpty()) return;
-                    bool linked = (serverStatus == "0");  // Vue: '0'=已链接
-                    QList<DeviceProfile> devList = AppConfig::instance().deviceList();
-                    if (i < devList.size() && devList[i].ip == ip) {
-                        if (devList[i].linkStatus != serverStatus) {
-                            devList[i].linkStatus = serverStatus;
-                            AppConfig::instance().saveDevice(devList[i]);
-                        }
-                    }
-                    cardPtr->setLinkStatus(linked);
-                });
-        }
     }
 }
 
@@ -887,9 +1197,10 @@ void DeviceManagerDialog::onRefreshAll()
 void DeviceManagerDialog::onAddDevice()
 {
     m_ipEdit->clear();
+    if (m_nameEdit) m_nameEdit->clear();
     m_addStatus->clear();
     m_confirmBtn->setEnabled(true);
-    m_confirmBtn->setText("连接并添加");
+    m_confirmBtn->setText("添加设备");
     m_stack->setCurrentWidget(m_addPanel);
     m_ipEdit->setFocus();
 }
@@ -898,7 +1209,6 @@ void DeviceManagerDialog::onCancelAdd()
 {
     m_stack->setCurrentWidget(m_mainPanel);
 }
-
 
 void DeviceManagerDialog::onConfirmAdd()
 {
@@ -913,317 +1223,60 @@ void DeviceManagerDialog::onConfirmAdd()
         return;
     }
 
-    m_confirmBtn->setEnabled(false);
-    m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
-    m_addStatus->setText("正在连接服务器...");
+    QString name = m_nameEdit ? m_nameEdit->text().trimmed() : "";
+    if (name.isEmpty()) {
+        name = QString("AGV @ %1").arg(ip);
+    }
 
+    DeviceProfile dev;
+    dev.ip            = ip;
+    dev.carId         = "1";
+    dev.name          = name;
+    dev.lastConnected = QDateTime::currentDateTime();
+    dev.linkStatus    = "0";
+    AppConfig::instance().saveDevice(dev);
     AppConfig::instance().setServerIp(ip);
+    AppConfig::instance().setAgvId(dev.carId);
 
-    // ── 第一步: 登录 ─────────────────────────────────────────────────────────
-    ApiService::instance().login("admin", "admin123",
-        [this, ip](int code, const QJsonObject &data) {
-            if (code != 200 || data.value("token").toString().isEmpty()) {
-                m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
-                m_addStatus->setText("连接失败: " +
-                    data.value("msg").toString("服务器无响应，请检查 IP 地址"));
-                m_confirmBtn->setEnabled(true);
-                return;
-            }
-            AppConfig::instance().setToken(data.value("token").toString());
-            m_addStatus->setText("登录成功，正在获取设备信息...");
-
-            // ── 第二步: 查询车辆列表 ─────────────────────────────────────────
-            ApiService::instance().listCarAllNoLogin(
-                [this, ip](int code2, const QJsonObject &carData) {
-                    QString carId, carName;
-                    if (code2 == 200) {
-                        QJsonArray rows = carData.value("rows").toArray();
-                        if (!rows.isEmpty()) {
-                            QJsonObject car = rows.last().toObject();
-                            QJsonValue v = car.value("carId");
-                            carId   = v.isString() ? v.toString() : QString::number(v.toInt());
-                            carName = car.value("carName").toString();
-                            if (carName.isEmpty()) carName = QString("AGV @ %1").arg(ip);
-                        }
-                    }
-
-                    if (!carId.isEmpty()) {
-                        // ── 场景(1): 列表不为空且 carId 不为空 ──────────────
-                        // 检查当前链接状态 (getCar 获取实时 linkStatus)
-                        m_addStatus->setText("正在获取设备链接状态...");
-                        ApiService::instance().getCar(carId,
-                            [this, ip, carId, carName](int code3, const QJsonObject &carRes) {
-                                QString linkStatus;
-                                if (code3 == 200) {
-                                    QJsonObject d = carRes.value("data").toObject();
-                                    linkStatus = extractLinkStatus(d);
-                                }
-
-                                if (linkStatus == "0") {
-                                    // 已链接 (Vue: linkStatus==='0') → 保存已链接状态，完成
-                                    DeviceProfile dev;
-                                    dev.ip            = ip;
-                                    dev.carId         = carId;
-                                    dev.token         = AppConfig::instance().token();
-                                    dev.name          = carName;
-                                    dev.lastConnected = QDateTime::currentDateTime();
-                                    dev.linkStatus    = "0";  // 已链接
-                                    AppConfig::instance().saveDevice(dev);
-                                    AppConfig::instance().setAgvId(carId);
-
-                                    m_stack->setCurrentWidget(m_mainPanel);
-                                    refreshCards();
-                                    setStatus(QString("设备 [%1] 已添加 (已链接)").arg(dev.name), "#5cb85c");
-                                    Toast::success(this, QString("设备 [%1] 已添加").arg(dev.name));
-                                } else {
-                                    // 未链接 → 发起链接请求，无论成功与否均以未链接状态保存
-                                    m_addStatus->setText(QString("设备 [%1] 未链接，正在申请链接...").arg(carName));
-
-                                    QJsonObject linkForm;
-                                    linkForm["carId"]  = carId;
-                                    linkForm["carName"] = carName;
-                                    linkForm["mapId"]   = QJsonValue();
-                                    linkForm["deptId"]  = 100;
-                                    linkForm["ipPort"]  = ip + ":8061";
-
-                                    // 无论链接请求是否成功，都保存设备（未链接状态）
-                                    auto saveAsUnlinked = [this, ip, carId, carName]() {
-                                        DeviceProfile dev;
-                                        dev.ip            = ip;
-                                        dev.carId         = carId;
-                                        dev.token         = AppConfig::instance().token();
-                                        dev.name          = carName;
-                                        dev.lastConnected = QDateTime::currentDateTime();
-                                        dev.linkStatus    = "1";  // 未链接
-                                        AppConfig::instance().saveDevice(dev);
-                                        AppConfig::instance().setAgvId(carId);
-
-                                        m_stack->setCurrentWidget(m_mainPanel);
-                                        refreshCards();
-                                        setStatus(QString("设备 [%1] 已添加 (未链接，请点击\"链接设备\")").arg(dev.name), "#f0a060");
-                                        Toast::info(this, QString("设备 [%1] 已添加，链接申请已发送").arg(dev.name));
-                                    };
-
-                                    ApiService::instance().linkCarWithoutKey(linkForm,
-                                        [saveAsUnlinked](int /*code4*/, const QJsonObject &) {
-                                            // 无论返回什么都保存设备，linkStatus 后续由 refreshCards 同步
-                                            saveAsUnlinked();
-                                        });
-                                }
-                            });
-                    } else {
-                        // ── 场景(2): 列表为空，弹窗让用户输入设备名称后再创建 ──
-                        m_confirmBtn->setEnabled(true);  // 暂时恢复按钮，等待用户操作
-
-                        bool ok = false;
-                        QString newCarName = QInputDialog::getText(
-                            this,
-                            "创建新设备",
-                            QString("服务器 [%1] 未注册任何设备，请输入设备名称：").arg(ip),
-                            QLineEdit::Normal,
-                            QString("AGV @ %1").arg(ip),
-                            &ok);
-                        newCarName = newCarName.trimmed();
-
-                        if (!ok || newCarName.isEmpty()) {
-                            // 用户取消或未填写，中止流程
-                            m_addStatus->setStyleSheet("color:#8898a8; font-size:12px;");
-                            m_addStatus->setText("已取消，请重新输入 IP 或填写设备名称。");
-                            return;
-                        }
-
-                        // 用户确认后，锁定按钮并开始创建
-                        m_confirmBtn->setEnabled(false);
-                        m_addStatus->setStyleSheet("color:#f0a060; font-size:12px;");
-                        m_addStatus->setText(QString("正在创建设备 [%1]...").arg(newCarName));
-
-                        QJsonObject carForm;
-                        carForm["deptId"]    = 100;
-                        carForm["mapId"]     = QJsonValue();
-                        carForm["carName"]   = newCarName;
-                        carForm["ipPort"]    = ip + ":8061";
-                        carForm["robotType"] = "1";
-                        carForm["machinery"] = "0";
-
-                        ApiService::instance().addCarWithoutKey(carForm,
-                            [this, ip, newCarName](int code2, const QJsonObject &res) {
-                                if (code2 != 200) {
-                                    m_addStatus->setStyleSheet("color:#e05555; font-size:12px;");
-                                    m_addStatus->setText("创建设备失败: " +
-                                        res.value("msg").toString("请检查服务器连接"));
-                                    m_confirmBtn->setEnabled(true);
-                                    return;
-                                }
-
-                                // 获取服务器返回的 carId
-                                QJsonValue v = res.value("data").toObject().value("carId");
-                                QString newCarId = v.isString() ? v.toString()
-                                                                : QString::number(v.toInt());
-                                m_addStatus->setText("设备已创建，正在申请链接...");
-
-                                QJsonObject linkForm;
-                                linkForm["carId"]   = newCarId;
-                                linkForm["carName"]  = newCarName;
-                                linkForm["mapId"]    = QJsonValue();
-                                linkForm["deptId"]   = 100;
-                                linkForm["ipPort"]   = ip + ":8061";
-
-                                // 无论链接请求是否成功，都保存设备（未链接状态）
-                                auto saveAsUnlinked = [this, ip, newCarId, newCarName]() {
-                                    DeviceProfile dev;
-                                    dev.ip            = ip;
-                                    dev.carId         = newCarId;
-                                    dev.token         = AppConfig::instance().token();
-                                    dev.name          = newCarName;
-                                    dev.lastConnected = QDateTime::currentDateTime();
-                                    dev.linkStatus    = "1";  // 未链接
-                                    AppConfig::instance().saveDevice(dev);
-                                    AppConfig::instance().setAgvId(newCarId);
-
-                                    m_stack->setCurrentWidget(m_mainPanel);
-                                    refreshCards();
-                                    setStatus(QString("设备 [%1] 已创建 (未链接，请点击\"链接设备\")").arg(dev.name), "#f0a060");
-                                    Toast::info(this, QString("设备 [%1] 已创建，链接申请已发送").arg(dev.name));
-                                };
-
-                                ApiService::instance().linkCarWithoutKey(linkForm,
-                                    [saveAsUnlinked](int /*code3*/, const QJsonObject &) {
-                                        saveAsUnlinked();
-                                    });
-                            });
-                    }
-                });
-        });
-}
-// 轮询 getCar 检查 linkStatus: '0'=已链接, '1'=未链接
-// 参考 Vue index.vue: linkStatus==='0' 表示已链接 (链接按钮禁用)
-// linkCarWithoutKey 返回 200 仅表示请求已受理, 设备实际链接需要时间, 故轮询校验
-// 轮询期间显示阻塞式进度弹窗, 用户可取消
-void DeviceManagerDialog::checkLinkStatus(const QString &carId, const QString &ip,
-                                           const QString &carName, int attempt)
-{
-    // 最多尝试 10 次, 间隔 2 秒, 总计约 20 秒
-    static const int kMaxAttempts = 10;
-    static const int kIntervalMs = 2000;
-
-    // 第一次调用时创建进度弹窗
-    if (attempt == 0) {
-        m_linkCancelled = false;
-        if (m_linkProgress) {
-            m_linkProgress->cancel();
-            delete m_linkProgress;
-        }
-        m_linkProgress = new QProgressDialog(
-            QString("正在校验设备 [%1] 的链接状态...\n剩余约 %2 秒").arg(carName).arg(kMaxAttempts * kIntervalMs / 1000),
-            "取消", 0, kMaxAttempts, this);
-        m_linkProgress->setWindowTitle("链接中");
-        m_linkProgress->setWindowModality(Qt::WindowModal);
-        m_linkProgress->setMinimumDuration(0);
-        m_linkProgress->setValue(0);
-        m_linkProgress->setCancelButton(nullptr);  // 用 canceled 信号控制, 不自动关闭
-        // 点击右上角 X 或 ESC 取消
-        connect(m_linkProgress, &QProgressDialog::canceled, this, [this]() {
-            m_linkCancelled = true;
-            if (m_linkProgress) {
-                m_linkProgress->hide();
-                m_linkProgress->deleteLater();
-                m_linkProgress = nullptr;
-            }
-            // 标记为未链接并保存, 允许用户稍后重试
-            // (carId/ip/carName 通过最后调用方捕获, 这里只设标志)
-        });
-    }
-
-    // 用户已取消 → 保存为未链接状态, 结束轮询
-    if (m_linkCancelled) {
-        DeviceProfile dev;
-        dev.ip            = ip;
-        dev.carId         = carId;
-        dev.token         = AppConfig::instance().token();
-        dev.name          = carName;
-        dev.lastConnected = QDateTime::currentDateTime();
-        dev.linkStatus    = "1";  // '1'=未链接 (参考 Vue: linkStatus==='0'才是已链接)
-        AppConfig::instance().saveDevice(dev);
-
-        m_stack->setCurrentWidget(m_mainPanel);
-        refreshCards();
-        setStatus(QString("设备 [%1] 链接已取消").arg(carName), "#f0a060");
-        return;
-    }
-
-    // 超时 → 保存为未链接
-    if (attempt >= kMaxAttempts) {
-        if (m_linkProgress) {
-            m_linkProgress->hide();
-            m_linkProgress->deleteLater();
-            m_linkProgress = nullptr;
-        }
-        DeviceProfile dev;
-        dev.ip            = ip;
-        dev.carId         = carId;
-        dev.token         = AppConfig::instance().token();
-        dev.name          = carName;
-        dev.lastConnected = QDateTime::currentDateTime();
-        dev.linkStatus    = "1";  // '1'=未链接
-        AppConfig::instance().saveDevice(dev);
-
-        m_stack->setCurrentWidget(m_mainPanel);
-        refreshCards();
-        setStatus(QString("设备 [%1] 已保存，但未链接").arg(dev.name), "#f0a060");
-        Toast::error(this, QString("设备 [%1] 链接超时，请在列表中点击\"链接设备\"重试").arg(dev.name));
-        return;
-    }
-
-    // 更新进度弹窗
-    if (m_linkProgress) {
-        int remaining = kMaxAttempts - attempt;
-        m_linkProgress->setLabelText(
-            QString("正在校验设备 [%1] 的链接状态...\n剩余约 %2 秒").arg(carName).arg(remaining * kIntervalMs / 1000));
-        m_linkProgress->setValue(attempt);
-    }
-
-    ApiService::instance().getCar(carId,
-        [this, carId, ip, carName, attempt](int code, const QJsonObject &res) {
-            if (m_linkCancelled) return;  // 用户已取消, 不再处理
-
-            if (code == 200) {
-                QJsonObject data = res.value("data").toObject();
-                QString linkStatus = extractLinkStatus(data);
-                if (linkStatus == "0") {
-                    // 链接成功 (参考 Vue: linkStatus==='0' 表示已链接) → 关闭弹窗, 保存设备
-                    if (m_linkProgress) {
-                        m_linkProgress->hide();
-                        m_linkProgress->deleteLater();
-                        m_linkProgress = nullptr;
-                    }
-                    DeviceProfile dev;
-                    dev.ip            = ip;
-                    dev.carId         = carId;
-                    dev.token         = AppConfig::instance().token();
-                    dev.name          = carName;
-                    dev.lastConnected = QDateTime::currentDateTime();
-                    dev.linkStatus    = "0";  // '0'=已链接
-                    AppConfig::instance().saveDevice(dev);
-                    AppConfig::instance().setAgvId(carId);
-
-                    m_stack->setCurrentWidget(m_mainPanel);
-                    refreshCards();
-                    setStatus(QString("设备 [%1] 已创建并链接").arg(dev.name), "#5cb85c");
-                    Toast::success(this, QString("设备 [%1] 已创建并链接").arg(dev.name));
-                    return;
-                }
-            }
-            // 未链接或请求失败, 间隔后重试
-            QTimer::singleShot(kIntervalMs, this,
-                [this, carId, ip, carName, attempt]() {
-                    checkLinkStatus(carId, ip, carName, attempt + 1);
-                });
-        });
+    m_stack->setCurrentWidget(m_mainPanel);
+    refreshCards();
+    setStatus(QString("设备 [%1] 已添加").arg(dev.name), "#5cb85c");
+    Toast::success(this, QString("设备 [%1] 已添加").arg(dev.name));
 }
 
-void DeviceManagerDialog::onConnectCard(int index)
+void DeviceManagerDialog::onCardDoubleClicked(int index)
 {
     connectDevice(index);
+}
+
+void DeviceManagerDialog::onDisconnectCard(int index)
+{
+    const QList<DeviceProfile> list = AppConfig::instance().deviceList();
+    if (index < 0 || index >= list.size()) return;
+
+    QString devName = list[index].name.isEmpty() ? list[index].ip : list[index].name;
+
+    // 1. 断开该卡片的 MQTT 监视和状态，隐藏断开连接按钮
+    if (index < m_cards.size() && m_cards[index]) {
+        m_cards[index]->disconnectDevice();
+    }
+
+    // 2. 如果该设备是当前全局连接的设备，断开全局连接服务并重置当前设备索引
+    if (AppConfig::instance().currentDeviceIndex() == index) {
+        MqttService::instance().disconnectFromHost();
+        WebSocketService::instance().disconnect();
+        AppConfig::instance().setCurrentDeviceIndex(-1);
+    }
+
+    // 3. 更新设备 linkStatus 状态并保存
+    QList<DeviceProfile> curList = AppConfig::instance().deviceList();
+    if (index < curList.size()) {
+        curList[index].linkStatus = "0";
+        AppConfig::instance().updateDevice(index, curList[index]);
+    }
+
+    setStatus(QString("设备 [%1] 已断开连接").arg(devName), "#e05555");
+    Toast::info(this, QString("设备 [%1] 已断开连接").arg(devName));
 }
 
 void DeviceManagerDialog::onRemoveCard(int index)
@@ -1234,48 +1287,6 @@ void DeviceManagerDialog::onRemoveCard(int index)
     Toast::success(this, "设备已移除");
 }
 
-// 重新链接未链接的设备: 只执行 linkCarWithoutKey (已有 carId, 不再执行 addCarWithoutKey)
-void DeviceManagerDialog::onLinkCard(int index)
-{
-    const QList<DeviceProfile> list = AppConfig::instance().deviceList();
-    if (index < 0 || index >= list.size()) return;
-
-    const DeviceProfile &dev = list[index];
-    if (dev.carId.isEmpty()) return;
-
-    // 标记卡片为忙碌状态
-    if (index < m_cards.size())
-        m_cards[index]->setBusy(true);
-
-    setStatus(QString("正在链接设备 [%1] ...").arg(dev.name));
-
-    QJsonObject linkForm;
-    linkForm["carId"]   = dev.carId;
-    linkForm["carName"]  = dev.name;
-    linkForm["mapId"]    = QJsonValue();
-    linkForm["deptId"]   = 100;
-    linkForm["ipPort"]   = dev.ip + ":8061";  // 参考 Vue details.vue handleLink
-
-    // 登录获取最新 token
-    ApiService::instance().login("admin", "admin123",
-        [this, dev, linkForm](int code, const QJsonObject &data) {
-            if (code == 200 && !data.value("token").toString().isEmpty()) {
-                AppConfig::instance().setToken(data.value("token").toString());
-            }
-            ApiService::instance().linkCarWithoutKey(linkForm,
-                [this, dev](int code3, const QJsonObject &linkRes) {
-                    if (code3 != 200) {
-                        setStatus(QString("链接设备 [%1] 失败: %2").arg(dev.name,
-                            linkRes.value("msg").toString("服务器无响应")), "#e05555");
-                        // 刷新卡片以恢复按钮状态
-                        refreshCards();
-                        return;
-                    }
-                    setStatus(QString("已申请链接 [%1]，等待设备响应...").arg(dev.name));
-                    checkLinkStatus(dev.carId, dev.ip, dev.name, 0);
-                });
-        });
-}
 
 void DeviceManagerDialog::connectDevice(int index)
 {
@@ -1287,45 +1298,15 @@ void DeviceManagerDialog::connectDevice(int index)
 
     AppConfig::instance().setCurrentDeviceIndex(index);
     AppConfig::instance().setServerIp(list[index].ip);
-    AppConfig::instance().setAgvId(list[index].carId);
+    QString effectiveCarId = list[index].carId.trimmed().isEmpty() ? "1" : list[index].carId.trimmed();
+    AppConfig::instance().setAgvId(effectiveCarId);
 
-    // 测试模式: 跳过登录直接进入主界面
-    if (AppConfig::instance().testMode()) {
-        AppConfig::instance().setToken("test-token");
-        QList<DeviceProfile> list2 = AppConfig::instance().deviceList();
-        if (index < list2.size()) {
-            list2[index].token         = "test-token";
-            list2[index].lastConnected = QDateTime::currentDateTime();
-            AppConfig::instance().saveDevice(list2[index]);
-        }
-        accept();
-        return;
+    QList<DeviceProfile> list2 = AppConfig::instance().deviceList();
+    if (index < list2.size()) {
+        list2[index].lastConnected = QDateTime::currentDateTime();
+        AppConfig::instance().saveDevice(list2[index]);
     }
-
-    setStatus(QString("正在连接 %1 ...").arg(list[index].ip));
-
-    // 使用 QPointer 保护异步回调，防止 dialog 在请求返回前被销毁
-    QPointer<DeviceManagerDialog> guard(this);
-    ApiService::instance().login("admin", "admin123",
-        [this, index, guard](int code, const QJsonObject &data) {
-            if (!guard) return;  // dialog 已销毁
-            if (code == 200 && !data.value("token").toString().isEmpty()) {
-                QString token = data.value("token").toString();
-                AppConfig::instance().setToken(token);
-
-                QList<DeviceProfile> list2 = AppConfig::instance().deviceList();
-                if (index < list2.size()) {
-                    list2[index].token         = token;
-                    list2[index].lastConnected = QDateTime::currentDateTime();
-                    AppConfig::instance().saveDevice(list2[index]);
-                }
-                accept();
-            } else {
-                if (index < m_cards.size())
-                    m_cards[index]->setBusy(false);
-                setStatus("连接失败，请检查网络或服务器地址", "#e05555");
-            }
-        });
+    accept();
 }
 
 void DeviceManagerDialog::onNetworkConfig(int index)
@@ -1334,16 +1315,41 @@ void DeviceManagerDialog::onNetworkConfig(int index)
     if (index < 0 || index >= list.size()) return;
     DeviceProfile profile = list[index];
 
-    NetworkConfigDialog dlg(profile.ip, profile.name.isEmpty() ? profile.carId : profile.name, this);
-    if (dlg.exec() == QDialog::Accepted && dlg.isIpChanged()) {
-        QString oldIp = profile.ip;
-        QString newIp = dlg.newIp().trimmed();
-        if (!newIp.isEmpty() && newIp != oldIp) {
-            profile.ip = newIp;
-            AppConfig::instance().updateDevice(index, profile);
-            setStatus(QString("已更新设备 [%1] 的 IP 地址为 %2").arg(profile.name.isEmpty() ? profile.carId : profile.name, newIp), "#4caf7a");
-            refreshCards();
+    NetworkConfigDialog dlg(profile.ip,
+                            profile.name.isEmpty() ? profile.carId : profile.name,
+                            profile.sshUser,
+                            profile.sshPwd,
+                            profile.sshPort,
+                            this);
+
+    // 当 SSH 连接读取成功或保存生效时，立即记住每辆车专属的登录名与密码
+    connect(&dlg, &NetworkConfigDialog::sshCredentialsUpdated, this, [index](const QString &user, const QString &pwd, int port) {
+        QList<DeviceProfile> curList = AppConfig::instance().deviceList();
+        if (index >= 0 && index < curList.size()) {
+            curList[index].sshUser = user;
+            curList[index].sshPwd  = pwd;
+            curList[index].sshPort = port;
+            AppConfig::instance().updateDevice(index, curList[index]);
         }
+    });
+
+    if (dlg.exec() == QDialog::Accepted) {
+        profile.sshUser = dlg.sshUser();
+        profile.sshPwd  = dlg.sshPwd();
+        profile.sshPort = dlg.sshPort();
+
+        if (dlg.isIpChanged()) {
+            QString oldIp = profile.ip;
+            QString newIp = dlg.newIp().trimmed();
+            if (!newIp.isEmpty() && newIp != oldIp) {
+                profile.ip = newIp;
+                AppConfig::instance().updateDevice(index, profile);
+                setStatus(QString("已更新设备 [%1] 的 IP 地址为 %2").arg(profile.name.isEmpty() ? profile.carId : profile.name, newIp), "#4caf7a");
+                refreshCards();
+                return;
+            }
+        }
+        AppConfig::instance().updateDevice(index, profile);
     }
 }
 

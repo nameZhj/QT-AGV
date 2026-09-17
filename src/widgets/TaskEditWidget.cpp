@@ -718,9 +718,7 @@ void TaskEditWidget::loadMapList()
             QJsonObject m = v.toObject();
             QString id   = jsonIdStr(m.value("mapId"));
             QString name = m.value("mapName").toString();
-            QJsonObject query;
-            query["mapId"] = id;
-            ApiService::instance().loadEditedMap(query, [this, id, name, remaining](int rc, const QJsonObject &rd) {
+            ApiService::instance().loadEditedMap([this, id, name, remaining](int rc, const QJsonObject &rd) {
                 (*remaining)--;
                 bool last = (*remaining == 0);
                 bool hasRoute = false;
@@ -976,9 +974,7 @@ void TaskEditWidget::loadMapData()
 
 void TaskEditWidget::loadRouteData()
 {
-    QJsonObject query;
-    query["mapId"] = m_mapId;
-    ApiService::instance().loadEditedMap(query, [this](int code, const QJsonObject &data) {
+    ApiService::instance().loadEditedMap([this](int code, const QJsonObject &data) {
         if (code != 200) return;
         m_points = QJsonArray();
         m_lines  = QJsonArray();

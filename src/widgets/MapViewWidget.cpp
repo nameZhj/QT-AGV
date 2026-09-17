@@ -3,23 +3,13 @@
 #include "core/ApiService.h"
 #include "core/MqttService.h"
 #include "core/LoadingDialog.h"
-
-static const QString kToolBtnStyle =
-    "QToolButton{background:#252a35;color:#c8d0d8;border:1px solid #3a3f4a;"
-    "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
-    "QToolButton:hover{background:#2d3340;border-color:#4a9eff;}"
-    "QToolButton:pressed{background:#1e4080;}";
-static const QString kToolBtnPrimary =
-    "QToolButton{background:#1e6fd4;color:#fff;border:none;"
-    "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
-    "QToolButton:hover{background:#2980e8;}"
-    "QToolButton:pressed{background:#155db8;}";
-static const QString kBtnPrimary = "background:#2980b9; color:white; border-radius:4px; padding:6px 12px;";
-
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
+#include "core/ZipUtil.h"
+#include <QDirIterator>
 #include "MapUploadDialog.h"
 #include "SmapUploadDialog.h"
+#include "RobotStatusDialog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -54,7 +44,23 @@ static const QString kBtnPrimary = "background:#2980b9; color:white; border-radi
 #include <QFrame>
 #include <QDateTime>
 #include <QToolButton>
+#include <QDir>
+#include <QFile>
+#include <QCoreApplication>
 #include <functional>
+
+
+static const QString kToolBtnStyle =
+    "QToolButton{background:#252a35;color:#c8d0d8;border:1px solid #3a3f4a;"
+    "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+    "QToolButton:hover{background:#2d3340;border-color:#4a9eff;}"
+    "QToolButton:pressed{background:#1e4080;}";
+static const QString kToolBtnPrimary =
+    "QToolButton{background:#1e6fd4;color:#fff;border:none;"
+    "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+    "QToolButton:hover{background:#2980e8;}"
+    "QToolButton:pressed{background:#155db8;}";
+static const QString kBtnPrimary = "background:#2980b9; color:white; border-radius:4px; padding:6px 12px;";
 
 // ── Toolbar icon helpers ─────────────────────────────────────────────────────
 namespace {
@@ -202,6 +208,32 @@ QPixmap drawMapToolIcon(const QString &name, const QColor &col, int sz = 20)
               << QPointF(sz*0.86, sz*0.46)
               << QPointF(sz*0.66, sz*0.42);
         p.drawPolygon(arrow);
+    } else if (name == "refresh") {
+        // 刷新图标：顺时针双向环形箭头
+        p.setPen(QPen(col, 1.8, Qt::SolidLine, Qt::RoundCap)); p.setBrush(Qt::NoBrush);
+        QRectF r(sz*0.20, sz*0.20, sz*0.60, sz*0.60);
+        p.drawArc(r, 45 * 16, 250 * 16);
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF arrow;
+        arrow << QPointF(sz*0.78, sz*0.24)
+              << QPointF(sz*0.86, sz*0.44)
+              << QPointF(sz*0.64, sz*0.38);
+        p.drawPolygon(arrow);
+    } else if (name == "status") {
+        // 状态图标：方框内波形折线（心电图/脉冲波）
+        p.setPen(QPen(col, 1.4)); p.setBrush(Qt::NoBrush);
+        QRectF box(sz*0.14, sz*0.14, sz*0.72, sz*0.72);
+        p.drawRoundedRect(box, 3, 3);
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPolygonF pulse;
+        pulse << QPointF(sz*0.22, sz*0.52)
+              << QPointF(sz*0.36, sz*0.52)
+              << QPointF(sz*0.44, sz*0.30)
+              << QPointF(sz*0.54, sz*0.74)
+              << QPointF(sz*0.62, sz*0.44)
+              << QPointF(sz*0.68, sz*0.52)
+              << QPointF(sz*0.78, sz*0.52);
+        p.drawPolyline(pulse);
     }
 
     p.end();
@@ -485,6 +517,7 @@ void MapViewWidget::setupToolbar(QWidget *parent)
     m_createMapBtn = addBtn("add", "2D建图", SLOT(onCreateMap()));
     m_uploadMapBtn = addBtn("map-upload", "地图上传", SLOT(onUploadMap()));
     m_uploadSmapBtn = addBtn("smap-upload", "smap上传", SLOT(onUploadSmap()));
+    m_refreshBtn    = addBtn("refresh", "刷新", SLOT(onRefreshMap()));
 
     auto *sepCreate = new QFrame; sepCreate->setFrameShape(QFrame::VLine);
     sepCreate->setStyleSheet("color:#2d3340;"); lay->addWidget(sepCreate);
@@ -497,6 +530,9 @@ void MapViewWidget::setupToolbar(QWidget *parent)
 
     m_navModeBtn = addBtn("route", "路径导航", SLOT(onToggleNavMode()));
     m_navModeBtn->setCheckable(true);
+
+    m_statusBtn = addBtn("status", "状态", SLOT(onShowRobotStatus()));
+    m_statusBtn->setToolTip("运行状态 / 基本信息");
 
     auto *sep2 = new QFrame; sep2->setFrameShape(QFrame::VLine);
     sep2->setStyleSheet("color:#2d3340;"); lay->addWidget(sep2);
@@ -589,6 +625,13 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
 
 void MapViewWidget::refreshData()
 {
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // 节流保护：500ms 内避免重复全量刷新
+    if (now - m_lastRefreshMs < 500) {
+        return;
+    }
+    m_lastRefreshMs = now;
+
     // 每次页面展示（菜单切换/从下级编辑页返回/首次打开）全量刷新设备数据与地图/路网
     loadCurrentCarMap();
     initMqtt();
@@ -610,18 +653,36 @@ void MapViewWidget::hideEvent(QHideEvent *e)
 
 void MapViewWidget::loadCurrentCarMap()
 {
+    if (m_isLoadingCar) {
+        return;
+    }
+    m_isLoadingCar = true;
+
     setStatus("正在获取设备信息...");
     QString carId = AppConfig::instance().agvId();
-    if (carId.isEmpty()) { setStatus("未设置设备ID", "#e05555"); return; }
+    if (carId.isEmpty()) carId = "1";
 
-    ApiService::instance().getCar(carId, [this](int code, const QJsonObject &data) {
+    ApiService::instance().getCar(carId, [this, carId](int code, const QJsonObject &data) {
+        m_isLoadingCar = false;
         if (code != 200) { setStatus("获取设备信息失败", "#e05555"); return; }
         QJsonObject car = data.value("data").toObject(data);
 
         // Populate right panel car name
-        m_carNameLabel->setText(car.value("carName").toString("--"));
+        QString carName = car.value("carName").toString().trimmed();
+        if (carName.isEmpty() || carName == "--") {
+            carName = QString("AGV-%1").arg(carId);
+        }
+        m_robot.carName = carName;
+        m_carNameLabel->setText(carName);
+        updateInfoPanel();
 
         QString mapId = jsonIdStr(car.value("mapId"));
+        if (mapId.isEmpty() || mapId == "0") {
+            mapId = jsonIdStr(car.value("map_id"));
+        }
+        if (mapId.isEmpty() || mapId == "0") {
+            mapId = jsonIdStr(data.value("mapId"));
+        }
         if (mapId.isEmpty() || mapId == "0") {
             ApiService::instance().listMap(QJsonObject{{"pageNum",1},{"pageSize",1}},
                 [this](int c2, const QJsonObject &d2) {
@@ -639,17 +700,334 @@ void MapViewWidget::loadCurrentCarMap()
     });
 }
 
-void MapViewWidget::loadMapById(const QString &mapId)
+bool MapViewWidget::findLocalMapFiles(const QString &dirPath, QString &outYamlPath, QString &outPgmPath,
+                                     const QString &preferredMapName, const QString &preferredYamlName, const QString &preferredPgmName)
+{
+    QDir dir(dirPath);
+    if (!dir.exists()) return false;
+
+    // 递归检索目录及子目录中的 .yaml/.yml 和 .pgm 文件
+    QDirIterator yamlIt(dirPath, QStringList() << "*.yaml" << "*.yml", QDir::Files, QDirIterator::Subdirectories);
+    QStringList yamlCandidates;
+    while (yamlIt.hasNext()) {
+        yamlCandidates << yamlIt.next();
+    }
+
+    QDirIterator pgmIt(dirPath, QStringList() << "*.pgm", QDir::Files, QDirIterator::Subdirectories);
+    QStringList pgmCandidates;
+    while (pgmIt.hasNext()) {
+        pgmCandidates << pgmIt.next();
+    }
+
+    if (yamlCandidates.isEmpty() || pgmCandidates.isEmpty()) {
+        return false;
+    }
+
+    // 1. 确定最匹配的 YAML 文件
+    outYamlPath.clear();
+    // 规则 A: 精确匹配 preferredYamlName
+    if (!preferredYamlName.isEmpty()) {
+        for (const QString &f : yamlCandidates) {
+            QString fn = QFileInfo(f).fileName();
+            if (fn.compare(preferredYamlName, Qt::CaseInsensitive) == 0 ||
+                f.endsWith("/" + preferredYamlName, Qt::CaseInsensitive) ||
+                f.endsWith("\\" + preferredYamlName, Qt::CaseInsensitive)) {
+                outYamlPath = f;
+                break;
+            }
+        }
+    }
+    // 规则 B: 包含 preferredMapName
+    if (outYamlPath.isEmpty() && !preferredMapName.isEmpty()) {
+        for (const QString &f : yamlCandidates) {
+            if (QFileInfo(f).fileName().contains(preferredMapName, Qt::CaseInsensitive)) {
+                outYamlPath = f;
+                break;
+            }
+        }
+    }
+    // 规则 C: 筛选标准地图文件，按最后修改时间降序（最新优先）或版本号/时间戳数字降序
+    if (outYamlPath.isEmpty()) {
+        QStringList standardYamls;
+        for (const QString &f : yamlCandidates) {
+            if (f.endsWith(".map.yaml", Qt::CaseInsensitive) || f.contains("carto_map", Qt::CaseInsensitive)) {
+                standardYamls << f;
+            }
+        }
+        if (standardYamls.isEmpty()) standardYamls = yamlCandidates;
+
+        std::sort(standardYamls.begin(), standardYamls.end(), [](const QString &a, const QString &b) {
+            QFileInfo fa(a), fb(b);
+            if (fa.lastModified() != fb.lastModified()) {
+                return fa.lastModified() > fb.lastModified();
+            }
+            return fa.fileName() > fb.fileName(); // 字母/时间戳降序，如 20260819 > 20260803
+        });
+        outYamlPath = standardYamls.first();
+    }
+
+    // 2. 从 YAML 文件内提取 image 属性，严格绑定对应的 PGM 文件
+    outPgmPath.clear();
+    QFile yf(outYamlPath);
+    if (yf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QString yamlText = QString::fromUtf8(yf.readAll());
+        yf.close();
+        double r = 0, ox = 0, oy = 0; bool neg = false;
+        QString imageFile;
+        if (MapPgmUtil::parseMapYaml(yamlText, r, ox, oy, neg, &imageFile) && !imageFile.isEmpty()) {
+            QFileInfo yfi(outYamlPath);
+            QString candidatePgm = QFileInfo(yfi.dir(), imageFile).absoluteFilePath();
+            if (QFile::exists(candidatePgm) && QFileInfo(candidatePgm).size() > 0) {
+                outPgmPath = candidatePgm;
+            }
+        }
+    }
+
+    // 3. 若 YAML 内未声明有效 image 路径，使用名称对应规则与时间降序回退
+    if (outPgmPath.isEmpty()) {
+        if (!preferredPgmName.isEmpty()) {
+            for (const QString &f : pgmCandidates) {
+                if (QFileInfo(f).fileName().compare(preferredPgmName, Qt::CaseInsensitive) == 0) {
+                    outPgmPath = f;
+                    break;
+                }
+            }
+        }
+        if (outPgmPath.isEmpty()) {
+            QFileInfo yfi(outYamlPath);
+            QString yamlBase = yfi.completeBaseName();
+            if (yamlBase.endsWith(".map", Qt::CaseInsensitive)) yamlBase.chop(4);
+            for (const QString &f : pgmCandidates) {
+                if (QFileInfo(f).fileName().contains(yamlBase, Qt::CaseInsensitive)) {
+                    outPgmPath = f;
+                    break;
+                }
+            }
+        }
+        if (outPgmPath.isEmpty()) {
+            std::sort(pgmCandidates.begin(), pgmCandidates.end(), [](const QString &a, const QString &b) {
+                return QFileInfo(a).lastModified() > QFileInfo(b).lastModified();
+            });
+            outPgmPath = pgmCandidates.first();
+        }
+    }
+
+    return (!outYamlPath.isEmpty() && !outPgmPath.isEmpty() &&
+            QFileInfo(outYamlPath).size() > 0 && QFileInfo(outPgmPath).size() > 0);
+}
+
+bool MapViewWidget::loadMapFromLocalFiles(const QString &yamlPath, const QString &pgmPath)
+{
+    QFile yf(yamlPath);
+    if (!yf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning() << "[MapViewWidget] Failed to open yaml file:" << yamlPath;
+        return false;
+    }
+    QString yamlText = QString::fromUtf8(yf.readAll());
+    yf.close();
+
+    double resolution = 0, originX = 0, originY = 0;
+    bool negate = false;
+    QString imageRelPath;
+    if (!MapPgmUtil::parseMapYaml(yamlText, resolution, originX, originY, negate, &imageRelPath) || resolution <= 0) {
+        qWarning() << "[MapViewWidget] Failed to parse yaml file:" << yamlPath;
+        return false;
+    }
+
+    // 严格以 YAML 中的 image 字段优先定位 PGM
+    QString actualPgmPath = pgmPath;
+    if (!imageRelPath.isEmpty()) {
+        QFileInfo yfi(yamlPath);
+        QString resolvedPath = QFileInfo(yfi.dir(), imageRelPath).absoluteFilePath();
+        if (QFile::exists(resolvedPath) && QFileInfo(resolvedPath).size() > 0) {
+            actualPgmPath = resolvedPath;
+        }
+    }
+
+    QFile pf(actualPgmPath);
+    if (!pf.open(QIODevice::ReadOnly)) {
+        qWarning() << "[MapViewWidget] Failed to open pgm file:" << actualPgmPath;
+        return false;
+    }
+    QByteArray pgmData = pf.readAll();
+    pf.close();
+
+    QImage img = MapPgmUtil::pgmToImage(pgmData, negate);
+    if (img.isNull()) {
+        qWarning() << "[MapViewWidget] Failed to decode pgm image:" << actualPgmPath;
+        return false;
+    }
+
+    QPixmap pix = QPixmap::fromImage(img);
+    m_worldL = originX;
+    m_worldB = originY;
+    m_worldR = m_worldL + pix.width()  * resolution;
+    m_worldT = m_worldB + pix.height() * resolution;
+
+    qDebug().noquote() << QString("[MapViewWidget] Map loaded from YAML: %1 | PGM: %2 | Res: %3 | Origin: (%4, %5) | WorldBounds: [%6, %7, %8, %9]")
+                              .arg(yamlPath, actualPgmPath)
+                              .arg(resolution)
+                              .arg(originX).arg(originY)
+                              .arg(m_worldL).arg(m_worldB).arg(m_worldR).arg(m_worldT);
+
+    installMapPixmap(pix);
+    loadRoute();
+    return true;
+}
+
+void MapViewWidget::loadMapById(const QString &mapId, const QString &mapName)
 {
     if (mapId.isEmpty()) return;
-    setStatus(QString("正在加载地图 %1...").arg(mapId));
+    // 避免同一地图在正在请求中时被并发重复触发
+    if (m_loadingMapId == mapId) {
+        return;
+    }
+    m_loadingMapId = mapId;
     m_mapId = mapId;
+    if (!mapName.isEmpty()) {
+        m_mapName = mapName;
+        m_mapNameLabel->setText(m_mapName);
+    }
 
-    ApiService::instance().getMap(mapId, [this](int code, const QJsonObject &data) {
-        if (code != 200) { setStatus("地图数据加载失败", "#e05555"); return; }
-        QJsonObject mapInfo = data.value("data").toObject(data);
-        applyMapData(mapInfo);
-    });
+    setStatus(QString("正在加载地图 %1...").arg(mapId));
+
+    QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + mapId;
+
+    // 先尝试从本地 meta.json 提取权威绑定的元信息
+    QString metaMapName = mapName;
+    QString metaYamlName;
+    QString metaPgmName;
+    QFile metaFile(localDir + "/meta.json");
+    if (metaFile.open(QIODevice::ReadOnly)) {
+        QJsonObject metaObj = QJsonDocument::fromJson(metaFile.readAll()).object();
+        metaFile.close();
+        if (metaMapName.isEmpty()) metaMapName = metaObj.value("mapName").toString();
+        metaYamlName = metaObj.value("yamlName").toString();
+        metaPgmName  = metaObj.value("fileName").toString();
+    }
+
+    auto doLoadOrDownload = [this, mapId, localDir](const QString &targetMapName, const QString &targetYamlName, const QString &targetPgmName) {
+        QString yamlPath, pgmPath;
+
+        // 1. 优先检查本地持久化缓存，若存在则精准筛选并秒级加载
+        if (findLocalMapFiles(localDir, yamlPath, pgmPath, targetMapName, targetYamlName, targetPgmName)) {
+            qDebug().noquote() << QString("[MapCache] Hit local cache for map %1 in %2: yaml=%3, pgm=%4")
+                                      .arg(mapId, localDir, yamlPath, pgmPath);
+
+            QFileInfo yfi(yamlPath);
+            QString base = yfi.completeBaseName();
+            if (base.endsWith(".map", Qt::CaseInsensitive)) base.chop(4);
+            m_mapName = !targetMapName.isEmpty() ? targetMapName : base;
+            m_mapNameLabel->setText(m_mapName);
+
+            if (loadMapFromLocalFiles(yamlPath, pgmPath)) {
+                m_loadingMapId.clear();
+                setStatus(QString("地图 %1 加载完成 (本地缓存)").arg(m_mapName.isEmpty() ? mapId : m_mapName));
+                return;
+            }
+            qWarning() << "[MapCache] Local cache files corrupted, falling back to download...";
+        }
+
+        // 2. 本地未缓存或损坏：调用新接口 /robot/map/download/resources/{mapid} 下载 zip 资源包
+        setStatus(QString("正在下载地图资源包 (ID: %1)...").arg(mapId));
+        ApiService::instance().downloadMapResources(mapId, [this, mapId, localDir, targetMapName, targetYamlName, targetPgmName](bool ok, const QByteArray &zipData) {
+            if (!ok || zipData.isEmpty()) {
+                if (m_loadingMapId == mapId) {
+                    m_loadingMapId.clear();
+                }
+                setStatus("下载地图资源包失败", "#e05555");
+                Toast::error(this, "下载地图资源包失败");
+                return;
+            }
+
+            // 保存 zip 文件到本地缓存目录
+            QDir().mkpath(localDir);
+            QString zipPath = localDir + "/" + mapId + ".zip";
+            QFile zf(zipPath);
+            if (!zf.open(QIODevice::WriteOnly)) {
+                if (m_loadingMapId == mapId) {
+                    m_loadingMapId.clear();
+                }
+                setStatus("保存地图资源包失败", "#e05555");
+                Toast::error(this, "保存地图资源包失败");
+                return;
+            }
+            zf.write(zipData);
+            zf.close();
+
+            // 自动解压 zip 文件
+            setStatus("正在解压地图资源...");
+            if (!ZipUtil::extractZip(zipPath, localDir)) {
+                if (m_loadingMapId == mapId) {
+                    m_loadingMapId.clear();
+                }
+                setStatus("地图资源包解压失败", "#e05555");
+                Toast::error(this, "解压地图资源包失败");
+                return;
+            }
+
+            // 查找解压出的 pgm 与 yaml
+            QString yPath, pPath;
+            if (!findLocalMapFiles(localDir, yPath, pPath, targetMapName, targetYamlName, targetPgmName)) {
+                if (m_loadingMapId == mapId) {
+                    m_loadingMapId.clear();
+                }
+                setStatus("未找到有效地图文件", "#e05555");
+                Toast::error(this, "地图资源包中缺少 pgm 或 yaml 文件");
+                return;
+            }
+
+            QFileInfo yfi(yPath);
+            QString base = yfi.completeBaseName();
+            if (base.endsWith(".map", Qt::CaseInsensitive)) base.chop(4);
+            m_mapName = !targetMapName.isEmpty() ? targetMapName : base;
+            m_mapNameLabel->setText(m_mapName);
+
+            // 存储 meta.json 锁定当前解析映射
+            QFile metaFile(localDir + "/meta.json");
+            if (metaFile.open(QIODevice::WriteOnly)) {
+                QJsonObject metaObj;
+                metaObj["mapId"] = mapId;
+                metaObj["mapName"] = m_mapName;
+                metaObj["yamlName"] = QFileInfo(yPath).fileName();
+                metaObj["fileName"] = QFileInfo(pPath).fileName();
+                metaFile.write(QJsonDocument(metaObj).toJson());
+                metaFile.close();
+            }
+
+            if (loadMapFromLocalFiles(yPath, pPath)) {
+                if (m_loadingMapId == mapId) {
+                    m_loadingMapId.clear();
+                }
+                setStatus(QString("地图 %1 下载并加载完成").arg(m_mapName.isEmpty() ? mapId : m_mapName));
+                Toast::success(this, "地图资源下载并加载成功");
+            } else {
+                if (m_loadingMapId == mapId) {
+                    m_loadingMapId.clear();
+                }
+                setStatus("解析地图数据失败", "#e05555");
+                Toast::error(this, "解析地图数据失败");
+            }
+        });
+    };
+
+    // 如果 meta 缺少明确的 yamlName，向后端 API 查询一次以获得权威绑定的文件名称
+    if (metaYamlName.isEmpty() || metaMapName.isEmpty()) {
+        ApiService::instance().getMap(mapId, [this, metaMapName, doLoadOrDownload](int code, const QJsonObject &data) {
+            QString apiMapName = metaMapName;
+            QString apiYamlName;
+            QString apiPgmName;
+            if (code == 200) {
+                QJsonObject d = data.value("data").toObject(data);
+                if (apiMapName.isEmpty()) apiMapName = d.value("mapName").toString();
+                apiYamlName = d.value("yamlName").toString();
+                apiPgmName  = d.value("fileName").toString();
+            }
+            doLoadOrDownload(apiMapName, apiYamlName, apiPgmName);
+        });
+    } else {
+        doLoadOrDownload(metaMapName, metaYamlName, metaPgmName);
+    }
 }
 
 void MapViewWidget::applyMapData(const QJsonObject &mapInfo)
@@ -720,12 +1098,28 @@ void MapViewWidget::loadMapFromPgm(double apiOriginX, double apiOriginY, double 
                 || resolution <= 0) {
                 useThumbnailFallback(); return;
             }
+            // 下载并保存 yaml 到本地缓存目录
+            QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + m_mapName + "_" + m_mapId;
+            QDir().mkpath(localDir);
+            QFile yf(localDir + "/carto_map.yaml");
+            if (yf.open(QIODevice::WriteOnly)) {
+                yf.write(yamlRaw);
+                yf.close();
+            }
+
             ApiService::instance().downloadFile(pgmUrl,
-                [this, resolution, originX, originY, negate, useThumbnailFallback]
+                [this, resolution, originX, originY, negate, useThumbnailFallback, localDir]
                 (bool pgmOk, const QByteArray &pgmRaw) {
                     if (!pgmOk) { useThumbnailFallback(); return; }
                     QImage img = MapPgmUtil::pgmToImage(pgmRaw, negate);
                     if (img.isNull()) { useThumbnailFallback(); return; }
+
+                    // 下载并保存 pgm 到本地缓存目录
+                    QFile pf(localDir + "/carto_map.pgm");
+                    if (pf.open(QIODevice::WriteOnly)) {
+                        pf.write(pgmRaw);
+                        pf.close();
+                    }
 
                     QPixmap pix = QPixmap::fromImage(img);
                     // ROS map_server 标准：yaml 的 origin 本身就是 pgm 左下角像素对应的
@@ -753,6 +1147,14 @@ void MapViewWidget::loadMapImage()
 
     ApiService::instance().downloadFile(url, [this](bool ok, const QByteArray &imgData) {
         if (!ok || imgData.isEmpty()) { setStatus("地图图像下载失败", "#e05555"); return; }
+
+        QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + m_mapName + "_" + m_mapId;
+        QDir().mkpath(localDir);
+        QFile f(localDir + "/thumbnail.png");
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(imgData);
+            f.close();
+        }
 
         QPixmap pix;
         if (!pix.loadFromData(imgData)) { setStatus("地图图像解析失败", "#e05555"); return; }
@@ -791,9 +1193,7 @@ void MapViewWidget::installMapPixmap(const QPixmap &pix)
 void MapViewWidget::loadRoute()
 {
     if (m_mapId.isEmpty()) return;
-    QJsonObject query;
-    query["mapId"] = m_mapId;
-    ApiService::instance().loadEditedMap(query, [this](int code, const QJsonObject &data) {
+    ApiService::instance().loadEditedMap([this](int code, const QJsonObject &data) {
         m_routeLoaded = (code == 200);
         if (!m_routeLoaded) return;
 
@@ -805,6 +1205,14 @@ void MapViewWidget::loadRoute()
 
         QString jsonStr = data.value("json").toString();
         if (!jsonStr.isEmpty()) {
+            QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + m_mapName + "_" + m_mapId;
+            QDir().mkpath(localDir);
+            QFile rf(localDir + "/route.json");
+            if (rf.open(QIODevice::WriteOnly)) {
+                rf.write(jsonStr.toUtf8());
+                rf.close();
+            }
+
             QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
             if (doc.isObject()) {
                 QJsonArray features = doc.object().value("features").toArray();
@@ -1115,14 +1523,6 @@ void MapViewWidget::renderRobot()
 {
     if (!m_mapReady || !m_robot.posValid) return;
 
-    // Remove old robot items
-    for (auto *item : m_scene->items()) {
-        if (item->data(0).toInt() == 3) {
-            m_scene->removeItem(item);
-            delete item;
-        }
-    }
-
     QPointF sp = worldToScene(m_robot.wx, m_robot.wy);
 
     // ENU: yaw=0→East, yaw=π/2→North, CCW positive. Icon/triangle tip points North.
@@ -1134,20 +1534,38 @@ void MapViewWidget::renderRobot()
     double screenAngle = 90.0 - yawDeg;
 
     if (!m_robotPixmap.isNull()) {
-        const double iconSz = 15.0;   // 场景像素，减半自30
+        const double iconSz = 26.0;   // 场景像素尺寸，清晰工整
         const double srcSz  = 256.0;  // 预渲染尺寸
         const double pivot  = srcSz / 2.0;
-        auto *robotItem = m_scene->addPixmap(m_robotPixmap);
-        robotItem->setScale(iconSz / srcSz);
-        robotItem->setTransformOriginPoint(pivot, pivot);
-        robotItem->setPos(sp.x() - pivot, sp.y() - pivot);
-        robotItem->setRotation(screenAngle);
-        robotItem->setData(0, 3);
-        robotItem->setZValue(100);
+
+        auto *pixItem = dynamic_cast<QGraphicsPixmapItem *>(m_robotItem);
+        if (pixItem) {
+            pixItem->setPos(sp.x() - pivot, sp.y() - pivot);
+            pixItem->setRotation(screenAngle);
+        } else {
+            if (m_robotItem) {
+                m_scene->removeItem(m_robotItem);
+                delete m_robotItem;
+                m_robotItem = nullptr;
+            }
+            auto *robotItem = m_scene->addPixmap(m_robotPixmap);
+            robotItem->setScale(iconSz / srcSz);
+            robotItem->setTransformOriginPoint(pivot, pivot);
+            robotItem->setPos(sp.x() - pivot, sp.y() - pivot);
+            robotItem->setRotation(screenAngle);
+            robotItem->setData(0, 3);
+            robotItem->setZValue(120);
+            m_robotItem = robotItem;
+        }
     } else {
         // Fallback: draw triangle
+        if (m_robotItem) {
+            m_scene->removeItem(m_robotItem);
+            delete m_robotItem;
+            m_robotItem = nullptr;
+        }
         QPolygonF tri;
-        tri << QPointF(0, -10) << QPointF(-6, 6) << QPointF(6, 6);
+        tri << QPointF(0, -12) << QPointF(-8, 8) << QPointF(8, 8);
         QTransform t;
         t.translate(sp.x(), sp.y());
         t.rotate(screenAngle);
@@ -1156,7 +1574,12 @@ void MapViewWidget::renderRobot()
             QPen(QColor(255, 220, 50), 2),
             QBrush(QColor(255, 180, 0, 200)));
         marker->setData(0, 3);
-        marker->setZValue(100);
+        marker->setZValue(120);
+        m_robotItem = marker;
+    }
+
+    if (m_canvas && m_canvas->viewport()) {
+        m_canvas->viewport()->update();
     }
 }
 
@@ -1170,36 +1593,154 @@ void MapViewWidget::updateRulers()
 
 void MapViewWidget::onMqttMessage(const QString &topic, const QByteArray &payload)
 {
+    QByteArray cleanPayload = payload.trimmed();
+    bool inQuote = false;
+    bool escape = false;
+    for (int i = 0; i < cleanPayload.size(); ++i) {
+        char c = cleanPayload.at(i);
+        if (escape) { escape = false; continue; }
+        if (c == '\\') { if (inQuote) escape = true; continue; }
+        if (c == '"') { inQuote = !inQuote; continue; }
+        if (!inQuote) {
+            if (c == '(') cleanPayload[i] = '{';
+            else if (c == ')') cleanPayload[i] = '}';
+        }
+    }
+
     QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+    QJsonDocument doc = QJsonDocument::fromJson(cleanPayload, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
-    if (!topic.contains("/info")) return;
+
+    if (topic.contains("obstacle") || topic.contains("nearest")) {
+        m_lastObstacleTopic = topic;
+        m_lastObstaclePayload = cleanPayload;
+        if (m_statusDialog) {
+            m_statusDialog->onMqttMessage(topic, cleanPayload);
+        }
+        return;
+    }
+
+    if (!topic.contains("info") && !topic.contains("status") && !topic.contains("carto_pose")) return;
 
     QJsonObject d = doc.object();
+    QJsonObject dataObj = d.value("data").toObject();
+    QJsonObject poseObj = d.value("pose").toObject();
 
     auto dv = [&](const QStringList &keys, double def = 0) -> double {
         for (const QString &k : keys) {
-            QJsonValue v = d.value(k);
-            if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+            if (d.contains(k)) {
+                QJsonValue v = d.value(k);
+                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+            }
+            if (!dataObj.isEmpty() && dataObj.contains(k)) {
+                QJsonValue v = dataObj.value(k);
+                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+            }
+            if (!poseObj.isEmpty() && poseObj.contains(k)) {
+                QJsonValue v = poseObj.value(k);
+                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+            }
         }
         return def;
     };
 
-    m_robot.wx       = dv({"car_x","carX","x"});
-    m_robot.wy       = dv({"car_y","carY","y"});
-    m_robot.yawRad   = dv({"car_yaw","carYaw","yaw"});
-    m_robot.speed    = dv({"speed","linear_x","linearX"});
-    m_robot.battery  = dv({"battery","power","bat"}, -1);
-    m_robot.covScore = dv({"covariance_score","covarianceScore","covariance"}, -1);
-    m_robot.posValid = true;
+    auto hasKey = [&](const QStringList &keys) -> bool {
+        for (const QString &k : keys) {
+            if (d.contains(k) && !d.value(k).isNull() && !d.value(k).isUndefined()) return true;
+            if (!dataObj.isEmpty() && dataObj.contains(k) && !dataObj.value(k).isNull() && !dataObj.value(k).isUndefined()) return true;
+            if (!poseObj.isEmpty() && poseObj.contains(k) && !poseObj.value(k).isNull() && !poseObj.value(k).isUndefined()) return true;
+        }
+        return false;
+    };
 
-    renderRobot();
-    updateInfoPanel();
+    // 过滤非当前跟踪设备的消息 (多机防干扰)
+    QString msgCarId;
+    if (d.contains("car_id")) msgCarId = d.value("car_id").toVariant().toString().trimmed();
+    else if (d.contains("carId")) msgCarId = d.value("carId").toVariant().toString().trimmed();
+    else if (topic.startsWith("/rob/")) {
+        QStringList parts = topic.split('/', Qt::SkipEmptyParts);
+        if (parts.size() >= 2) msgCarId = parts[1].trimmed();
+    }
+    QString curCarId = m_robot.carId.trimmed().isEmpty() ? AppConfig::instance().agvId().trimmed() : m_robot.carId.trimmed();
+    if (curCarId.isEmpty()) curCarId = "1";
+    if (!msgCarId.isEmpty() && msgCarId != curCarId) {
+        return;
+    }
+
+    // 地图上设备图标位置和朝向严格根据 “info” 话题提供的定位信息来确定
+    const bool isInfoTopic = topic.endsWith("/info") || topic.endsWith("info") || topic.contains("/info");
+
+    if (isInfoTopic) {
+        bool poseUpdated = false;
+        if (hasKey({"car_x", "carX", "x"})) {
+            m_robot.wx = dv({"car_x", "carX", "x"}, m_robot.wx);
+            poseUpdated = true;
+        }
+        if (hasKey({"car_y", "carY", "y"})) {
+            m_robot.wy = dv({"car_y", "carY", "y"}, m_robot.wy);
+            poseUpdated = true;
+        }
+        // 朝向角优先按 car_yaw 读取 (弧度)
+        if (hasKey({"car_yaw", "carYaw", "yaw", "angle", "car_theta", "carTheta", "heading"})) {
+            m_robot.yawRad = dv({"car_yaw", "carYaw", "yaw", "angle", "car_theta", "carTheta", "heading"}, m_robot.yawRad);
+            poseUpdated = true;
+        } else if (hasKey({"theta"})) {
+            m_robot.yawRad = dv({"theta"}, m_robot.yawRad);
+            poseUpdated = true;
+        }
+
+        if (poseUpdated) {
+            m_robot.posValid = true;
+        }
+
+        if (hasKey({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"})) {
+            m_robot.speed = dv({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"}, m_robot.speed);
+        }
+        if (hasKey({"battery", "power", "bat", "soc", "battery_level"})) {
+            double bat = dv({"battery", "power", "bat", "soc", "battery_level"}, m_robot.battery);
+            if (bat > 0 && bat <= 1.0) bat *= 100.0;
+            m_robot.battery = bat;
+        }
+        if (hasKey({"covariance_score", "covarianceScore", "covariance", "score", "confidence"})) {
+            m_robot.covScore = dv({"covariance_score", "covarianceScore", "covariance", "score", "confidence"}, m_robot.covScore);
+        }
+
+        renderRobot();
+        updateInfoPanel();
+    } else {
+        // 非 info 话题 (如 status, carto_pose 等)：仅补充线速度与电池电量，绝不修改地图设备位置和朝向
+        if (hasKey({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"})) {
+            m_robot.speed = dv({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"}, m_robot.speed);
+        }
+        if (hasKey({"power", "battery", "bat", "soc", "battery_level"})) {
+            double bat = dv({"power", "battery", "bat", "soc", "battery_level"}, m_robot.battery);
+            if (bat > 0 && bat <= 1.0) bat *= 100.0;
+            m_robot.battery = bat;
+        }
+        updateInfoPanel();
+    }
+
+    if (m_statusDialog) {
+        m_statusDialog->onMqttMessage(topic, cleanPayload);
+    }
 }
 
 void MapViewWidget::updateInfoPanel()
 {
-    if (!m_robot.posValid) return;
+    if (!m_robot.carName.isEmpty()) {
+        m_carNameLabel->setText(m_robot.carName);
+    } else {
+        QString carId = m_robot.carId.isEmpty() ? AppConfig::instance().agvId() : m_robot.carId;
+        if (carId.isEmpty()) carId = "1";
+        m_carNameLabel->setText(QString("AGV-%1").arg(carId));
+    }
+
+    if (!m_robot.posValid) {
+        m_posLabel->setText("未定位");
+        m_covLabel->setText("未定位");
+        m_covLabel->setStyleSheet("color:#e05555; font-size:12px;");
+        return;
+    }
 
     // Battery
     double bat = m_robot.battery;
@@ -1207,7 +1748,7 @@ void MapViewWidget::updateInfoPanel()
         m_batteryLabel->setText("充电中");
         m_batteryLabel->setStyleSheet("color:#5cb85c; font-size:12px;");
     } else {
-        int batPct = (int)(bat * 100);
+        int batPct = (bat >= 0.0 && bat <= 1.0) ? qRound(bat * 100.0) : qRound(bat);
         m_batteryLabel->setText(QString::number(batPct) + "%");
         QColor c = batPct < 20 ? QColor(0xe0,0x55,0x55) :
                    batPct < 40 ? QColor(0xf0,0xa0,0x30) :
@@ -1222,9 +1763,10 @@ void MapViewWidget::updateInfoPanel()
         .arg(m_robot.wy, 0, 'f', 2));
 
     if (m_robot.covScore >= 0) {
-        m_covLabel->setText(QString::number(m_robot.covScore, 'f', 1) + "%");
+        double cs = (m_robot.covScore > 1.0) ? m_robot.covScore / 100.0 : m_robot.covScore;
+        m_covLabel->setText(QString::number(cs, 'f', 2));
         m_covLabel->setStyleSheet(
-            m_robot.covScore <= 40
+            cs <= 0.4
             ? "color:#e05555; font-size:12px;"
             : "color:#c8d0d8; font-size:12px;");
     } else {
@@ -1337,7 +1879,7 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
         if (navBox.clickedButton() == startBtn) {
             QString carId = AppConfig::instance().currentDevice().carId;
             if (carId.isEmpty()) carId = AppConfig::instance().agvId();
-            if (carId.isEmpty()) carId = "88";
+            if (carId.isEmpty()) carId = "1";
 
             // 1. HTTP API 下发路径导航指令 (POST /robot/navigation/navigate/to?locationId=...)
             ApiService::instance().navigateTo(ptId, [this, ptName](int code, const QJsonObject &resp) {
@@ -1432,8 +1974,8 @@ void MapViewWidget::onSceneReleased(const QPointF &scenePos, Qt::MouseButton btn
                  ? std::atan2(dy, dx)
                  : m_robot.yawRad;
 
-    QString carId = m_robot.carId;
-    if (carId.isEmpty()) { setStatus("无设备ID，无法重定位", "#e05555"); return; }
+    QString carId = m_robot.carId.trimmed().isEmpty() ? AppConfig::instance().agvId() : m_robot.carId.trimmed();
+    if (carId.isEmpty()) carId = "1";
 
     QJsonObject poseObj;
     QJsonArray coords;
@@ -1479,7 +2021,7 @@ void MapViewWidget::onUploadMap()
     auto *dlg = new MapUploadDialog(this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     connect(dlg, &MapUploadDialog::uploadSucceeded, this, [this]() {
-        refreshData();
+        onRefreshMap();
     });
     dlg->exec();
 }
@@ -1489,74 +2031,197 @@ void MapViewWidget::onUploadSmap()
     auto *dlg = new SmapUploadDialog(this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     connect(dlg, &SmapUploadDialog::uploadSucceeded, this, [this]() {
-        refreshData();
+        onRefreshMap();
     });
     dlg->exec();
+}
+
+void MapViewWidget::onRefreshMap()
+{
+    // 手动刷新重置节流与请求锁，允许用户主动重试
+    m_lastRefreshMs = 0;
+    m_isLoadingCar  = false;
+    m_loadingMapId.clear();
+
+    setStatus("正在获取设备绑定地图并刷新...");
+    QString carId = AppConfig::instance().agvId();
+    if (carId.isEmpty()) carId = "1";
+
+    ApiService::instance().getCar(carId, [this](int code, const QJsonObject &data) {
+        if (code != 200) {
+            setStatus("获取设备信息失败", "#e05555");
+            Toast::error(this, "获取设备信息失败");
+            return;
+        }
+        QJsonObject car = data.value("data").toObject(data);
+
+        // 更新右侧面板车辆名称
+        m_carNameLabel->setText(car.value("carName").toString("--"));
+
+        QString mapId = jsonIdStr(car.value("mapId"));
+        if (mapId.isEmpty() || mapId == "0") {
+            mapId = jsonIdStr(car.value("map_id"));
+        }
+        if (mapId.isEmpty() || mapId == "0") {
+            mapId = jsonIdStr(data.value("mapId"));
+        }
+        if (mapId.isEmpty() || mapId == "0") {
+            QJsonArray maps = data.value("maps").toArray();
+            if (!maps.isEmpty()) {
+                mapId = jsonIdStr(maps.first().toObject().value("mapId"));
+            }
+        }
+
+        if (mapId.isEmpty() || mapId == "0") {
+            ApiService::instance().listMap(QJsonObject{{"pageNum", 1}, {"pageSize", 1}},
+                [this](int c2, const QJsonObject &d2) {
+                    if (c2 == 200) {
+                        QJsonArray rows = d2.value("rows").toArray();
+                        if (!rows.isEmpty()) {
+                            QString fallbackMapId = jsonIdStr(rows.first().toObject().value("mapId"));
+                            loadMapById(fallbackMapId);
+                            Toast::success(this, "已刷新并加载可用地图");
+                        } else {
+                            setStatus("无可用地图", "#e05555");
+                            Toast::info(this, "无可用地图");
+                        }
+                    } else {
+                        setStatus("获取地图列表失败", "#e05555");
+                    }
+                });
+            return;
+        }
+
+        // 刷新重置要素缓存，重新加载/下载地图与路网
+        m_points = QJsonArray();
+        m_lines  = QJsonArray();
+        m_curves = QJsonArray();
+        m_charges = QJsonArray();
+        m_highPrecisionPoints = QJsonArray();
+        m_routeLoaded = false;
+        m_robot.posValid = false;
+
+        loadMapById(mapId);
+        Toast::success(this, "已获取绑定地图并刷新");
+    });
 }
 
 void MapViewWidget::onSwitchMap()
 {
     QDialog dlg(this);
     dlg.setWindowTitle("选择地图");
-    dlg.setMinimumSize(820, 560);
+    dlg.setMinimumSize(840, 580);
     dlg.setStyleSheet(
-        "QDialog{background:#1a1d23; color:#c8d0d8;}"
-        "QScrollArea{background:#1a1d23; border:none;}"
-        "QWidget#cards{background:#1a1d23;}"
-        "QPushButton{background:#252a35; color:#c8d0d8; border:1px solid #3a3f4a;"
-        "border-radius:4px; padding:5px 12px; font-size:12px;}"
-        "QPushButton:hover{background:#2d3340;}"
+        "QDialog{background:#181b22; color:#e2e8f0;}"
+        "QScrollArea{background:#181b22; border:none;}"
+        "QWidget#cards{background:#181b22;}"
+        "QPushButton{background:#232936; color:#cbd5e1; border:1px solid #3b4252;"
+        "border-radius:4px; padding:6px 14px; font-size:12px; font-weight:500;}"
+        "QPushButton:hover{background:#2d3545; border-color:#4a9eff; color:#fff;}"
         "QLabel{background:transparent;}");
 
     auto *root = new QVBoxLayout(&dlg);
-    root->setContentsMargins(12, 12, 12, 12);
-    root->setSpacing(8);
+    root->setContentsMargins(16, 16, 16, 16);
+    root->setSpacing(12);
 
-    // Search bar
+    // Top Row: Search bar + Stats label + Refresh button
     auto *topRow = new QHBoxLayout;
+    topRow->setSpacing(10);
     auto *searchEdit = new QLineEdit;
-    searchEdit->setPlaceholderText("🔍 搜索地图名称...");
+    searchEdit->setPlaceholderText("🔍 搜索地图名称或地图ID...");
     searchEdit->setStyleSheet(
-        "background:#252a35; border:1px solid #3a3f4a; border-radius:4px;"
-        "color:#c8d0d8; padding:5px 10px; font-size:12px;");
+        "background:#232936; border:1px solid #3b4252; border-radius:6px;"
+        "color:#f8fafc; padding:7px 12px; font-size:13px;");
     topRow->addWidget(searchEdit, 1);
+
+    auto *statsLabel = new QLabel("共 0 张地图");
+    statsLabel->setStyleSheet("color:#94a3b8; font-size:12px; font-weight:500;");
+    topRow->addWidget(statsLabel);
+
+    auto *refreshListBtn = new QPushButton("🔄 刷新列表");
+    topRow->addWidget(refreshListBtn);
+
     root->addLayout(topRow);
 
-    // Scrollable card grid
+    // Scrollable cards area
     auto *scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     auto *cardsWidget = new QWidget;
     cardsWidget->setObjectName("cards");
     auto *grid = new QGridLayout(cardsWidget);
-    grid->setContentsMargins(8, 8, 8, 8);
-    grid->setSpacing(12);
+    grid->setContentsMargins(4, 4, 4, 4);
+    grid->setSpacing(10);
     grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     scroll->setWidget(cardsWidget);
     root->addWidget(scroll, 1);
 
-    // Button row
-    auto *btnRow = new QHBoxLayout;
-    btnRow->addStretch();
-    auto *cancelBtn = new QPushButton("取消");
-    auto *okBtn     = new QPushButton("确定");
-    okBtn->setStyleSheet(kBtnPrimary);
-    btnRow->addWidget(cancelBtn);
-    btnRow->addWidget(okBtn);
-    root->addLayout(btnRow);
+    // Bottom Row: Selection preview tip + Action buttons
+    auto *bottomRow = new QHBoxLayout;
+    bottomRow->setSpacing(10);
+    auto *selTipLabel = new QLabel("请在上方选择地图 (支持双击快速切换)");
+    selTipLabel->setStyleSheet("color:#94a3b8; font-size:12px;");
+    bottomRow->addWidget(selTipLabel, 1);
 
-    connect(okBtn,     &QPushButton::clicked, &dlg, &QDialog::accept);
+    auto *cancelBtn = new QPushButton("取消");
+    auto *okBtn     = new QPushButton("确认切换");
+    okBtn->setStyleSheet("QPushButton{background:#2563eb; color:#fff; font-weight:600; border:none; border-radius:4px; padding:6px 18px;}"
+                         "QPushButton:hover{background:#3b82f6;}");
+    bottomRow->addWidget(cancelBtn);
+    bottomRow->addWidget(okBtn);
+    root->addLayout(bottomRow);
+
     connect(cancelBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
 
-    // Track selected map
     QString selectedMapId;
+    QString selectedMapName;
     QVector<QFrame*> allCards;
     QJsonArray mapList;
 
-    // Build cards and load thumbnails (std::function, not auto, so it can call itself recursively after a delete)
+    // 点击确认切换逻辑：访问接口 /robot/car/edit/map/{mapid}，成功后关闭窗口并刷新地图
+    auto doConfirmSwitch = [&]() {
+        if (selectedMapId.isEmpty()) {
+            Toast::info(&dlg, "请先选择需要切换的地图");
+            return;
+        }
+
+        okBtn->setEnabled(false);
+        cancelBtn->setEnabled(false);
+        okBtn->setText("正在切换...");
+        selTipLabel->setText(QString("正在请求切换至地图 [ID: %1]...").arg(selectedMapId));
+        selTipLabel->setStyleSheet("color:#38bdf8; font-size:12px;");
+
+        auto *loading = new LoadingDialog("正在切换地图...", &dlg);
+        loading->show();
+
+        // 访问接口 "/robot/car/edit/map/{mapid}"
+        ApiService::instance().editCarMap(selectedMapId, [this, selectedMapId, selectedMapName, &dlg, okBtn, cancelBtn, selTipLabel, loading](int code, const QJsonObject &data) {
+            loading->close();
+            loading->deleteLater();
+            if (code == 200) {
+                // 成功后关闭窗口
+                dlg.accept();
+            } else {
+                okBtn->setEnabled(true);
+                cancelBtn->setEnabled(true);
+                okBtn->setText("确认切换");
+                QString errMsg = data.value("msg").toString();
+                if (errMsg.isEmpty()) {
+                    errMsg = QString("服务器返回错误 (状态码: %1)").arg(code);
+                }
+                selTipLabel->setText(QString("<font color='#f87171'>切换失败: %1</font>").arg(errMsg));
+                QMessageBox::warning(&dlg, "切换失败", QString("访问切换地图接口失败 (错误码 %1)：\n%2").arg(code).arg(errMsg));
+            }
+        });
+    };
+
+    connect(okBtn, &QPushButton::clicked, &dlg, [&]() {
+        doConfirmSwitch();
+    });
+
+    // Build cards list
     std::function<void(const QJsonArray &, const QString &)> buildCards =
             [&](const QJsonArray &list, const QString &filter) {
-        // Clear existing
         for (auto *c : allCards) c->deleteLater();
         allCards.clear();
         while (auto *item = grid->takeAt(0)) {
@@ -1564,93 +2229,166 @@ void MapViewWidget::onSwitchMap()
             delete item;
         }
 
+        int visibleCount = 0;
         int col = 0, row = 0;
-        const int COLS = 4;
-        const int CARD_W = 170, CARD_H = 208;
+        const int COLS = 2; // 双列现代化布局，宽度适中信息饱满
 
         for (const auto &v : list) {
             QJsonObject m = v.toObject();
             QString name  = m.value("mapName").toString();
             QString mid   = jsonIdStr(m.value("mapId"));
-            QString flag  = m.value("delFlag").toString("0");
 
-            if (!filter.isEmpty() && !name.toLower().contains(filter.toLower()))
-                continue;
+            if (!filter.isEmpty()) {
+                bool nameMatch = name.toLower().contains(filter.toLower());
+                bool idMatch   = mid.contains(filter.trimmed());
+                if (!nameMatch && !idMatch) continue;
+            }
 
-            // Card frame
+            visibleCount++;
+
+            // 检查该地图是否本地已缓存
+            QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + mid;
+            QString dummyY, dummyP;
+            bool isCached = findLocalMapFiles(localDir, dummyY, dummyP);
+            bool isCurrent = (mid == m_mapId);
+
+            // 卡片容器
             auto *card = new QFrame;
-            card->setFixedSize(CARD_W, CARD_H);
-            card->setStyleSheet(
-                "QFrame{background:#252a35; border:1px solid #3a3f4a; border-radius:6px;}"
-                "QFrame:hover{border-color:#4a9eff;}");
+            card->setMinimumHeight(68);
+            card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+            bool isSelected = (mid == selectedMapId);
+            if (isSelected) {
+                card->setStyleSheet("QFrame{background:#183354; border:2px solid #3b82f6; border-radius:6px;}");
+            } else if (isCurrent) {
+                card->setStyleSheet("QFrame{background:#1c2738; border:1px solid #2d456b; border-radius:6px;}"
+                                    "QFrame:hover{background:#23334a; border-color:#3b82f6;}");
+            } else {
+                card->setStyleSheet("QFrame{background:#1e2430; border:1px solid #2d3545; border-radius:6px;}"
+                                    "QFrame:hover{background:#252e3d; border-color:#3b82f6;}");
+            }
             allCards.append(card);
 
-            auto *cl = new QVBoxLayout(card);
-            cl->setContentsMargins(6, 6, 6, 6);
-            cl->setSpacing(4);
+            auto *hl = new QHBoxLayout(card);
+            hl->setContentsMargins(12, 10, 12, 10);
+            hl->setSpacing(12);
 
-            // Thumbnail area
-            auto *thumbLbl = new QLabel;
-            thumbLbl->setFixedSize(CARD_W-12, 130);
-            thumbLbl->setAlignment(Qt::AlignCenter);
-            thumbLbl->setStyleSheet("background:#12151a; border-radius:4px; color:#556677;");
-            thumbLbl->setText("加载中...");
-            cl->addWidget(thumbLbl);
+            // 左侧地图矢量图标装饰块
+            auto *iconBox = new QFrame;
+            iconBox->setFixedSize(40, 40);
+            iconBox->setStyleSheet("background:#141b2d; border:1px solid #1e3a8a; border-radius:6px;");
+            auto *iconLyt = new QVBoxLayout(iconBox);
+            iconLyt->setContentsMargins(0, 0, 0, 0);
+            auto *iconLbl = new QLabel("MAP");
+            iconLbl->setAlignment(Qt::AlignCenter);
+            iconLbl->setStyleSheet("color:#38bdf8; font-weight:bold; font-size:11px; font-family:sans-serif;");
+            iconLyt->addWidget(iconLbl);
+            hl->addWidget(iconBox);
 
-            // Map name + ID
-            QString dispName = name.length() > 16 ? name.left(15)+"…" : name;
-            auto *nameLbl = new QLabel(QString("%1\nID: %2").arg(dispName, mid));
-            nameLbl->setAlignment(Qt::AlignCenter);
-            nameLbl->setStyleSheet("color:#c8d0d8; font-size:11px; font-weight:600;");
-            nameLbl->setToolTip(QString("%1 [ID: %2]").arg(name, mid));
-            cl->addWidget(nameLbl);
+            // 中间信息区
+            auto *infoLyt = new QVBoxLayout;
+            infoLyt->setContentsMargins(0, 0, 0, 0);
+            infoLyt->setSpacing(4);
 
-            // Status badge
-            QString statusText = flag == "0" ? "正常" : flag == "3" ? "处理中" : "错误";
-            QString statusColor= flag == "0" ? "#5cb85c" : flag == "3" ? "#f0a060" : "#e05555";
-            auto *statusLbl = new QLabel(statusText);
-            statusLbl->setAlignment(Qt::AlignCenter);
-            statusLbl->setStyleSheet(
-                QString("color:%1; font-size:10px;").arg(statusColor));
-            cl->addWidget(statusLbl);
+            auto *nameLbl = new QLabel(name);
+            nameLbl->setStyleSheet("color:#f8fafc; font-size:13px; font-weight:bold;");
+            nameLbl->setToolTip(QString("地图名称: %1\n地图ID: %2").arg(name, mid));
+            infoLyt->addWidget(nameLbl);
 
-            // Click to select
-            card->setProperty("mapId", mid);
-            card->installEventFilter(&dlg);
+            // 标签行
+            auto *tagRow = new QHBoxLayout;
+            tagRow->setContentsMargins(0, 0, 0, 0);
+            tagRow->setSpacing(6);
 
-            // Mouse press → select
-            auto *selOverlay = new QPushButton(card);
-            selOverlay->setGeometry(0, 0, CARD_W, CARD_H);
-            selOverlay->setFlat(true);
-            selOverlay->setStyleSheet("QPushButton{background:transparent;}");
-            connect(selOverlay, &QPushButton::clicked, this, [&, mid, card]() {
-                selectedMapId = mid;
-                for (auto *c : allCards) {
-                    c->setStyleSheet(
-                        "QFrame{background:#252a35; border:1px solid #3a3f4a; border-radius:6px;}"
-                        "QFrame:hover{border-color:#4a9eff;}");
-                }
-                card->setStyleSheet(
-                    "QFrame{background:#1e4080; border:2px solid #4a9eff; border-radius:6px;}");
-            });
-            connect(selOverlay, &QPushButton::pressed, this, [&dlg, &selectedMapId, mid, card]() {
-                selectedMapId = mid;
-                Q_UNUSED(card)
-                (void)selectedMapId;
-            });
-            // Double-click accepts dialog
-            selOverlay->setProperty("mapId", mid);
+            // ID Badge
+            auto *idBadge = new QLabel(QString("ID: %1").arg(mid));
+            idBadge->setStyleSheet(
+                "background:#0f172a; color:#38bdf8; border:1px solid #0284c7;"
+                "border-radius:3px; padding:1px 6px; font-size:11px; font-family:monospace; font-weight:600;");
+            tagRow->addWidget(idBadge);
 
-            // Delete button (top-right corner overlay, raised above selOverlay)
+            // 缓存状态 Badge
+            auto *cacheBadge = new QLabel(isCached ? "✓ 本地已缓存" : "云端资源包");
+            if (isCached) {
+                cacheBadge->setStyleSheet(
+                    "background:rgba(16,185,129,0.18); color:#34d399; border:1px solid rgba(16,185,129,0.4);"
+                    "border-radius:3px; padding:1px 6px; font-size:11px; font-weight:500;");
+            } else {
+                cacheBadge->setStyleSheet(
+                    "background:rgba(148,163,184,0.12); color:#94a3b8; border:1px solid rgba(148,163,184,0.3);"
+                    "border-radius:3px; padding:1px 6px; font-size:11px;");
+            }
+            tagRow->addWidget(cacheBadge);
+
+            // 当前使用中 Badge
+            if (isCurrent) {
+                auto *curBadge = new QLabel("当前使用中");
+                curBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
+                curBadge->setStyleSheet(
+                    "background:rgba(59,130,246,0.25); color:#60a5fa; border:1px solid #3b82f6;"
+                    "border-radius:3px; padding:1px 6px; font-size:11px; font-weight:bold;");
+                tagRow->addWidget(curBadge);
+            }
+
+            tagRow->addStretch();
+            infoLyt->addLayout(tagRow);
+            hl->addLayout(infoLyt, 1);
+
+            // 卡片整体鼠标与穿透设置
+            card->setCursor(Qt::PointingHandCursor);
+            iconBox->setAttribute(Qt::WA_TransparentForMouseEvents);
+            iconLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+            nameLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+            idBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
+            cacheBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+            // 右侧删除按钮
             auto *delBtn = new QPushButton("✕", card);
-            delBtn->setFixedSize(22, 22);
-            delBtn->move(CARD_W - 28, 4);
+            delBtn->setFixedSize(24, 24);
             delBtn->setCursor(Qt::PointingHandCursor);
+            delBtn->setToolTip("删除此地图");
             delBtn->setStyleSheet(
-                "QPushButton{background:rgba(180,40,40,200); color:#fff; border:none;"
-                "border-radius:11px; font-size:11px; font-weight:bold; padding:0;}"
-                "QPushButton:hover{background:rgba(220,50,50,235);}");
-            delBtn->raise();
+                "QPushButton{background:rgba(220,38,38,0.18); color:#f87171; border:1px solid rgba(220,38,38,0.3);"
+                "border-radius:12px; font-size:11px; font-weight:bold; padding:0;}"
+                "QPushButton:hover{background:#ef4444; color:#fff; border:none;}");
+            hl->addWidget(delBtn);
+
+            auto updateCardSelection = [=, &selectedMapId, &selectedMapName, &allCards]() {
+                selectedMapId = mid;
+                selectedMapName = name;
+                for (auto *c : allCards) {
+                    c->setStyleSheet("QFrame{background:#1e2430; border:1px solid #2d3545; border-radius:6px;}"
+                                    "QFrame:hover{background:#252e3d; border-color:#3b82f6;}");
+                }
+                card->setStyleSheet("QFrame{background:#183354; border:2px solid #3b82f6; border-radius:6px;}");
+                selTipLabel->setText(QString("已选中地图: [ID: %1] %2 (%3)")
+                                         .arg(mid, name, isCached ? "本地已缓存" : "需下载资源包"));
+                selTipLabel->setStyleSheet("color:#60a5fa; font-size:12px; font-weight:500;");
+            };
+
+            // 监听卡片点击与双击
+            struct CardClickFilter : public QObject {
+                std::function<void()> onClick;
+                std::function<void()> onDblClick;
+                CardClickFilter(std::function<void()> clk, std::function<void()> dbl, QObject *parent = nullptr)
+                    : QObject(parent), onClick(clk), onDblClick(dbl) {}
+                bool eventFilter(QObject *obj, QEvent *event) override {
+                    if (event->type() == QEvent::MouseButtonPress) {
+                        if (onClick) onClick();
+                    } else if (event->type() == QEvent::MouseButtonDblClick) {
+                        if (onDblClick) onDblClick();
+                        return true;
+                    }
+                    return QObject::eventFilter(obj, event);
+                }
+            };
+            auto *filter = new CardClickFilter(updateCardSelection, [updateCardSelection, &doConfirmSwitch]() {
+                updateCardSelection();
+                doConfirmSwitch();
+            }, card);
+            card->installEventFilter(filter);
+
+            // 删除事件绑定
             connect(delBtn, &QPushButton::clicked, this, [&, mid, name]() {
                 QMessageBox confirm(&dlg);
                 confirm.setWindowTitle("确认删除");
@@ -1665,11 +2403,23 @@ void MapViewWidget::onSwitchMap()
                         QMessageBox::warning(&dlg, "错误", "删除地图失败");
                         return;
                     }
+                    // 同步清理本地缓存目录
+                    QString cDir = QCoreApplication::applicationDirPath() + "/maps/" + mid;
+                    QDir(cDir).removeRecursively();
+
                     Toast::success(this, "地图已删除");
-                    if (selectedMapId == mid) selectedMapId.clear();
+                    if (selectedMapId == mid) {
+                        selectedMapId.clear();
+                        selectedMapName.clear();
+                        selTipLabel->setText("请在上方选择地图 (支持双击快速切换)");
+                        selTipLabel->setStyleSheet("color:#94a3b8; font-size:12px;");
+                    }
                     QJsonArray newList;
-                    for (const auto &v : mapList)
-                        if (jsonIdStr(v.toObject().value("mapId")) != mid) newList.append(v);
+                    for (const auto &v : mapList) {
+                        if (jsonIdStr(v.toObject().value("mapId")) != mid) {
+                            newList.append(v);
+                        }
+                    }
                     mapList = newList;
                     buildCards(mapList, searchEdit->text());
                 });
@@ -1677,96 +2427,43 @@ void MapViewWidget::onSwitchMap()
 
             grid->addWidget(card, row, col);
             if (++col >= COLS) { col = 0; ++row; }
-
-            // Load thumbnail asynchronously
-            if (flag == "0") {
-                QString mname      = m.value("mapName").toString();
-                QString tilePath   = m.value("tilemapPath").toString("tilemap");
-                QString thumbUrl = AppConfig::instance().mapHost()
-                                   + mname + "_" + mid + "/" + tilePath + "/thumbnail.png";
-                ApiService::instance().downloadFile(thumbUrl,
-                    [thumbLbl, CARD_W](bool ok, const QByteArray &imgData) {
-                        if (!ok || imgData.isEmpty()) {
-                            thumbLbl->setText("无预览");
-                            return;
-                        }
-                        QPixmap pix;
-                        if (pix.loadFromData(imgData)) {
-                            thumbLbl->setPixmap(pix.scaled(CARD_W-12, 130,
-                                Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                            thumbLbl->setText("");
-                        } else {
-                            thumbLbl->setText("无预览");
-                        }
-                    });
-            } else {
-                thumbLbl->setText(flag == "3" ? "处理中..." : "错误");
-            }
         }
+
+        statsLabel->setText(QString("共 %1 张地图%2")
+                                .arg(list.size())
+                                .arg(filter.isEmpty() ? "" : QString(" (已筛选: %1)").arg(visibleCount)));
     };
 
-    // Load map list
-    ApiService::instance().listMapAll(QJsonObject{{"pageNum",1},{"pageSize",100}},
-        [&](int code, const QJsonObject &data) {
-            if (code != 200) return;
-            mapList = data.value("rows").toArray();
-            buildCards(mapList, "");
-        });
+    auto loadList = [&]() {
+        ApiService::instance().listMapAll(QJsonObject{{"pageNum",1},{"pageSize",100}},
+            [&](int code, const QJsonObject &data) {
+                if (code != 200) {
+                    statsLabel->setText("获取地图列表失败");
+                    return;
+                }
+                mapList = data.value("rows").toArray();
+                buildCards(mapList, searchEdit->text());
+            });
+    };
 
+    loadList();
+
+    connect(refreshListBtn, &QPushButton::clicked, this, loadList);
     connect(searchEdit, &QLineEdit::textChanged, this, [&](const QString &txt) {
         buildCards(mapList, txt);
     });
 
-    if (dlg.exec() == QDialog::Accepted && !selectedMapId.isEmpty() && selectedMapId != m_mapId) {
-        QString carId = m_robot.carId;
-        if (carId.isEmpty()) {
-            // 没有绑定设备，无需同步设备地图，直接本地加载预览
-            m_points = QJsonArray();
-            m_lines  = QJsonArray();
-            m_curves = QJsonArray();
-            m_charges = QJsonArray();
-            m_highPrecisionPoints = QJsonArray();
-            m_routeLoaded = false;
-            m_robot.posValid = false;
-            loadMapById(selectedMapId);
-            return;
-        }
-
-        // 先等待设备端确认地图切换成功，再执行本地加载逻辑，避免界面与设备实际地图不一致
-        auto *loading = new LoadingDialog("正在切换地图...", this);
-        loading->show();
-        ApiService::instance().getCar(carId, [this, selectedMapId, loading](int code, const QJsonObject &data) {
-            if (code != 200) {
-                loading->close();
-                loading->deleteLater();
-                QMessageBox::warning(this, "错误", "切换地图失败：无法获取设备信息");
-                return;
-            }
-            QJsonObject car = data.value("data").toObject(data);
-            car["mapId"] = selectedMapId;
-            // 必须刷新 updateTime 为当前时间 (与 Vue car/details.vue 的 submitForm 一致)。
-            // 否则会把 getCar 取回的旧 updateTime 原样传回去，设备端据此计算消息时间差，
-            // 一旦超过 40 秒阈值就会报 "crud 消息超时"。
-            car["updateTime"] = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
-            ApiService::instance().updateCar(car, [this, selectedMapId, loading](int code2, const QJsonObject &) {
-                loading->close();
-                loading->deleteLater();
-                if (code2 != 200) {
-                    QMessageBox::warning(this, "错误", "切换地图失败，设备未确认");
-                    return;
-                }
-                // 设备确认切换成功后才更新本地预览
-                m_points = QJsonArray();
-                m_lines  = QJsonArray();
-                m_curves = QJsonArray();
-                m_charges = QJsonArray();
-                m_highPrecisionPoints = QJsonArray();
-                m_routeLoaded = false;
-                m_robot.posValid = false;
-                loadMapById(selectedMapId);
-                Toast::success(this, "地图切换成功");
-            });
-        });
+    if (dlg.exec() == QDialog::Accepted && !selectedMapId.isEmpty()) {
+        // 成功切换地图后，清理旧的路径和点位，刷新加载新地图
+        m_points = QJsonArray();
+        m_lines  = QJsonArray();
+        m_curves = QJsonArray();
+        m_charges = QJsonArray();
+        m_highPrecisionPoints = QJsonArray();
+        m_routeLoaded = false;
+        m_robot.posValid = false;
+        loadMapById(selectedMapId, selectedMapName);
+        Toast::success(this, "地图切换成功");
     }
 }
 
@@ -1792,6 +2489,22 @@ void MapViewWidget::onRelocalize()
         m_relocBtn->setStyleSheet(kToolBtnStyle);
         setStatus("就绪");
     }
+}
+
+void MapViewWidget::onShowRobotStatus()
+{
+    if (!m_statusDialog) {
+        m_statusDialog = new RobotStatusDialog(this);
+    }
+    m_statusDialog->setMapInfo(m_mapId, m_mapName);
+    m_statusDialog->updateFromRobotState(m_robot.carId, m_robot.wx, m_robot.wy, m_robot.yawRad,
+                                         m_robot.speed, m_robot.battery, m_robot.covScore, m_robot.posValid);
+    if (!m_lastObstaclePayload.isEmpty()) {
+        m_statusDialog->onMqttMessage(m_lastObstacleTopic, m_lastObstaclePayload);
+    }
+    m_statusDialog->show();
+    m_statusDialog->raise();
+    m_statusDialog->activateWindow();
 }
 
 void MapViewWidget::onEditRoute()
@@ -1888,19 +2601,69 @@ void MapViewWidget::setStatus(const QString &msg, const QString &color)
 
 void MapViewWidget::initMqtt()
 {
+    QString serverIp = AppConfig::instance().serverIp();
+    if (serverIp.isEmpty()) return;
+
+    disconnectMqtt();
+
+    if (!MqttService::instance().isConnected()) {
+        MqttService::instance().connectToHost(serverIp, 1883);
+    }
+
+    auto cb = [this](const QString &t, const QByteArray &p) {
+        onMqttMessage(t, p);
+    };
+
+    // 订阅标准 /info 及 /status 话题
+    MqttService::instance().subscribeTopic("/info", 0, cb);
+    MqttService::instance().subscribeTopic("info", 0, cb);
+    MqttService::instance().subscribeTopic("/rob/info", 0, cb);
+    MqttService::instance().subscribeTopic("/status", 0, cb);
+    MqttService::instance().subscribeTopic("status", 0, cb);
+    MqttService::instance().subscribeTopic("/rob/status", 0, cb);
+
+    // 若绑定了 carId，也订阅特定设备话题
     QString carId = AppConfig::instance().agvId();
-    if (carId.isEmpty()) return;
-    if (!MqttService::instance().isConnected())
-        MqttService::instance().connectToHost(AppConfig::instance().serverIp(), 1883);
+    if (carId.isEmpty()) carId = "1";
     m_robot.carId = carId;
-    MqttService::instance().subscribeTopic(
-        QString("/rob/%1/info").arg(carId), 0,
-        [this](const QString &t, const QByteArray &p) { onMqttMessage(t, p); });
+    MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, cb);
+    MqttService::instance().subscribeTopic(QString("/rob/%1/status").arg(carId), 0, cb);
+    MqttService::instance().subscribeTopic(QString("/rob/%1/carto_pose").arg(carId), 0, cb);
+
+    // 订阅最近障碍物话题 (包含带前缀、空格与下划线多种格式)
+    MqttService::instance().subscribeTopic(QString("/rob/%1/nearest obstacle").arg(carId), 0, cb);
+    MqttService::instance().subscribeTopic(QString("/rob/%1/nearest_obstacle").arg(carId), 0, cb);
+    MqttService::instance().subscribeTopic(QString(":/rob/%1/nearest obstacle").arg(carId), 0, cb);
+    MqttService::instance().subscribeTopic(QString(":/rob/%1/nearest_obstacle").arg(carId), 0, cb);
+    MqttService::instance().subscribeTopic("/rob/1/nearest obstacle", 0, cb);
+    MqttService::instance().subscribeTopic("/rob/1/nearest_obstacle", 0, cb);
+    MqttService::instance().subscribeTopic(":/rob/1/nearest obstacle", 0, cb);
+    MqttService::instance().subscribeTopic(":/rob/1/nearest_obstacle", 0, cb);
+    MqttService::instance().subscribeTopic("/nearest obstacle", 0, cb);
+    MqttService::instance().subscribeTopic("/nearest_obstacle", 0, cb);
 }
 
 void MapViewWidget::disconnectMqtt()
 {
+    MqttService::instance().unsubscribeTopic("/info");
+    MqttService::instance().unsubscribeTopic("info");
+    MqttService::instance().unsubscribeTopic("/rob/info");
+    MqttService::instance().unsubscribeTopic("/status");
+    MqttService::instance().unsubscribeTopic("status");
+    MqttService::instance().unsubscribeTopic("/rob/status");
     QString carId = AppConfig::instance().agvId();
-    if (!carId.isEmpty())
-        MqttService::instance().unsubscribeTopic(QString("/rob/%1/info").arg(carId));
+    if (carId.isEmpty()) carId = "1";
+    MqttService::instance().unsubscribeTopic(QString("/rob/%1/info").arg(carId));
+    MqttService::instance().unsubscribeTopic(QString("/rob/%1/status").arg(carId));
+    MqttService::instance().unsubscribeTopic(QString("/rob/%1/carto_pose").arg(carId));
+    MqttService::instance().unsubscribeTopic(QString("/rob/%1/nearest obstacle").arg(carId));
+    MqttService::instance().unsubscribeTopic(QString("/rob/%1/nearest_obstacle").arg(carId));
+    MqttService::instance().unsubscribeTopic(QString(":/rob/%1/nearest obstacle").arg(carId));
+    MqttService::instance().unsubscribeTopic(QString(":/rob/%1/nearest_obstacle").arg(carId));
+    MqttService::instance().unsubscribeTopic("/rob/1/nearest obstacle");
+    MqttService::instance().unsubscribeTopic("/rob/1/nearest_obstacle");
+    MqttService::instance().unsubscribeTopic(":/rob/1/nearest obstacle");
+    MqttService::instance().unsubscribeTopic(":/rob/1/nearest_obstacle");
+    MqttService::instance().unsubscribeTopic("/nearest obstacle");
+    MqttService::instance().unsubscribeTopic("/nearest_obstacle");
 }

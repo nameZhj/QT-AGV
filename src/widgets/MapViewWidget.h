@@ -16,6 +16,8 @@
 #include <QPixmap>
 #include <cmath>
 
+class RobotStatusDialog;
+
 // ── Ruler widget drawn as an overlay alongside the map view ──────────────────
 class RulerWidget : public QWidget
 {
@@ -64,6 +66,7 @@ private slots:
     void onCreateMap();
     void onUploadMap();
     void onUploadSmap();
+    void onRefreshMap();
     void onSwitchMap();
     void onRelocalize();
     void onEditRoute();
@@ -77,6 +80,7 @@ private slots:
     void onSceneMoved(const QPointF &scenePos);
     void onSceneReleased(const QPointF &scenePos, Qt::MouseButton btn);
     void onResetView();
+    void onShowRobotStatus();
     void onToggleNavMode();
 
 private:
@@ -85,7 +89,12 @@ private:
     void setupRightPanel(QWidget *parent);
 
     void loadCurrentCarMap();
-    void loadMapById(const QString &mapId);
+    void loadMapById(const QString &mapId, const QString &mapName = QString());
+    bool findLocalMapFiles(const QString &dirPath, QString &outYamlPath, QString &outPgmPath,
+                           const QString &preferredMapName = QString(),
+                           const QString &preferredYamlName = QString(),
+                           const QString &preferredPgmName = QString());
+    bool loadMapFromLocalFiles(const QString &yamlPath, const QString &pgmPath);
     void applyMapData(const QJsonObject &mapInfo);
     void loadMapImage();
     void loadMapFromPgm(double apiOriginX, double apiOriginY, double apiPhysW, double apiPhysH);
@@ -121,7 +130,7 @@ private:
 
     // Robot / car state
     struct RobotState {
-        QString carId, carName;
+        QString carId = "1", carName;
         double wx = 0, wy = 0, yawRad = 0;
         double speed = 0, battery = -1, covScore = -1;
         bool posValid = false;
@@ -146,11 +155,16 @@ private:
     QToolButton *m_createMapBtn = nullptr;
     QToolButton *m_uploadMapBtn = nullptr;
     QToolButton *m_uploadSmapBtn = nullptr;
+    QToolButton *m_refreshBtn    = nullptr;
     QToolButton *m_switchMapBtn = nullptr;
     QToolButton *m_relocBtn     = nullptr;
     QToolButton *m_navModeBtn   = nullptr;
+    QToolButton *m_statusBtn    = nullptr;
     QToolButton *m_resetViewBtn = nullptr;
     QPushButton *m_gridBtn      = nullptr;
+    RobotStatusDialog *m_statusDialog = nullptr;
+    QByteArray  m_lastObstaclePayload;
+    QString     m_lastObstacleTopic;
 
     // Navigation mode
     bool        m_navMode          = false;
@@ -180,6 +194,11 @@ private:
     QLabel *m_infoSizeLabel   = nullptr;
     QLabel *m_infoResLabel    = nullptr;
     QLabel *m_infoOriginLabel = nullptr;
+
+    // 请求去重与防抖节流
+    bool    m_isLoadingCar  = false;
+    QString m_loadingMapId;
+    qint64  m_lastRefreshMs = 0;
 };
 
 #endif // MAPVIEWWIDGET_H

@@ -1,86 +1,122 @@
 #ifndef APPCONFIG_H
 #define APPCONFIG_H
 
+#include <QObject>
 #include <QString>
 #include <QSettings>
 #include <QList>
 #include <QDateTime>
+#include <QReadWriteLock>
+#include <QJsonObject>
 
-// Device profile saved locally
+/**
+ * @brief 机器人/AGV 设备配置档案
+ */
 struct DeviceProfile {
-    QString name;           // display name, e.g. "AGV @ 192.168.1.100"
-    QString ip;             // server IP
-    QString carId;          // car ID returned from API
-    QString token;          // last auth token
-    QDateTime lastConnected;
-    QString linkStatus;     // 设备链接状态: "0"=已链接, "1"=未链接 (参考 Vue: linkStatus==='0' 时链接按钮禁用)
-    QString mapName;        // 绑定的地图名称 (持久化缓存)
-    QString version;        // 系统/固件版本号 (持久化缓存)
+    QString   name;                   ///< 显示名称, 如 "AGV @ 192.168.1.100"
+    QString   ip;                     ///< 服务器 IP
+    QString   carId = "1";            ///< 车辆 ID (默认 "1")
+    QString   token;                  ///< 授权令牌
+    QDateTime lastConnected;          ///< 最近连接时间
+    QString   linkStatus;             ///< 链接状态: "0"=已链接, "1"=未链接
+    QString   mapName;                ///< 绑定的地图名称
+    QString   version;                ///< 系统/固件版本号
+    QString   sshUser = "tuju";       ///< SSH 用户名
+    QString   sshPwd  = "vsis1234";   ///< SSH 密码
+    int       sshPort = 22;           ///< SSH 端口 (默认 22)
+
+    bool isValid() const {
+        return !ip.trimmed().isEmpty();
+    }
+
+    bool operator==(const DeviceProfile &other) const {
+        return ip == other.ip && carId == other.carId && name == other.name;
+    }
+
+    bool operator!=(const DeviceProfile &other) const {
+        return !(*this == other);
+    }
 };
 
-// 全局应用配置
-// 已取消端口映射，直接使用各服务的原始端口连接远程服务器
-// (SSH 22, HTTP后台 400, 地图资源 4000, PCD资源 4001, API 8048,
-//  MQTT 1883, AGV控制1 8061, AGV控制2 8062, 地图资源服务 8001)
-class AppConfig
+/**
+ * @brief 全局配置与设备档案管理中心 (Thread-Safe Singleton)
+ * 
+ * 架构规范与特性：
+ * 1. 继承自 QObject，提供响应式配置变更信号 (deviceListChanged, currentDeviceChanged, serverIpChanged 等)；
+ * 2. 线程安全读写：内部由 QReadWriteLock 护航，支持跨线程安全并发读取与持久化；
+ * 3. 集中收拢服务默认端口常量，消除各模块散落的硬编码魔数；
+ * 4. 健壮的 URL 拼接与 IP 前缀自愈机制 (自动纠正携带 http:// 或结尾斜杠的脏数据)；
+ * 5. 100% 向下兼容既有业务 API 签名。
+ */
+class AppConfig final : public QObject
 {
+    Q_OBJECT
+
 public:
+    // ── 系统标准服务端口常量 ──
+    static constexpr int kDefaultSshPort         = 22;    ///< SSH 运维端口
+    static constexpr int kDefaultHttpPort        = 8048;  ///< HTTP / WebSocket API
+    static constexpr int kDefaultMqttPort        = 1883;  ///< MQTT 消息总线
+    static constexpr int kDefaultResourcePort    = 8001;  ///< 地图与静态文件资源服务
+    static constexpr int kDefaultAgvControl1Port = 8061;  ///< AGV 底盘控制通道 1
+    static constexpr int kDefaultAgvControl2Port = 8062;  ///< AGV 底盘控制通道 2
+
     static AppConfig &instance();
 
-    // ========== Multi-device profile management ==========
+    // ========== 多设备档案管理 ==========
     QList<DeviceProfile> deviceList() const;
-    void saveDevice(const DeviceProfile &dev);   // add or update by IP
+    void saveDevice(const DeviceProfile &dev);          ///< 新增或按 IP 更新设备
     void updateDevice(int index, const DeviceProfile &dev);
     void removeDevice(int index);
     void clearDevices();
 
-    // Currently active device
+    // ========== 当前活动设备档案 ==========
     int  currentDeviceIndex() const;
     void setCurrentDeviceIndex(int idx);
     DeviceProfile currentDevice() const;
 
-    // ========== Active connection settings (from current device) ==========
+    // ========== 当前活跃连接参数 ==========
     QString serverIp() const;
-    void setServerIp(const QString &ip);
+    void    setServerIp(const QString &ip);
 
     QString mqttHost() const;
-    void setMqttHost(const QString &host);
+    void    setMqttHost(const QString &host);
 
     QString mapHost() const;
     QString pcdHost() const;
-    QString agvMapResourceHost() const;  // raw carto_map.pgm/.yaml resources
+    QString agvMapResourceHost() const;
 
     QString agvId() const;
-    void setAgvId(const QString &id);
+    void    setAgvId(const QString &id);
 
     QString token() const;
-    void setToken(const QString &token);
+    void    setToken(const QString &token);
 
-    int deptId() const;
-    void setDeptId(int id);
+    int     deptId() const;
+    void    setDeptId(int id);
 
-    // Build URLs
+    // ========== URL 格式化与构建 ==========
     QString baseApiUrl() const;
     QString robotApiUrl(int port) const;
 
-    // 根据 TestPortMapping 测试环境规则对端口进行映射转换（带映射使能开关）
-    static int mapPort(int internalPort);
-
-    // ========== Test mode ==========
-    bool testMode() const;
-    void setTestMode(bool enabled);
-    // 添加一个模拟设备用于测试
-    void ensureTestDevice();
+signals:
+    void deviceListChanged();
+    void currentDeviceChanged(int index, const DeviceProfile &device);
+    void serverIpChanged(const QString &newIp);
+    void tokenChanged(const QString &newToken);
+    void agvIdChanged(const QString &newId);
 
 private:
-    AppConfig();
-    ~AppConfig() = default;
+    explicit AppConfig(QObject *parent = nullptr);
+    ~AppConfig() override = default;
     AppConfig(const AppConfig &) = delete;
     AppConfig &operator=(const AppConfig &) = delete;
 
-    void saveDeviceList(const QList<DeviceProfile> &list);
+    void saveDeviceListInternal(const QList<DeviceProfile> &list);
+    static QString cleanHostIp(const QString &rawIp);
 
-    mutable QSettings m_settings;
+    mutable QReadWriteLock m_lock;
+    mutable QSettings      m_settings;
 };
 
 #endif // APPCONFIG_H

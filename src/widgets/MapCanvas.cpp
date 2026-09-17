@@ -382,14 +382,19 @@ void MapCanvas::initMqtt()
         MqttService::instance().connectToHost(AppConfig::instance().serverIp(), 1883);
     }
     
-    QString topic = QString("/rob/%1/info").arg(m_trackedCarId);
-    MqttService::instance().subscribeTopic(topic, 0, [this](const QString &t, const QByteArray &p) {
+    QString carId = m_trackedCarId.trimmed().isEmpty() ? "1" : m_trackedCarId.trimmed();
+    m_trackedCarId = carId;
+    MqttService::instance().subscribeTopic("/info", 0, [this](const QString &t, const QByteArray &p) { onMqttMessage(t, p); });
+    MqttService::instance().subscribeTopic("info", 0, [this](const QString &t, const QByteArray &p) { onMqttMessage(t, p); });
+    MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, [this](const QString &t, const QByteArray &p) {
         onMqttMessage(t, p);
     });
 }
 
 void MapCanvas::disconnectMqtt()
 {
+    MqttService::instance().unsubscribeTopic("/info");
+    MqttService::instance().unsubscribeTopic("info");
     if (!m_trackedCarId.isEmpty() && MqttService::instance().isConnected()) {
         QString topic = QString("/rob/%1/info").arg(m_trackedCarId);
         MqttService::instance().unsubscribeTopic(topic);
@@ -417,6 +422,7 @@ void MapCanvas::onMqttMessage(const QString &topic, const QByteArray &payload)
     else if (d.contains("carId")) carId = QString::number(d.value("carId").toInt()); // sometimes it's int
     
     if (carId.isEmpty()) carId = m_trackedCarId;
+    if (carId.isEmpty()) carId = "1";
     
     RobotInfo &info = m_carInfos[carId];
     info.carId = carId;

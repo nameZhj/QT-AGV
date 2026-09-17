@@ -1108,11 +1108,8 @@ void TaskChainWidget::loadMapStations()
     QString carId = AppConfig::instance().agvId();
     if (carId.isEmpty()) carId = AppConfig::instance().currentDevice().carId;
 
-    auto doFetchRoute = [this](const QString &mapId) {
-        QJsonObject query;
-        if (!mapId.isEmpty()) query["mapId"] = mapId;
-
-        ApiService::instance().loadEditedMap(query, [this](int code, const QJsonObject &data) {
+    auto doFetchRoute = [this](const QString &/*mapId*/) {
+        ApiService::instance().loadEditedMap([this](int code, const QJsonObject &data) {
             if (code != 200) return;
             m_stations.clear();
 

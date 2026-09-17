@@ -379,12 +379,6 @@ MainWindow::MainWindow(QWidget *parent)
 void MainWindow::showEvent(QShowEvent *event)
 {
     QMainWindow::showEvent(event);
-    // 主窗口显示后，强制刷新首屏（地图管理 - 地图预览）的数据与设备信息
-    QTimer::singleShot(50, this, [this]() {
-        if (m_mapPage) {
-            m_mapPage->refreshData();
-        }
-    });
 }
 
 void MainWindow::setupGlobalStyle()
@@ -502,13 +496,7 @@ void MainWindow::initPages()
         highlightTabForPageIndex(1);
     });
 
-    connect(m_stack, &QStackedWidget::currentChanged, this, [this](int idx) {
-        if (m_stack->widget(idx) == m_mapPage) {
-            m_mapPage->refreshData();
-        } else if (m_stack->widget(idx) == m_taskPage) {
-            m_taskPage->refreshData();
-        }
-    });
+    connect(m_stack, &QStackedWidget::currentChanged, this, &MainWindow::refreshCurrentPage);
 
     m_stack->setCurrentIndex(1);
 }
@@ -556,6 +544,12 @@ void MainWindow::setupStatusBar()
     m_statusTimer = new QTimer(this);
     connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::updateStatusBar);
     m_statusTimer->start(3000);
+
+    // 实时同步 MQTT 状态，当连接建立或变化时立即响应，避免需要点击才显示已连接
+    connect(&MqttService::instance(), &MqttService::connected,    this, &MainWindow::updateStatusBar);
+    connect(&MqttService::instance(), &MqttService::disconnected, this, &MainWindow::updateStatusBar);
+    connect(&MqttService::instance(), &MqttService::stateChanged, this, &MainWindow::updateStatusBar);
+
     updateStatusBar();
 
     // 同步 TeleopController 状态到按钮（防止外部 setActive 触发后按钮不同步）
@@ -568,12 +562,9 @@ void MainWindow::connectServices()
     QString ip = AppConfig::instance().serverIp();
     if (ip.isEmpty()) return;
 
-    // 测试模式跳过 MQTT/WebSocket 连接
-    if (AppConfig::instance().testMode()) return;
+    MqttService::instance().connectToHost(ip, 1883);
 
-    MqttService::instance().connectToHost(ip, AppConfig::mapPort(1883));
-
-    QString wsUrl = QString("ws://%1:%2/websocket/message").arg(ip).arg(AppConfig::mapPort(8048));
+    QString wsUrl = QString("ws://%1:8048/websocket/message").arg(ip);
     WebSocketService::instance().connectToServer(wsUrl);
 }
 
@@ -607,8 +598,11 @@ void MainWindow::onSectionChanged(int index)
             return;
         }
     }
-    m_stack->setCurrentIndex(index);
-    refreshCurrentPage(index);
+    if (m_stack->currentIndex() == index) {
+        refreshCurrentPage(index);
+    } else {
+        m_stack->setCurrentIndex(index);
+    }
 }
 
 // 每次切换主菜单时刷新当前页面数据，保证数据是最新的
@@ -731,8 +725,13 @@ void MainWindow::onChangeDevice()
         }
         m_dynamicPages.clear();
 
-        // Refresh first page
-        m_stack->setCurrentIndex(0);
+        // 切换设备后返回默认主页：地图与控制 (pageIndex 1) 并同步高亮导航栏与刷新数据
+        highlightTabForPageIndex(1);
+        if (m_stack->currentIndex() == 1) {
+            if (m_mapPage) m_mapPage->refreshData();
+        } else {
+            m_stack->setCurrentIndex(1);
+        }
     }
 }
 
@@ -746,19 +745,15 @@ void MainWindow::onAbout()
 
 void MainWindow::updateStatusBar()
 {
-    // 测试模式状态栏
-    if (AppConfig::instance().testMode()) {
-        m_sbConn->setText("● TEST MODE");
-        m_sbConn->setStyleSheet("color:#f0a060; background:transparent; border-right:1px solid #2d3340;");
-        return;
-    }
-
-    bool mqttOk = MqttService::instance().isConnected();
-    if (mqttOk) {
+    QMqttClient::ClientState st = MqttService::instance().state();
+    if (st == QMqttClient::Connected) {
         m_sbConn->setText("● MQTT: 已连接");
         m_sbConn->setStyleSheet("color:#5cb85c; background:transparent; border-right:1px solid #2d3340;");
+    } else if (st == QMqttClient::Connecting) {
+        m_sbConn->setText("● MQTT: 连接中...");
+        m_sbConn->setStyleSheet("color:#ecc94b; background:transparent; border-right:1px solid #2d3340;");
     } else {
-        m_sbConn->setText("○ MQTT: 断开");
+        m_sbConn->setText("○ MQTT: 未连接");
         m_sbConn->setStyleSheet("color:#e05555; background:transparent; border-right:1px solid #2d3340;");
     }
 }
@@ -774,6 +769,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::onMqttStatusClicked()
 {
+    updateStatusBar();
     if (MqttService::instance().isConnected()) {
         Toast::info(this, "MQTT 已连接");
         return;
@@ -785,10 +781,6 @@ void MainWindow::onMqttStatusClicked()
         return;
     }
 
-    // 不再手动调用 disconnectFromHost() 再 connectToHost()。
-    // 在 Connecting 状态下 disconnectFromHost 会触发 aboutToClose ->
-    // transportConnectionClosed -> TransportInvalid 错误。
-    // MqttService::connectToHost 内部会处理非 Disconnected 状态。
     connectServices();
     updateStatusBar();
     Toast::info(this, "正在重新连接 MQTT...");

@@ -11,12 +11,25 @@
 #include <QGridLayout>
 #include <QMqttClient>
 #include <QProgressDialog>
+#include <QGraphicsDropShadowEffect>
 #include "AppConfig.h"
 
 class QTimer;
 
+class BatteryBadge : public QWidget
+{
+public:
+    explicit BatteryBadge(QWidget *parent = nullptr);
+    void setBattery(int level);
+    int  battery() const { return m_level; }
+protected:
+    void paintEvent(QPaintEvent *event) override;
+private:
+    int m_level = -1;
+};
+
 // ── Single device card widget ────────────────────────────────────────────────
-class DeviceCard : public QWidget
+class DeviceCard : public QFrame
 {
     Q_OBJECT
 public:
@@ -26,12 +39,18 @@ public:
     void setBusy(bool busy);
     // 异步更新链接状态 UI（true=已链接，false=未链接）
     void setLinkStatus(bool linked);
+    // 主动断开设备连接与 MQTT
+    void disconnectDevice();
 
 signals:
-    void connectClicked(int index);
+    void doubleClicked(int index);
+    void disconnectClicked(int index);
     void removeClicked(int index);
-    void linkClicked(int index);     // 链接设备 (未链接状态下显示)
     void networkConfigClicked(int index); // 远程网络配置 (SSH)
+
+protected:
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void startMqttMonitor(const QString &ip, const QString &carId);
@@ -40,19 +59,38 @@ private:
 
     int m_index = 0;
     DeviceProfile m_profile;
-    QPushButton *m_connectBtn  = nullptr;
-    QPushButton *m_linkBtn     = nullptr;   // 链接设备按钮 (未链接时显示)
-    QLabel      *m_warnLabel   = nullptr;   // "⚠ 未链接" 警告标签
-    QLabel      *m_onlineDot   = nullptr;
-    QLabel      *m_onlineLabel = nullptr;
-    QLabel      *m_nameLabel   = nullptr;   // 设备名称标签
-    QLabel      *m_mapLabel    = nullptr;   // 绑定的地图名称标签
-    QLabel      *m_verLabel    = nullptr;   // 版本号标签
-    QHBoxLayout *m_footerLay   = nullptr;   // footer 布局，供 setLinkStatus 动态调整
+
+    QWidget      *m_hdrWidget    = nullptr;
+    QLabel       *m_onlineDot   = nullptr;
+    QLabel       *m_onlineLabel = nullptr;
+    QLabel       *m_robLabel    = nullptr;
+    BatteryBadge *m_batteryBadge = nullptr; // 顶部电池电量 (例如 47)
+    QPushButton  *m_configBtn   = nullptr;   // 顶部配置滑块图标 🎛️
+    QLabel       *m_robotIcon   = nullptr;   // 机器人图标
+    QLabel       *m_ipLabel     = nullptr;   // IP 标签
+    QLabel       *m_typeTag     = nullptr;   // 机器人类型 (固定写死：潜伏底盘)
+    QLabel       *m_confBadge   = nullptr;   // 位置置信度 (橙色底色块，如 0.35)
+    QLabel       *m_latencyLabel= nullptr;   // 通讯延迟 (亮绿色，如 9ms)
+    QLabel       *m_mapLabel    = nullptr;   // 地图: qlyy
+    QLabel       *m_nameLabel   = nullptr;   // 名称: AMB-01
+    QLabel       *m_remarkLabel = nullptr;   // 备注:
+    QLabel       *m_verLabel    = nullptr;   // 版本: v2.1.1
+    QLabel       *m_fwVerLabel  = nullptr;   // 固件版本: v2.1.1
+    QLabel       *m_baseIcon    = nullptr;   // 底部基站/WiFi 图标
+    QPushButton  *m_syncBtn     = nullptr;   // 底部左侧 已同步 按钮
+    QPushButton  *m_connectBtn  = nullptr;   // 底部右侧 断开连接 / 进入控制 按钮
+    QGraphicsDropShadowEffect *m_shadow = nullptr; // 整卡立体投影效果
+
+    double       m_confidence   = -1.0;
+    int          m_battery      = -1;
+    int          m_latency      = -1;
+    bool         m_isOnline     = false;
+    QString      m_fwVersion;
+    QString      m_remark;
+    QTimer      *m_latencyTimer = nullptr;
 
     // 自动连接该设备专属 MQTT，持续订阅 /rob/{carId}/info 实时更新与缓存设备信息
     QMqttClient *m_mqttClient  = nullptr;
-    QTimer      *m_heartbeatTimer = nullptr;
 };
 
 // ── Main device-manager dialog ────────────────────────────────────────────────
@@ -66,9 +104,9 @@ private slots:
     void onAddDevice();
     void onConfirmAdd();
     void onCancelAdd();
-    void onConnectCard(int index);
+    void onCardDoubleClicked(int index);
+    void onDisconnectCard(int index);
     void onRemoveCard(int index);
-    void onLinkCard(int index);     // 重新链接未链接的设备
     void onNetworkConfig(int index); // 远程网络配置 (SSH)
     void onRefreshAll();
 
@@ -80,8 +118,6 @@ private:
     void refreshCards();
     void connectDevice(int index);
     void setStatus(const QString &msg, const QString &color = "#f0a060");
-    // 轮询 getCar 检查 linkStatus 是否为 '1' (已链接), 最多尝试 maxAttempts 次
-    void checkLinkStatus(const QString &carId, const QString &ip, const QString &carName, int attempt);
 
     QStackedWidget *m_stack           = nullptr;
     QWidget        *m_mainPanel       = nullptr;
@@ -99,8 +135,7 @@ private:
     QPushButton    *m_confirmBtn      = nullptr;
     QPushButton    *m_cancelBtn       = nullptr;
 
-    QProgressDialog *m_linkProgress   = nullptr;  // 链接状态轮询进度弹窗
-    bool             m_linkCancelled   = false;    // 用户是否取消了链接
+
 
     QList<DeviceCard *> m_cards;
 };

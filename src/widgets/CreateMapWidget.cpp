@@ -22,27 +22,72 @@
 #include <QFrame>
 
 // 检查 API 返回是否报错: msg 值为 "failed" (字符串) 或 false (布尔) 时表示失败
-// 返回 error_info 字段中的错误信息, 如果没有则返回空字符串
-// 参考 Vue: 后端返回 {code: 200, msg: "failed"/false, error_info: "..."}
+// 校验接口返回是否有错误，如果有则返回详细错误提示，成功则返回空字符串
+// 支持校验格式:
+// 1. 根级: {code: 200, msg: "failed"/false, error_info: "..."}
+// 2. data嵌套: {data: {msg: "failed", info: "建图失败，已启动导航模式", error_info: "建图进程 启动失败: 未知错误"}}
 static QString checkApiError(const QJsonObject &res)
 {
-    QJsonValue msgVal = res.value("msg");
+    QJsonObject dataObj;
+    if (res.value("data").isObject()) {
+        dataObj = res.value("data").toObject();
+    }
+
+    auto isFailedVal = [](const QJsonValue &v) -> bool {
+        if (v.isString()) {
+            QString s = v.toString().trimmed();
+            return (s.compare("failed", Qt::CaseInsensitive) == 0 ||
+                    s.compare("error", Qt::CaseInsensitive) == 0 ||
+                    s.compare("fail", Qt::CaseInsensitive) == 0);
+        } else if (v.isBool()) {
+            return !v.toBool(); // false 表示失败
+        }
+        return false;
+    };
+
     bool isFailed = false;
-    if (msgVal.isString())
-        isFailed = (msgVal.toString().compare("failed", Qt::CaseInsensitive) == 0);
-    else if (msgVal.isBool())
-        isFailed = !msgVal.toBool();   // false 表示失败
+    // 检查根级 msg 以及 data 内部的 msg 是否为 failed/false
+    if (isFailedVal(res.value("msg")) || isFailedVal(dataObj.value("msg"))) {
+        isFailed = true;
+    }
+
+    // 检查 success 字段 (如有)
+    if (res.contains("success") && !res.value("success").toBool()) isFailed = true;
+    if (dataObj.contains("success") && !dataObj.value("success").toBool()) isFailed = true;
+
+    // 检查 error_info 是否非空
+    QString errInfoStr;
+    if (dataObj.value("error_info").isString()) {
+        errInfoStr = dataObj.value("error_info").toString().trimmed();
+    } else if (res.value("error_info").isString()) {
+        errInfoStr = res.value("error_info").toString().trimmed();
+    }
+    if (!errInfoStr.isEmpty() && errInfoStr.compare("none", Qt::CaseInsensitive) != 0) {
+        isFailed = true;
+    }
 
     if (!isFailed) return QString();
 
-    // 从 error_info 获取错误信息
-    QJsonValue errVal = res.value("error_info");
-    if (errVal.isString()) return errVal.toString();
-    if (errVal.isBool())   return errVal.toBool() ? "true" : "false";
-    // error_info 可能在 data 对象内
-    QJsonObject data = res.value("data").toObject();
-    QJsonValue dataErr = data.value("error_info");
-    if (dataErr.isString()) return dataErr.toString();
+    // 提取 info 提示
+    QString infoStr;
+    if (dataObj.value("info").isString()) {
+        infoStr = dataObj.value("info").toString().trimmed();
+    } else if (res.value("info").isString()) {
+        infoStr = res.value("info").toString().trimmed();
+    }
+
+    // 组合完整的错误提示: "info: error_info"
+    if (!infoStr.isEmpty() && !errInfoStr.isEmpty() && infoStr != errInfoStr) {
+        return QString("%1: %2").arg(infoStr, errInfoStr);
+    }
+    if (!errInfoStr.isEmpty()) return errInfoStr;
+    if (!infoStr.isEmpty())    return infoStr;
+
+    // 尝试 message / msg 字段
+    QString msgStr = res.value("message").toString().trimmed();
+    if (msgStr.isEmpty()) msgStr = dataObj.value("message").toString().trimmed();
+    if (!msgStr.isEmpty()) return msgStr;
+
     return QStringLiteral("操作失败");
 }
 

@@ -418,9 +418,7 @@ void MapShowWidget::loadMapData()
 
 void MapShowWidget::loadRouteData()
 {
-    QJsonObject query;
-    query["mapId"] = m_mapId;
-    ApiService::instance().loadEditedMap(query, [this](int code, const QJsonObject &data) {
+    ApiService::instance().loadEditedMap([this](int code, const QJsonObject &data) {
         if (code != 200) return;
         m_points = QJsonArray();
         m_lines  = QJsonArray();
@@ -881,15 +879,21 @@ void MapShowWidget::updateCarPosition(const QString &carId, double x, double y, 
 
 void MapShowWidget::initMqtt()
 {
+    auto infoCb = [this](const QString &t, const QByteArray &p) {
+        onMqttMessage(t, p);
+    };
+
+    // 订阅标准 /info 话题
+    MqttService::instance().subscribeTopic("/info", 0, infoCb);
+    MqttService::instance().subscribeTopic("info", 0, infoCb);
+    MqttService::instance().subscribeTopic("/rob/info", 0, infoCb);
+
     // 订阅所有设备位置信息 (对应 Vue: /rob/{carId}/info)
     for (const auto &item : m_carList) {
         QJsonObject car = item.toObject();
         QString carId = jsonIdStr(car.value("carId"));
         QString topic = QString("/rob/%1/info").arg(carId);
-        MqttService::instance().subscribeTopic(topic, 0,
-            [this, carId](const QString &, const QByteArray &payload) {
-                onMqttMessage(QString("/rob/%1/info").arg(carId), payload);
-            });
+        MqttService::instance().subscribeTopic(topic, 0, infoCb);
     }
 
     // 订阅设备在线状态 (对应 Vue: /rob/online)
@@ -912,6 +916,9 @@ void MapShowWidget::initMqtt()
 
 void MapShowWidget::disconnectMqtt()
 {
+    MqttService::instance().unsubscribeTopic("/info");
+    MqttService::instance().unsubscribeTopic("info");
+    MqttService::instance().unsubscribeTopic("/rob/info");
     for (const auto &item : m_carList) {
         QJsonObject car = item.toObject();
         QString carId = jsonIdStr(car.value("carId"));
@@ -927,36 +934,67 @@ void MapShowWidget::onMqttMessage(const QString &topic, const QByteArray &payloa
     if (err.error != QJsonParseError::NoError) return;
 
     QJsonObject data = doc.object();
+    QJsonObject dataObj = data.value("data").toObject();
+    QJsonObject poseObj = data.value("pose").toObject();
 
-    if (topic.contains("/info")) {
+    if (topic.contains("info")) {
         QString carId;
         // 从topic提取carId: /rob/{carId}/info
         QRegularExpression re("/rob/(.+)/info");
         QRegularExpressionMatch match = re.match(topic);
         if (match.hasMatch()) carId = match.captured(1);
 
-        if (!carId.isEmpty() && m_carInfos.contains(carId)) {
+        if (carId.isEmpty()) {
+            carId = jsonIdStr(data.value("carId"));
+            if (carId.isEmpty()) carId = jsonIdStr(data.value("car_id"));
+            if (carId.isEmpty() && !dataObj.isEmpty()) {
+                carId = jsonIdStr(dataObj.value("carId"));
+                if (carId.isEmpty()) carId = jsonIdStr(dataObj.value("car_id"));
+            }
+            if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+            if (carId.isEmpty() && m_carInfos.size() == 1) {
+                carId = m_carInfos.firstKey();
+            }
+        }
+
+        auto dv = [&](const QStringList &keys, double def = 0) -> double {
+            for (const QString &k : keys) {
+                if (data.contains(k)) {
+                    QJsonValue v = data.value(k);
+                    if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+                }
+                if (!dataObj.isEmpty() && dataObj.contains(k)) {
+                    QJsonValue v = dataObj.value(k);
+                    if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+                }
+                if (!poseObj.isEmpty() && poseObj.contains(k)) {
+                    QJsonValue v = poseObj.value(k);
+                    if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+                }
+            }
+            return def;
+        };
+
+        if (!carId.isEmpty()) {
+            if (!m_carInfos.contains(carId)) {
+                CarInfo newInfo;
+                newInfo.carId = carId;
+                newInfo.carName = data.value("carName").toString(carId);
+                m_carInfos[carId] = newInfo;
+            }
             CarInfo &info = m_carInfos[carId];
-            // MQTT /rob/{id}/info 字段使用下划线命名: car_x, car_y, car_yaw
-            info.x = data.value("car_x").toDouble();
-            info.y = data.value("car_y").toDouble();
-            info.angle = data.value("car_yaw").toDouble();
-            info.speed = data.value("speed").toDouble();
-            info.battery = data.value("battery").toDouble();
+            info.x = dv({"car_x", "carX", "x", "current_x", "posX"});
+            info.y = dv({"car_y", "carY", "y", "current_y", "posY"});
+            info.angle = dv({"car_yaw", "carYaw", "yaw", "angle", "theta"});
+            info.speed = dv({"speed", "linear_x", "linearX", "v"});
+            double rawBat = dv({"battery", "power", "bat", "soc"}, -1.0);
+            if (rawBat >= 0.0 && rawBat <= 1.0) {
+                info.battery = rawBat * 100.0;
+            } else {
+                info.battery = rawBat;
+            }
             info.status = data.value("status").toString();
             info.taskId = jsonIdStr(data.value("task_id"));
-
-            // 打印MQTT原始数据用于调试 (前5次)
-            static int mqttLogCount = 0;
-            if (mqttLogCount < 5) {
-                qDebug() << "===== MQTT /rob/" << carId << "/info =====";
-                qDebug() << "  car_x:" << info.x << "car_y:" << info.y
-                         << "car_yaw:" << info.angle;
-                qDebug() << "  battery:" << info.battery << "speed:" << info.speed;
-                QPointF sp = worldToScene(info.x, info.y);
-                qDebug() << "  -> scene: (" << sp.x() << "," << sp.y() << ")";
-                mqttLogCount++;
-            }
 
             // 更新地图位置
             updateCarPosition(carId, info.x, info.y, info.angle);
@@ -973,8 +1011,9 @@ void MapShowWidget::onMqttMessage(const QString &topic, const QByteArray &payloa
 
                 double cov = data.value("covariance_score").toDouble(-1);
                 if (cov >= 0) {
-                    m_covarianceLabel->setText(QString::number(cov, 'f', 1) + "%");
-                    if (cov <= 40) {
+                    double covVal = (cov > 1.0) ? cov / 100.0 : cov;
+                    m_covarianceLabel->setText(QString::number(covVal, 'f', 2));
+                    if (covVal <= 0.4) {
                         m_covarianceLabel->setStyleSheet("color: red;");
                     } else {
                         m_covarianceLabel->setStyleSheet("");

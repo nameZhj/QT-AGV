@@ -7,6 +7,7 @@
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
 #include "core/ToggleSwitch.h"
+#include <QPointer>
 #include <QPushButton>
 #include <QComboBox>
 #include <QLabel>
@@ -18,6 +19,7 @@
 #include <QSplitter>
 #include <QScrollArea>
 #include <QHeaderView>
+#include <QDirIterator>
 #include <QMessageBox>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsEllipseItem>
@@ -354,12 +356,17 @@ bool MapEditWidget::checkUnsavedChanges()
     box.addButton("取消", QMessageBox::RejectRole);
     box.exec();
     if (box.clickedButton() == saveBtn) {
-        onSaveMap();
-        return true;   // 保存是异步的，允许离开
+        onSaveMap([this](bool success) {
+            if (success) {
+                emit goBack();
+            }
+        });
+        return false;   // 异步保存进行中，阻止立即退出；保存成功后再在回调中 emit goBack
     } else if (box.clickedButton() == discardBtn) {
+        m_dirty = false;
         return true;   // 放弃修改，直接离开
     }
-    return false;       // 取消，不离开
+    return false;       // 取消，留在当前编辑页面
 }
 
 // ── UI Setup ──────────────────────────────────────────────────────────────────
@@ -523,7 +530,7 @@ void MapEditWidget::setupUI()
 
     m_saveBtn = topBtn("保存地图", "#2471a3");
     m_saveBtn->setToolTip(ttHtml("保存地图 (Ctrl+S)", "同时保存路网数据与修改后的栅格地图底图"));
-    connect(m_saveBtn, &QPushButton::clicked, this, &MapEditWidget::onSaveMap);
+    connect(m_saveBtn, &QPushButton::clicked, this, [this]() { onSaveMap(); });
     tl->addWidget(m_saveBtn);
 
     QPushButton *helpBtn = topBtn("帮助 (F1)", "#34495e");
@@ -1188,6 +1195,71 @@ void MapEditWidget::updateRulers()
 
 void MapEditWidget::loadMapData(std::function<void()> onDone)
 {
+    // 优先检查本地缓存 maps/{m_mapId}
+    QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + m_mapId;
+    QDirIterator yIt(localDir, QStringList() << "*.yaml" << "*.yml", QDir::Files, QDirIterator::Subdirectories);
+    QDirIterator pIt(localDir, QStringList() << "*.pgm", QDir::Files, QDirIterator::Subdirectories);
+    QString yPath, pPath;
+    while (yIt.hasNext()) {
+        QString f = yIt.next();
+        if (f.endsWith(".map.yaml", Qt::CaseInsensitive) || f.contains("carto_map", Qt::CaseInsensitive) || yPath.isEmpty()) {
+            yPath = f;
+        }
+    }
+    while (pIt.hasNext()) {
+        QString f = pIt.next();
+        if (f.endsWith(".map.pgm", Qt::CaseInsensitive) || f.contains("carto_map", Qt::CaseInsensitive) || pPath.isEmpty()) {
+            pPath = f;
+        }
+    }
+
+    if (!yPath.isEmpty() && !pPath.isEmpty() && QFileInfo(yPath).size() > 0 && QFileInfo(pPath).size() > 0) {
+        QFile yf(yPath);
+        if (yf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QString yamlText = QString::fromUtf8(yf.readAll());
+            yf.close();
+            double resolution = 0, originX = 0, originY = 0; bool negate = false;
+            if (MapPgmUtil::parseMapYaml(yamlText, resolution, originX, originY, negate) && resolution > 0) {
+                QFile pf(pPath);
+                if (pf.open(QIODevice::ReadOnly)) {
+                    QByteArray pgmRaw = pf.readAll();
+                    pf.close();
+                    QImage img = MapPgmUtil::pgmToImage(pgmRaw, negate);
+                    if (!img.isNull()) {
+                        m_mapImage = img.convertToFormat(QImage::Format_RGB32);
+                        m_originalMapImage = m_mapImage;
+                        m_undoStack.clear();
+                        m_redoStack.clear();
+                        updateHistoryButtons();
+                        m_imgW = img.width();
+                        m_imgH = img.height();
+                        m_worldL = originX;
+                        m_worldB = originY;
+                        m_worldR = m_worldL + img.width()  * resolution;
+                        m_worldT = m_worldB + img.height() * resolution;
+
+                        QFile metaFile(localDir + "/meta.json");
+                        if (metaFile.open(QIODevice::ReadOnly)) {
+                            QJsonObject meta = QJsonDocument::fromJson(metaFile.readAll()).object();
+                            m_mapName = meta.value("mapName").toString();
+                        }
+                        if (m_mapName.isEmpty()) {
+                            QFileInfo yfi(yPath);
+                            QString base = yfi.completeBaseName();
+                            if (base.endsWith(".map", Qt::CaseInsensitive)) base.chop(4);
+                            m_mapName = base;
+                        }
+                        m_mapInfoLabel->setText(QString("路网编辑  %1").arg(m_mapName));
+
+                        renderMap();
+                        if (onDone) onDone();
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     ApiService::instance().getMap(m_mapId, [this, onDone](int code, const QJsonObject &data) {
         if (code != 200) { if (onDone) onDone(); return; }
         QJsonObject info = data.value("data").toObject(data);
@@ -1316,9 +1388,7 @@ void MapEditWidget::loadMapData(std::function<void()> onDone)
 
 void MapEditWidget::loadRouteData()
 {
-    QJsonObject query;
-    query["mapId"] = m_mapId;
-    ApiService::instance().loadEditedMap(query, [this](int code, const QJsonObject &data) {
+    ApiService::instance().loadEditedMap([this](int code, const QJsonObject &data) {
         if (code != 200) return;
         QString jsonStr = data.value("json").toString();
         if (jsonStr.isEmpty()) {
@@ -2521,7 +2591,7 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
     }
 }
 
-void MapEditWidget::onSaveMap()
+void MapEditWidget::onSaveMap(std::function<void(bool success)> onFinished)
 {
     // 1. Flush any dragged handle positions to JSON (支持任意阶贝塞尔)
     for (auto it = m_curveHandles.begin(); it != m_curveHandles.end(); ++it) {
@@ -2533,7 +2603,7 @@ void MapEditWidget::onSaveMap()
             if (cv.value("id").toString() != id) continue;
 
             auto handlePos = [&](int idx) -> QPointF {
-                if (lst[idx]) return lst[idx]->pos();
+                if (idx >= 0 && idx < lst.size() && lst[idx]) return lst[idx]->pos();
                 if (idx == 0)
                     return worldToScene(cv.value("x1").toDouble(), cv.value("y1").toDouble());
                 return worldToScene(cv.value("x2").toDouble(), cv.value("y2").toDouble());
@@ -2631,14 +2701,15 @@ void MapEditWidget::onSaveMap()
     geojson["mapId"]    = m_mapId;
     geojson["mapName"]  = m_mapName;
 
-    // 3. Prepare PGM raster data
+    // 3. Prepare PGM raster data (仅在底图实际修改时才上传栅格地图)
     QByteArray pgmData;
-    if (!m_mapImage.isNull()) {
+    bool rasterModified = (!m_mapImage.isNull() && (m_mapImage != m_originalMapImage || !m_undoStack.isEmpty()));
+    if (rasterModified) {
         pgmData = MapPgmUtil::imageToPgm(m_mapImage, false);
     }
 
-    m_saveBtn->setEnabled(false);
-    auto *loading = new LoadingDialog("正在保存地图与路网...", this);
+    if (m_saveBtn) m_saveBtn->setEnabled(false);
+    QPointer<LoadingDialog> loading = new LoadingDialog("正在保存地图与路网...", window(), Qt::ApplicationModal);
     loading->show();
 
     // 4. Concurrently save route and upload PGM
@@ -2656,28 +2727,47 @@ void MapEditWidget::onSaveMap()
         state->pgmOk = true;
     }
 
-    auto onComplete = [this, loading, state]() {
-        loading->close(); loading->deleteLater();
-        m_saveBtn->setEnabled(true);
+    QPointer<MapEditWidget> self = this;
 
-        if (state->routeOk && state->pgmOk) {
-            Toast::success(this, "地图与路网保存成功");
-            m_dirty = false;
-            m_undoStack.clear();
-            m_redoStack.clear();
-            updateHistoryButtons();
-            loadRouteData();
-        } else if (!state->routeOk && !state->pgmOk) {
-            Toast::error(this, QString("保存失败: 路网(%1), 栅格(%2)").arg(state->routeErr, state->pgmErr));
-        } else if (!state->routeOk) {
-            Toast::info(this, QString("栅格已保存，但路网保存失败: %1").arg(state->routeErr));
+    auto onComplete = [self, loading, state, onFinished]() {
+        if (loading) {
+            loading->close();
+            loading->deleteLater();
+        }
+        if (!self) return;
+
+        if (self->m_saveBtn) self->m_saveBtn->setEnabled(true);
+
+        bool allOk = (state->routeOk && state->pgmOk);
+        if (allOk) {
+            Toast::success(self, "地图与路网保存成功");
+            self->m_dirty = false;
+            self->m_originalMapImage = self->m_mapImage;
+            self->m_undoStack.clear();
+            self->m_redoStack.clear();
+            self->updateHistoryButtons();
+            if (onFinished) {
+                onFinished(true);
+            } else {
+                self->loadRouteData();
+            }
         } else {
-            Toast::info(this, QString("路网已保存，但栅格地图上传失败: %1").arg(state->pgmErr));
+            if (!state->routeOk && !state->pgmOk) {
+                Toast::error(self, QString("保存失败: 路网(%1), 栅格(%2)").arg(state->routeErr, state->pgmErr));
+            } else if (!state->routeOk) {
+                Toast::info(self, QString("栅格已保存，但路网保存失败: %1").arg(state->routeErr));
+            } else {
+                Toast::info(self, QString("路网已保存，但栅格地图上传失败: %1").arg(state->pgmErr));
+            }
+            if (onFinished) {
+                onFinished(false);
+            }
         }
     };
 
     // A. Save Route
-    ApiService::instance().saveEditedMap(geojson, [this, state, onComplete](int code, const QJsonObject &resp) {
+    ApiService::instance().saveEditedMap(geojson, [self, state, onComplete](int code, const QJsonObject &resp) {
+        if (!self) return;
         state->routeDone = true;
         state->routeOk = (code == 200);
         if (code != 200) {
@@ -2693,7 +2783,8 @@ void MapEditWidget::onSaveMap()
 
     // B. Save PGM raster (if available)
     if (!pgmData.isEmpty()) {
-        ApiService::instance().uploadMapPgm(m_mapId, pgmData, [this, state, onComplete](int code, const QJsonObject &resp) {
+        ApiService::instance().uploadMapPgm(m_mapId, pgmData, [self, state, onComplete](int code, const QJsonObject &resp) {
+            if (!self) return;
             state->pgmDone = true;
             state->pgmOk = (code == 200);
             if (code != 200) {
@@ -3543,58 +3634,88 @@ void MapEditWidget::loadCarList()
 
 void MapEditWidget::initMqtt()
 {
-    if (m_currentCarId.isEmpty()) return;
-    debugLog(QString("[initMqtt] subscribing /rob/%1/info  (m_mapId=%2)").arg(m_currentCarId, m_mapId));
-    MqttService::instance().subscribeTopic(
-        QString("/rob/%1/info").arg(m_currentCarId), 0,
-        [this](const QString &, const QByteArray &payload) {
-            static int logCount = 0;
-            QJsonParseError err;
-            auto doc = QJsonDocument::fromJson(payload, &err);
-            if (err.error != QJsonParseError::NoError) return;
-            QJsonObject d = doc.object();
-            // 与 Vue edit.vue::handleCarInfoMessage 一致：car 的位姿只在它当前所在地图
-            // 与本页编辑的地图一致时才采用，否则坐标来自另一张地图，毫无意义。
-            // 使用整数比对，避免类型不匹配或 map_id 为 "0" / 空 时的误判。
-            QJsonValue mapIdV = d.contains("map_id") ? d.value("map_id") : d.value("mapId");
-            int msgMapId = mapIdV.toVariant().toInt();
-            int curMapId = m_mapId.toInt();
-            bool mapIdMismatch = (msgMapId > 0 && curMapId > 0 && msgMapId != curMapId);
-            if (logCount < 5) {
-                debugLog(QString("[/info msg #%1] raw=[%2]").arg(logCount).arg(QString::fromUtf8(payload).left(400)));
-                debugLog(QString("[/info msg #%1] msg.map_id=%2 (%3) m_mapId=%4 (%5) mismatch=%6")
-                    .arg(logCount).arg(mapIdV.toVariant().toString()).arg(msgMapId).arg(m_mapId).arg(curMapId).arg(mapIdMismatch));
-            }
-            if (mapIdMismatch) { logCount++; return; }
+    QString serverIp = AppConfig::instance().serverIp();
+    if (serverIp.isEmpty()) return;
+    if (!MqttService::instance().isConnected()) {
+        MqttService::instance().connectToHost(serverIp, 1883);
+    }
 
-            m_carX     = d.value("carX").toDouble(d.value("car_x").toDouble());
-            m_carY     = d.value("carY").toDouble(d.value("car_y").toDouble());
-            m_carYaw   = d.value("carYaw").toDouble(d.value("car_yaw").toDouble());
-            m_carTheta = d.value("theta").toDouble(d.value("car_theta").toDouble(qRadiansToDegrees(m_carYaw)));
-            m_hasCarPose = true;
-            // 设备相对定位末端坐标(epc): 用于充电桩/高精度点打点
-            if (d.contains("epc_x") || d.contains("epc_y")) {
-                m_epcX     = d.value("epc_x").toDouble(0);
-                m_epcY     = d.value("epc_y").toDouble(0);
-                m_epcTheta = d.value("epc_theta").toDouble(d.value("epc_Theta").toDouble(0));
-                m_hasEpcPose = true;
+    auto handleInfoPayload = [this](const QString &topic, const QByteArray &payload) {
+        static int logCount = 0;
+        QJsonParseError err;
+        auto doc = QJsonDocument::fromJson(payload, &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+        QJsonObject d = doc.object();
+        QJsonObject dataObj = d.value("data").toObject();
+        QJsonObject poseObj = d.value("pose").toObject();
+
+        auto dv = [&](const QStringList &keys, double def = 0) -> double {
+            for (const QString &k : keys) {
+                if (d.contains(k)) {
+                    QJsonValue v = d.value(k);
+                    if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+                }
+                if (!dataObj.isEmpty() && dataObj.contains(k)) {
+                    QJsonValue v = dataObj.value(k);
+                    if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+                }
+                if (!poseObj.isEmpty() && poseObj.contains(k)) {
+                    QJsonValue v = poseObj.value(k);
+                    if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
+                }
             }
-            if (logCount < 5) {
-                QPointF sp = worldToScene(m_carX, m_carY);
-                debugLog(QString("[/info msg #%1] carX=%2 carY=%3 carYaw=%4 -> scene=(%5,%6)  world=[L%7 B%8 R%9 T%10] img=%11x%12")
-                    .arg(logCount).arg(m_carX).arg(m_carY).arg(m_carYaw).arg(sp.x()).arg(sp.y())
-                    .arg(m_worldL).arg(m_worldB).arg(m_worldR).arg(m_worldT).arg(m_imgW).arg(m_imgH));
-            }
-            logCount++;
-            updateRobotMarker();
-        });
+            return def;
+        };
+
+        // 地图匹配校验 (若报文中指定了 mapId)
+        QJsonValue mapIdV = d.contains("map_id") ? d.value("map_id") : d.value("mapId");
+        if (mapIdV.isUndefined() && !dataObj.isEmpty()) {
+            mapIdV = dataObj.contains("map_id") ? dataObj.value("map_id") : dataObj.value("mapId");
+        }
+        int msgMapId = mapIdV.toVariant().toInt();
+        int curMapId = m_mapId.toInt();
+        bool mapIdMismatch = (msgMapId > 0 && curMapId > 0 && msgMapId != curMapId);
+        if (mapIdMismatch) { logCount++; return; }
+
+        m_carX     = dv({"carX", "car_x", "x", "current_x", "posX"});
+        m_carY     = dv({"carY", "car_y", "y", "current_y", "posY"});
+        m_carYaw   = dv({"carYaw", "car_yaw", "yaw", "carTheta", "theta", "angle"});
+        m_carTheta = dv({"theta", "car_theta", "carTheta", "angle"}, qRadiansToDegrees(m_carYaw));
+        m_hasCarPose = true;
+
+        // 设备相对定位末端坐标(epc): 用于充电桩/高精度点打点
+        if (d.contains("epc_x") || d.contains("epc_y") || (!dataObj.isEmpty() && (dataObj.contains("epc_x") || dataObj.contains("epc_y")))) {
+            m_epcX     = dv({"epc_x", "epcX"}, 0);
+            m_epcY     = dv({"epc_y", "epcY"}, 0);
+            m_epcTheta = dv({"epc_theta", "epc_Theta", "epcTheta"}, 0);
+            m_hasEpcPose = true;
+        }
+        if (logCount < 5) {
+            QPointF sp = worldToScene(m_carX, m_carY);
+            debugLog(QString("[/info msg #%1] topic=%2 carX=%3 carY=%4 carYaw=%5 -> scene=(%6,%7)")
+                .arg(logCount).arg(topic).arg(m_carX).arg(m_carY).arg(m_carYaw).arg(sp.x()).arg(sp.y()));
+        }
+        logCount++;
+        updateRobotMarker();
+    };
+
+    MqttService::instance().subscribeTopic("/info", 0, handleInfoPayload);
+    MqttService::instance().subscribeTopic("info", 0, handleInfoPayload);
+    MqttService::instance().subscribeTopic("/rob/info", 0, handleInfoPayload);
+
+    QString carId = m_currentCarId.trimmed().isEmpty() ? AppConfig::instance().agvId() : m_currentCarId.trimmed();
+    if (carId.isEmpty()) carId = "1";
+    m_currentCarId = carId;
+    MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, handleInfoPayload);
 }
 
 void MapEditWidget::disconnectMqtt()
 {
-    if (!m_currentCarId.isEmpty())
-        MqttService::instance().unsubscribeTopic(
-            QString("/rob/%1/info").arg(m_currentCarId));
+    MqttService::instance().unsubscribeTopic("/info");
+    MqttService::instance().unsubscribeTopic("info");
+    MqttService::instance().unsubscribeTopic("/rob/info");
+    QString carId = m_currentCarId.trimmed().isEmpty() ? "1" : m_currentCarId.trimmed();
+    MqttService::instance().unsubscribeTopic(QString("/rob/%1/info").arg(carId));
     m_hasCarPose = false;
     m_hasEpcPose = false;
     m_devicePointPending = false;
@@ -3633,10 +3754,10 @@ void MapEditWidget::setupShortcuts()
 
     // 保存地图
     auto *saveSc = new QShortcut(QKeySequence::Save, this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
-    connect(saveSc, &QShortcut::activated, this, &MapEditWidget::onSaveMap);
+    connect(saveSc, &QShortcut::activated, this, [this]() { onSaveMap(); });
 
     auto *saveSc2 = new QShortcut(QKeySequence("Alt+S"), this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
-    connect(saveSc2, &QShortcut::activated, this, &MapEditWidget::onSaveMap);
+    connect(saveSc2, &QShortcut::activated, this, [this]() { onSaveMap(); });
 
     // 快捷帮助
     auto *helpSc = new QShortcut(QKeySequence::HelpContents, this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);

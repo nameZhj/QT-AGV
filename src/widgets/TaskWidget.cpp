@@ -863,11 +863,9 @@ void TaskWidget::loadMapForTask(const QString &mapId)
     });
 }
 
-void TaskWidget::loadRouteData(const QString &mapId)
+void TaskWidget::loadRouteData(const QString &/*mapId*/)
 {
-    QJsonObject query;
-    query["mapId"] = mapId;
-    ApiService::instance().loadEditedMap(query, [this](int code, const QJsonObject &data) {
+    ApiService::instance().loadEditedMap([this](int code, const QJsonObject &data) {
         if (code != 200) return;
         m_points = QJsonArray();
         m_lines  = QJsonArray();

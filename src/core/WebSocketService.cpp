@@ -26,10 +26,6 @@ WebSocketService::~WebSocketService()
 void WebSocketService::connectToServer(const QString &url)
 {
     QNetworkRequest req(url);
-    QString tok = AppConfig::instance().token();
-    if (!tok.isEmpty()) {
-        req.setRawHeader("Authorization", ("Bearer " + tok).toUtf8());
-    }
     m_socket->open(req);
 }
 

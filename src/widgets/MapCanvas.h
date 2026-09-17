@@ -78,7 +78,7 @@ private:
     bool m_worldInfoSet = false;
 
     // Robot Tracking
-    QString m_trackedCarId;
+    QString m_trackedCarId = "1";
     QMap<QString, RobotInfo> m_carInfos;
     QPixmap m_robotPixmap;
 

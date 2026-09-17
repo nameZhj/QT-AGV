@@ -605,12 +605,9 @@ bool RouteNetworkApi::validate(const RouteNetwork &network, QStringList &warning
 //  异步网络服务 API
 // ============================================================================
 
-void RouteNetworkApi::loadNetwork(const QString &mapId, LoadCallback cb)
+void RouteNetworkApi::loadNetwork(const QString &/*mapId*/, LoadCallback cb)
 {
-    QJsonObject req;
-    req["mapId"] = mapId;
-
-    ApiService::instance().loadEditedMap(req, [cb](int code, const QJsonObject &resp) {
+    ApiService::instance().loadEditedMap([cb](int code, const QJsonObject &resp) {
         if (code != 200) {
             if (cb) cb(false, RouteNetwork(), "HTTP 请求失败或接口异常");
             return;

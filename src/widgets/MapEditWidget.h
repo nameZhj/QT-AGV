@@ -37,7 +37,7 @@ signals:
     void goBack();
 
 private slots:
-    void onSaveMap();
+    void onSaveMap(std::function<void(bool success)> onFinished = nullptr);
     void onImportSmap();
     void onUndo();
     void onRedo();
@@ -278,7 +278,7 @@ private:
     // MQTT
     QJsonArray   m_carList;
     QSet<QString> m_onlineCarIds;
-    QString      m_currentCarId;
+    QString      m_currentCarId = "1";
 
     // 实时设备位置标记（开关控制显示）
     bool                   m_showRobotPosition = false;
