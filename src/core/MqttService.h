@@ -1,5 +1,4 @@
-#ifndef MQTTSERVICE_H
-#define MQTTSERVICE_H
+#pragma once
 
 #include <QObject>
 #include <QMqttClient>
@@ -18,7 +17,8 @@
  * 3. 强制 NoProxy 局域网直连，杜绝开发者/运维环境开启代理工具导致 TransportInvalid 掉线；
  * 4. 订阅回调快照执行 (Reentrancy-Safe)，杜绝回调内退订导致迭代崩溃；
  * 5. 智能退避重连 (Exponential Backoff) 与便捷 JSON 消息订阅通道；
- * 6. 100% 保持所有既有业务 API 签名向下兼容。
+ * 6. 控制台调试日志可控开关 (默认关闭，彻底杜绝高频数据帧刷屏)；
+ * 7. 100% 保持所有既有业务 API 签名向下兼容。
  */
 class MqttService final : public QObject
 {
@@ -36,6 +36,10 @@ public:
 
     bool isConnected() const;
     QMqttClient::ClientState state() const;
+
+    // 控制台日志开关 (默认 false 关闭)
+    void setLoggingEnabled(bool enabled) noexcept { m_loggingEnabled = enabled; }
+    bool isLoggingEnabled() const noexcept { return m_loggingEnabled; }
 
     // 原始字节消息订阅
     void subscribeTopic(const QString &topic, int qos, MessageCallback callback);
@@ -80,6 +84,7 @@ private:
     QString      m_lastHost;
     int          m_lastPort = 1883;
     bool         m_explicitDisconnect = false;
+    bool         m_loggingEnabled = false;
 
     class QTimer *m_reconnectTimer = nullptr;
     int          m_currentBackoffMs = 2000;
@@ -92,5 +97,3 @@ private:
     };
     QMap<QString, TopicConfig> m_topics;
 };
-
-#endif // MQTTSERVICE_H

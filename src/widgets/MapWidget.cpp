@@ -1,7 +1,6 @@
 #include "MapWidget.h"
 #include "core/ApiService.h"
 #include "core/AppConfig.h"
-#include "core/WebSocketService.h"
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -26,17 +25,6 @@ MapWidget::MapWidget(QWidget *parent)
 {
     setupUI();
     getList();
-
-    connect(&WebSocketService::instance(), &WebSocketService::notificationReceived, this,
-            [this](const QJsonObject &msg) {
-        QString type = msg.value("type").toString();
-        if (type == "pcd" || type == "agv") {
-            QString status = msg.value("status").toString();
-            if (status == "0" || status == "3" || msg.value("msgStatus").toString() == "error") {
-                getList();
-            }
-        }
-    });
 }
 
 void MapWidget::setupUI()

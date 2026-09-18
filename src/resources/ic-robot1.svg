@@ -1,1 +1,9 @@
-<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg t="1781686425709" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="28705" data-spm-anchor-id="a313x.search_index.0.i6.5cdc3a81J3fY5S" width="32" height="32" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M85.333333 991.253333L512.533333 32.725333l427.221334 958.528-446.549334-204.458666z" fill="#2274ce" p-id="28706" data-spm-anchor-id="a313x.search_index.0.i2.5cdc3a81J3fY5S" class=""></path><path d="M85.333333 991.253333L512.533333 32.725333l-19.328 754.069334z" fill="#22b3ce" p-id="28707" data-spm-anchor-id="a313x.search_index.0.i1.5cdc3a81J3fY5S" class="selected"></path></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 110" width="60" height="110">
+  <!-- 车身直角矩形框 (宽60, 高110) -->
+  <rect x="0.5" y="0.5" width="59" height="109" fill="#1e293b" stroke="#0284c7" stroke-width="2" />
+  <!-- 车头浅蓝色直角标记 (车头朝上，前约1/4区域) -->
+  <rect x="0.5" y="0.5" width="59" height="28" fill="#38bdf8" stroke="#0284c7" stroke-width="1.5" />
+  <!-- 车身中心十字标示 (回转轴心 30, 55) -->
+  <line x1="24" y1="55" x2="36" y2="55" stroke="#64748b" stroke-width="1.2" />
+  <line x1="30" y1="49" x2="30" y2="61" stroke="#64748b" stroke-width="1.2" />
+</svg>

@@ -99,9 +99,12 @@ public:
     QString baseApiUrl() const;
     QString robotApiUrl(int port) const;
 
+    // ========== 工具方法 ==========
+    static QString cleanHostIp(const QString &rawIp);
+
 signals:
     void deviceListChanged();
-    void currentDeviceChanged(int index, const DeviceProfile &device);
+    void currentDeviceChanged(int index, const DeviceProfile &profile);
     void serverIpChanged(const QString &newIp);
     void tokenChanged(const QString &newToken);
     void agvIdChanged(const QString &newId);
@@ -113,7 +116,6 @@ private:
     AppConfig &operator=(const AppConfig &) = delete;
 
     void saveDeviceListInternal(const QList<DeviceProfile> &list);
-    static QString cleanHostIp(const QString &rawIp);
 
     mutable QReadWriteLock m_lock;
     mutable QSettings      m_settings;

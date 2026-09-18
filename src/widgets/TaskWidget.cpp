@@ -3,7 +3,7 @@
 #include "core/ApiService.h"
 #include "core/AppConfig.h"
 #include "core/MqttService.h"
-#include "core/WebSocketService.h"
+#include "core/RobotInfoManager.h"
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
@@ -122,10 +122,10 @@ static void debugLog(const QString &msg)
 TaskWidget::TaskWidget(QWidget *parent)
     : QWidget(parent)
 {
-    // Load SVG robot icon at 256×256, matching MapViewWidget's rendering
+    // Load SVG robot icon at 180×330 (matching 60×110 aspect ratio), matching MapViewWidget's rendering
     QSvgRenderer renderer(QString(":/ic-robot1.svg"));
     if (renderer.isValid()) {
-        m_robotPixmap = QPixmap(256, 256);
+        m_robotPixmap = QPixmap(180, 330);
         m_robotPixmap.fill(Qt::transparent);
         QPainter rp(&m_robotPixmap);
         rp.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
@@ -161,10 +161,6 @@ TaskWidget::TaskWidget(QWidget *parent)
     if (MqttService::instance().isConnected()) {
         initMqtt();
     }
-
-    // 监听 WebSocket 通知，实时更新任务执行状态(对应 Vue show.vue 的 navigation watch)
-    connect(&WebSocketService::instance(), &WebSocketService::notificationReceived,
-            this, &TaskWidget::onWebSocketNotification);
 }
 
 void TaskWidget::setupUI()
@@ -1397,35 +1393,59 @@ void TaskWidget::updateCarPosition(const QString &carId, double x, double y, dou
     double yawRad = (qAbs(angle) > M_PI * 2) ? angle * M_PI / 180.0 : angle;
     double screenAngle = 90.0 - yawRad * 180.0 / M_PI;
 
+    // 地图比例尺计算: ppm (pixels per meter)
+    double mapW = m_worldR - m_worldL;
+    double mapH = m_worldT - m_worldB;
+    double ppm = 20.0; // 默认备用比例尺 0.05m/px
+    if (m_imgW > 0 && mapW > 0 && m_imgH > 0 && mapH > 0) {
+        ppm = ((double)m_imgW / mapW + (double)m_imgH / mapH) / 2.0;
+    } else if (m_imgW > 0 && mapW > 0) {
+        ppm = (double)m_imgW / mapW;
+    }
+
+    // 真实尺寸: 车长 1.10m (纵向/车头朝向), 车宽 0.60m (横向)
+    const double kRobotLength = 1.10;
+    const double kRobotWidth  = 0.60;
+    double sceneW = kRobotWidth * ppm;
+    double sceneH = kRobotLength * ppm;
+
     if (!m_robotPixmap.isNull()) {
-        const double iconSz = 15.0;
-        const double srcSz  = 256.0;
-        const double pivot  = srcSz / 2.0;
+        const double srcW   = m_robotPixmap.width();
+        const double srcH   = m_robotPixmap.height();
+        const double pivotX = srcW / 2.0;
+        const double pivotY = srcH / 2.0;
+        const double scale  = (srcW > 0) ? (sceneW / srcW) : 1.0;
+
         auto *robotItem = m_scene->addPixmap(m_robotPixmap);
-        robotItem->setScale(iconSz / srcSz);
-        robotItem->setTransformOriginPoint(pivot, pivot);
-        robotItem->setPos(sp.x() - pivot, sp.y() - pivot);
+        robotItem->setScale(scale);
+        robotItem->setTransformOriginPoint(pivotX, pivotY);
+        robotItem->setPos(sp.x() - pivotX, sp.y() - pivotY);
         robotItem->setRotation(screenAngle);
         robotItem->setZValue(100);
         info.marker = robotItem;
     } else {
-        QPolygonF triangle;
-        triangle << QPointF(0, -10) << QPointF(-7, 7) << QPointF(7, 7);
+        double halfW = sceneW / 2.0;
+        double halfH = sceneH / 2.0;
+        QPolygonF rectPoly;
+        rectPoly << QPointF(-halfW, -halfH)
+                 << QPointF(halfW, -halfH)
+                 << QPointF(halfW, halfH)
+                 << QPointF(-halfW, halfH);
         QTransform t;
         t.translate(sp.x(), sp.y());
         t.rotate(screenAngle);
-        QPolygonF mapped = t.map(triangle);
+        rectPoly = t.map(rectPoly);
 
-        QGraphicsPolygonItem *robotItem = new QGraphicsPolygonItem(mapped);
-        robotItem->setPen(QPen(QColor("#1a6ca0"), 1.5));
-        robotItem->setBrush(QBrush(QColor(30, 140, 220, 210)));
+        QGraphicsPolygonItem *robotItem = new QGraphicsPolygonItem(rectPoly);
+        robotItem->setPen(QPen(QColor(56, 189, 248), 1.5));
+        robotItem->setBrush(QBrush(QColor(30, 41, 59, 220)));
         robotItem->setZValue(100);
         m_scene->addItem(robotItem);
         info.marker = robotItem;
     }
 
     QGraphicsTextItem *nameLabel = m_scene->addText(info.carName);
-    nameLabel->setPos(sp.x() + 10, sp.y() - 20);
+    nameLabel->setPos(sp.x() + sceneW * 0.5 + 4, sp.y() - sceneH * 0.5 - 12);
     nameLabel->setZValue(101);
     nameLabel->setDefaultTextColor(QColor("#7ec8e8"));
     info.nameLabel = nameLabel;
@@ -1485,6 +1505,10 @@ void TaskWidget::onMqttMessage(const QString &topic, const QByteArray &payload)
 
     // 处理设备位置信息
     if (topic.contains("/info") || topic.contains("/status")) {
+        if (topic.contains("/info")) {
+            RobotInfoManager::instance().updateFromPayload(topic, payload);
+        }
+
         QString carId = jsonIdStr(data.value("carId"));
         if (carId.isEmpty()) carId = AppConfig::instance().agvId();
 
@@ -1514,46 +1538,6 @@ void TaskWidget::onMqttMessage(const QString &topic, const QByteArray &payload)
     }
 }
 
-void TaskWidget::onWebSocketNotification(const QJsonObject &msg)
-{
-    // 对应 Vue show.vue 中的 websocket watch:
-    //   if (newData.type === "navigation" && newData.car_id === this.carSelect)
-    //   { taskInfo.taskId = newData.task_id; taskInfo.status = newData.status; ... }
-    QString type = msg.value("type").toString();
-    if (type != "navigation") return;
-
-    QString carId = jsonIdStr(msg.value("car_id"));
-    if (carId.isEmpty()) carId = jsonIdStr(msg.value("carId"));
-    // 仅处理当前选中设备的任务通知
-    QString agvId = AppConfig::instance().agvId();
-    if (!carId.isEmpty() && carId != agvId) return;
-
-    // 直接用 WebSocket 通知数据更新任务状态(与 Vue 一致)
-    // API status 编码: 0=执行中 1=已完成 2=失败 3=暂停 4=未开始
-    m_currentTask["taskId"]          = msg.value("task_id");
-    m_currentTask["taskName"]         = msg.value("task_name");
-    m_currentTask["status"]           = msg.value("status");
-    m_currentTask["current_count"]    = msg.value("current_count");
-    m_currentTask["execution_count"]  = msg.value("execution_count");
-    m_currentTaskId = jsonIdStr(msg.value("task_id"));
-
-    QString status = jsonIdStr(msg.value("status"));
-    QString statusText;
-    if      (status == "0") statusText = "执行中";
-    else if (status == "1") statusText = "已完成";
-    else if (status == "2") statusText = "失败";
-    else if (status == "3") statusText = "暂停";
-    else if (status == "4") statusText = "未开始";
-    else                    statusText = status;
-
-    QString taskName = msg.value("task_name").toString();
-    m_currentTaskLabel->setText(QString("当前任务: %1 [%2]").arg(taskName, statusText));
-    updateTaskButtons();
-    applyTaskValidityStyle();
-
-    // 防抖刷新任务列表
-    m_refreshDebounce->start();
-}
 
 void TaskWidget::loadCurrentTask()
 {

@@ -3,6 +3,7 @@
 #include "core/ApiService.h"
 #include "core/AppConfig.h"
 #include "core/MqttService.h"
+#include "core/RobotInfoManager.h"
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
@@ -45,6 +46,7 @@
 #include <QFileDialog>
 #include <cmath>
 #include <QPainter>
+#include <QSvgRenderer>
 #include <QToolTip>
 #include <QShortcut>
 #include <QKeySequence>
@@ -331,6 +333,16 @@ struct InstantTip : QObject {
 MapEditWidget::MapEditWidget(const QString &mapId, QWidget *parent)
     : QWidget(parent), m_mapId(mapId)
 {
+    // Load SVG robot icon at 180×330 (matching 60×110 aspect ratio)
+    QSvgRenderer renderer(QString(":/ic-robot1.svg"));
+    if (renderer.isValid()) {
+        m_robotPixmap = QPixmap(180, 330);
+        m_robotPixmap.fill(Qt::transparent);
+        QPainter rp(&m_robotPixmap);
+        rp.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+        renderer.render(&rp);
+    }
+
     setupUI();
     // 先加载地图数据(含坐标系)，完成后再加载路网/反光柱/设备列表，
     // 避免路网点在坐标系尚未建立时渲染导致显示混乱
@@ -1728,13 +1740,12 @@ void MapEditWidget::renderMap()
     m_scene->setSceneRect(0, 0, m_imgW, m_imgH);
     updateRulers();
 
-    // 实时设备位置标记：三角形默认朝北(0,-10)，与 MapViewWidget 机器人图标约定一致
-    QPolygonF robotPoly;
-    robotPoly << QPointF(0, -10) << QPointF(-6, 6) << QPointF(6, 6);
-    m_robotItem = m_scene->addPolygon(robotPoly,
-        QPen(QColor(10, 90, 180), 1.2), QBrush(QColor(30, 144, 255)));
-    m_robotItem->setZValue(50);
-    m_robotItem->setVisible(false);
+    // 实时设备位置标记：110*60 浅蓝车头矩形，与真实地图比例尺吻合
+    if (!m_robotPixmap.isNull()) {
+        m_robotItem = m_scene->addPixmap(m_robotPixmap);
+        m_robotItem->setZValue(50);
+        m_robotItem->setVisible(false);
+    }
     updateRobotMarker();
 
     // Handle visibility matches current mode
@@ -3649,6 +3660,8 @@ void MapEditWidget::initMqtt()
         QJsonObject dataObj = d.value("data").toObject();
         QJsonObject poseObj = d.value("pose").toObject();
 
+        RobotInfoManager::instance().updateFromPayload(topic, payload);
+
         auto dv = [&](const QStringList &keys, double def = 0) -> double {
             for (const QString &k : keys) {
                 if (d.contains(k)) {
@@ -3731,9 +3744,34 @@ void MapEditWidget::updateRobotMarker()
         return;
     }
     QPointF sp = worldToScene(m_carX, m_carY);
-    m_robotItem->setPos(sp);
 
-    // ENU: yaw=0→东, yaw=π/2→北, 逆时针为正；三角形默认朝北(0,-10)。
+    // 地图比例尺计算: ppm (pixels per meter)
+    double mapW = m_worldR - m_worldL;
+    double mapH = m_worldT - m_worldB;
+    double ppm = 20.0; // 默认备用比例尺 0.05m/px
+    if (m_imgW > 0 && mapW > 0 && m_imgH > 0 && mapH > 0) {
+        ppm = ((double)m_imgW / mapW + (double)m_imgH / mapH) / 2.0;
+    } else if (m_imgW > 0 && mapW > 0) {
+        ppm = (double)m_imgW / mapW;
+    }
+
+    // 真实尺寸: 车长 1.10m (纵向/车头朝向), 车宽 0.60m (横向)
+    const double kRobotLength = 1.10;
+    const double kRobotWidth  = 0.60;
+    double sceneW = kRobotWidth * ppm;
+    double sceneH = kRobotLength * ppm;
+
+    double srcW   = m_robotPixmap.width();
+    double srcH   = m_robotPixmap.height();
+    double pivotX = srcW / 2.0;
+    double pivotY = srcH / 2.0;
+    double scale  = (srcW > 0) ? (sceneW / srcW) : 1.0;
+
+    m_robotItem->setScale(scale);
+    m_robotItem->setTransformOriginPoint(pivotX, pivotY);
+    m_robotItem->setPos(sp.x() - pivotX, sp.y() - pivotY);
+
+    // ENU: yaw=0→东, yaw=π/2→北, 逆时针为正；车头默认朝北。
     // 与 MapViewWidget::renderRobot 保持同一约定：screenAngle = 90 - yawDeg
     double yawRad = (qAbs(m_carYaw) > M_PI * 2) ? qDegreesToRadians(m_carYaw) : m_carYaw;
     m_robotItem->setRotation(90.0 - qRadiansToDegrees(yawRad));

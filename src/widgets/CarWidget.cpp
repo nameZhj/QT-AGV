@@ -1,9 +1,9 @@
 #include "CarWidget.h"
 #include "core/ApiService.h"
 #include "core/AppConfig.h"
-#include "core/WebSocketService.h"
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
+#include "core/RobotInfoManager.h"
 #include <QPushButton>
 #include <QComboBox>
 #include <QVBoxLayout>
@@ -23,10 +23,25 @@ CarWidget::CarWidget(QWidget *parent)
     loadMapOptions();
     getList();
 
-    connect(&WebSocketService::instance(), &WebSocketService::notificationReceived, this,
-            [this](const QJsonObject &msg) {
-        if (msg.value("type").toString() == "connect" || msg.value("type").toString() == "crud")
-            getList();
+    connect(&RobotInfoManager::instance(), &RobotInfoManager::robotInfoUpdated,
+            this, [this](const QString &carId, const RobotInfo &info) {
+        for (int row = 0; row < m_table->rowCount(); ++row) {
+            auto *idItem = m_table->item(row, 0);
+            if (idItem && idItem->text().trimmed() == carId.trimmed()) {
+                auto *statusItem = m_table->item(row, 3);
+                if (statusItem) {
+                    statusItem->setText(info.statusText());
+                    statusItem->setForeground(QBrush(QColor(info.statusColor())));
+                }
+                if (info.map_id != 0) {
+                    auto *mapItem = m_table->item(row, 2);
+                    if (mapItem && (mapItem->text().trimmed().isEmpty() || mapItem->text().startsWith("地图 ID:"))) {
+                        mapItem->setText(QString("地图 ID: %1").arg(info.map_id));
+                    }
+                }
+                break;
+            }
+        }
     });
 }
 
@@ -131,11 +146,26 @@ void CarWidget::getList()
             QJsonObject car     = m_carList[i].toObject();
             QJsonObject carInfo = car.value("carInfo").toObject();
 
-            m_table->setItem(i, 0, new QTableWidgetItem(jsonIdStr(car.value("carId"))));
+            QString cid = jsonIdStr(car.value("carId"));
+            QString mapName = car.value("mapName").toString();
+            QString statusText = carInfo.value("status").toString() == "0" ? "在线" : "离线";
+            QColor statusCol = carInfo.value("status").toString() == "0" ? QColor("#22c55e") : QColor("#64748b");
+
+            if (RobotInfoManager::instance().hasInfoForCar(cid)) {
+                RobotInfo rInfo = RobotInfoManager::instance().infoForCar(cid);
+                statusText = rInfo.statusText();
+                statusCol = QColor(rInfo.statusColor());
+                if (mapName.isEmpty() && rInfo.map_id != 0) {
+                    mapName = QString("地图 ID: %1").arg(rInfo.map_id);
+                }
+            }
+
+            m_table->setItem(i, 0, new QTableWidgetItem(cid));
             m_table->setItem(i, 1, new QTableWidgetItem(car.value("carName").toString()));
-            m_table->setItem(i, 2, new QTableWidgetItem(car.value("mapName").toString()));
-            m_table->setItem(i, 3, new QTableWidgetItem(
-                carInfo.value("status").toString() == "0" ? "在线" : "离线"));
+            m_table->setItem(i, 2, new QTableWidgetItem(mapName));
+            auto *stItem = new QTableWidgetItem(statusText);
+            stItem->setForeground(QBrush(statusCol));
+            m_table->setItem(i, 3, stItem);
             m_table->setItem(i, 4, new QTableWidgetItem(
                 // 参考 Vue index.vue: linkStatus==='0' 表示已链接, '1' 表示未链接
                 car.value("linkStatus").toString() == "0" ? "已链接" : "未链接"));

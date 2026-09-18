@@ -3,7 +3,7 @@
 #include "ApiService.h"
 #include "AppConfig.h"
 #include "MqttService.h"
-#include "WebSocketService.h"
+#include "RobotInfoManager.h"
 #include <QMouseEvent>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -480,7 +480,7 @@ void DeviceCard::setOnlineUI(bool online)
             m_onlineDot->setStyleSheet("background: #44db22; border-radius: 5px;");
         }
         if (m_onlineLabel) {
-            m_onlineLabel->setText("已连接");
+            m_onlineLabel->setText(m_statusText.isEmpty() ? "已连接" : m_statusText);
             m_onlineLabel->setStyleSheet("color: #ffffff; font-size: 12px; font-weight: bold; background: transparent;");
         }
         if (m_robotIcon) {
@@ -518,7 +518,7 @@ void DeviceCard::setOnlineUI(bool online)
             m_onlineDot->setStyleSheet("background: #718096; border-radius: 5px;");
         }
         if (m_onlineLabel) {
-            m_onlineLabel->setText("未连接");
+            m_onlineLabel->setText(m_statusText.isEmpty() ? "未连接" : m_statusText);
             m_onlineLabel->setStyleSheet("color: #94a3b8; font-size: 12px; font-weight: bold; background: transparent;");
         }
         if (m_robotIcon) {
@@ -721,13 +721,29 @@ void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
     });
 
     connect(m_mqttClient, &QMqttClient::messageReceived, this,
-        [this](const QByteArray &payload, const QMqttTopicName &) {
-            setOnlineUI(true);
-
+        [this](const QByteArray &payload, const QMqttTopicName &topic) {
             QJsonParseError err;
             QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
             if (!doc.isObject()) return;
             QJsonObject d = doc.object();
+
+            // 同步给全局 RobotInfoManager
+            RobotInfoManager::instance().updateFromPayload(topic.name(), payload);
+
+            RobotInfo info;
+            RobotInfoManager::parseInfoJson(d, &info);
+
+            // 状态更新 (info.status: "0"离线, "2"就绪, "3"导航, "4"作业, "5"暂停, "6"故障)
+            if (d.contains("status") && !d.value("status").isNull()) {
+                m_statusText = info.statusText();
+                if (!info.isOnline()) {
+                    setOnlineUI(false);
+                } else {
+                    setOnlineUI(true);
+                }
+            } else {
+                setOnlineUI(true);
+            }
 
             // 1. 提取设备名称
             QString devName;
@@ -747,11 +763,15 @@ void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
                 }
             }
             if (mapName.isEmpty()) {
-                QJsonValue mv = d.contains("map_id") ? d.value("map_id") : d.value("mapId");
-                if (!mv.isUndefined() && !mv.isNull()) {
-                    QString mid = mv.toVariant().toString().trimmed();
-                    if (!mid.isEmpty() && mid != "0") {
-                        mapName = QString("地图 ID: %1").arg(mid);
+                if (info.map_id != 0) {
+                    mapName = QString("地图 ID: %1").arg(info.map_id);
+                } else {
+                    QJsonValue mv = d.contains("map_id") ? d.value("map_id") : d.value("mapId");
+                    if (!mv.isUndefined() && !mv.isNull()) {
+                        QString mid = mv.toVariant().toString().trimmed();
+                        if (!mid.isEmpty() && mid != "0") {
+                            mapName = QString("地图 ID: %1").arg(mid);
+                        }
                     }
                 }
             }
@@ -1264,7 +1284,6 @@ void DeviceManagerDialog::onDisconnectCard(int index)
     // 2. 如果该设备是当前全局连接的设备，断开全局连接服务并重置当前设备索引
     if (AppConfig::instance().currentDeviceIndex() == index) {
         MqttService::instance().disconnectFromHost();
-        WebSocketService::instance().disconnect();
         AppConfig::instance().setCurrentDeviceIndex(-1);
     }
 

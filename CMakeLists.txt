@@ -13,7 +13,6 @@ find_package(Qt6 REQUIRED COMPONENTS
     Gui
     Widgets
     Network
-    WebSockets
     Mqtt
     Svg
 )
@@ -49,7 +48,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
-    Qt6::WebSockets
     Qt6::Mqtt
     Qt6::Svg
 )

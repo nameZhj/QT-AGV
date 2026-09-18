@@ -17,6 +17,7 @@
 #include <cmath>
 
 class RobotStatusDialog;
+struct RobotInfo;
 
 // ── Ruler widget drawn as an overlay alongside the map view ──────────────────
 class RulerWidget : public QWidget
@@ -110,6 +111,7 @@ private:
     void renderRobot();
     void updateRulers();
     void updateInfoPanel();
+    void onRobotInfoUpdated(const RobotInfo &info);
     void setStatus(const QString &msg, const QString &color = "#8898a8");
 
     // Coordinate transform (world ↔ scene/pixel)
@@ -182,9 +184,10 @@ private:
     QPixmap m_robotPixmap;
 
     // Right info panel labels
-    QLabel *m_carNameLabel  = nullptr;
-    QLabel *m_batteryLabel  = nullptr;
-    QLabel *m_speedLabel    = nullptr;
+    QLabel *m_carNameLabel      = nullptr;
+    QLabel *m_deviceStatusLabel = nullptr;
+    QLabel *m_batteryLabel      = nullptr;
+    QLabel *m_speedLabel        = nullptr;
     QLabel *m_covLabel      = nullptr;
     QLabel *m_posLabel      = nullptr;
     QLabel *m_coordLabel    = nullptr;  // cursor world coordinate overlay

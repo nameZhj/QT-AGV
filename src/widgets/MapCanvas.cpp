@@ -1,6 +1,7 @@
 #include "MapCanvas.h"
 #include "core/MqttService.h"
 #include "core/AppConfig.h"
+#include "core/RobotInfoManager.h"
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QScrollBar>
@@ -12,6 +13,8 @@
 #include <QGestureEvent>
 #include <QPinchGesture>
 #include <QTimer>
+#include <QSvgRenderer>
+#include <QPainter>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -30,7 +33,15 @@ MapCanvas::MapCanvas(QGraphicsScene *scene, QWidget *parent)
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setCursor(Qt::CrossCursor);
 
-    m_robotPixmap.load(":/ic-robot.svg");
+    // Load SVG robot icon at 180×330 (matching 60×110 aspect ratio)
+    QSvgRenderer renderer(QString(":/ic-robot1.svg"));
+    if (renderer.isValid()) {
+        m_robotPixmap = QPixmap(180, 330);
+        m_robotPixmap.fill(Qt::transparent);
+        QPainter rp(&m_robotPixmap);
+        rp.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+        renderer.render(&rp);
+    }
     
     setAttribute(Qt::WA_AcceptTouchEvents);
     viewport()->setAttribute(Qt::WA_AcceptTouchEvents);
@@ -417,6 +428,8 @@ void MapCanvas::onMqttMessage(const QString &topic, const QByteArray &payload)
         return def;
     };
     
+    RobotInfoManager::instance().updateFromPayload(topic, payload);
+
     QString carId;
     if (d.contains("carId")) carId = d.value("carId").toString();
     else if (d.contains("carId")) carId = QString::number(d.value("carId").toInt()); // sometimes it's int
@@ -424,7 +437,7 @@ void MapCanvas::onMqttMessage(const QString &topic, const QByteArray &payload)
     if (carId.isEmpty()) carId = m_trackedCarId;
     if (carId.isEmpty()) carId = "1";
     
-    RobotInfo &info = m_carInfos[carId];
+    CanvasRobotMarker &info = m_carInfos[carId];
     info.carId = carId;
     info.x = dv({"car_x","carX","x"});
     info.y = dv({"car_y","carY","y"});
@@ -440,16 +453,41 @@ void MapCanvas::drawRobot(const QString &carId)
     if (!m_worldInfoSet || !scene()) return;
     if (!m_carInfos.contains(carId)) return;
     
-    RobotInfo &info = m_carInfos[carId];
+    CanvasRobotMarker &info = m_carInfos[carId];
     QPointF sp = worldToScene(info.x, info.y);
     
+    // 地图比例尺计算: ppm (pixels per meter)
+    double mapW = m_worldR - m_worldL;
+    double mapH = m_worldT - m_worldB;
+    double ppm = 20.0; // 默认备用比例尺 0.05m/px
+    if (m_imgW > 0 && mapW > 0 && m_imgH > 0 && mapH > 0) {
+        ppm = ((double)m_imgW / mapW + (double)m_imgH / mapH) / 2.0;
+    } else if (m_imgW > 0 && mapW > 0) {
+        ppm = (double)m_imgW / mapW;
+    }
+
+    // 真实尺寸: 车长 1.10m (纵向/车头朝向), 车宽 0.60m (横向)
+    const double kRobotLength = 1.10;
+    const double kRobotWidth  = 0.60;
+    double sceneW = kRobotWidth * ppm;
+    double sceneH = kRobotLength * ppm;
+
+    double srcW   = m_robotPixmap.width();
+    double srcH   = m_robotPixmap.height();
+    double pivotX = srcW / 2.0;
+    double pivotY = srcH / 2.0;
+    double scale  = (srcW > 0) ? (sceneW / srcW) : 1.0;
+
+    // ENU: yaw=0->East, yaw=PI/2->North. Qt rotate is CW.
+    double yawRad = (qAbs(info.angle) > M_PI * 2) ? info.angle * M_PI / 180.0 : info.angle;
+    double screenAngle = 90.0 - yawRad * 180.0 / M_PI;
+
     if (!info.marker) {
         QGraphicsPixmapItem *robotItem = scene()->addPixmap(m_robotPixmap);
-        double srcSz = m_robotPixmap.width();
-        double iconSz = 30.0;
-        robotItem->setScale(iconSz / srcSz);
-        double pivot = srcSz / 2.0;
-        robotItem->setTransformOriginPoint(pivot, pivot);
+        robotItem->setScale(scale);
+        robotItem->setTransformOriginPoint(pivotX, pivotY);
+        robotItem->setPos(sp.x() - pivotX, sp.y() - pivotY);
+        robotItem->setRotation(screenAngle);
         robotItem->setZValue(100);
         info.marker = robotItem;
     }
@@ -461,17 +499,13 @@ void MapCanvas::drawRobot(const QString &carId)
     }
     
     if (info.marker) {
-        double srcSz = m_robotPixmap.width();
-        double pivot = srcSz / 2.0;
-        info.marker->setPos(sp.x() - pivot, sp.y() - pivot);
-        
-        // ENU: yaw=0->East, yaw=PI/2->North. Qt rotate is CW.
-        double yawRad = (qAbs(info.angle) > M_PI * 2) ? info.angle * M_PI / 180.0 : info.angle;
-        double screenAngle = 90.0 - yawRad * 180.0 / M_PI;
+        info.marker->setScale(scale);
+        info.marker->setTransformOriginPoint(pivotX, pivotY);
+        info.marker->setPos(sp.x() - pivotX, sp.y() - pivotY);
         info.marker->setRotation(screenAngle);
     }
     
     if (info.nameLabel) {
-        info.nameLabel->setPos(sp.x() + 10, sp.y() - 20);
+        info.nameLabel->setPos(sp.x() + sceneW * 0.5 + 4, sp.y() - sceneH * 0.5 - 12);
     }
 }

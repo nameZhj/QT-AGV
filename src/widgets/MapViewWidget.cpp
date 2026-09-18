@@ -2,6 +2,7 @@
 #include "core/AppConfig.h"
 #include "core/ApiService.h"
 #include "core/MqttService.h"
+#include "core/RobotInfoManager.h"
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
@@ -371,16 +372,19 @@ void RulerWidget::paintEvent(QPaintEvent *)
 MapViewWidget::MapViewWidget(QWidget *parent)
     : QWidget(parent)
 {
-    // Load SVG robot icon at 256×256 for crisp scaling at any size
+    // Load SVG robot icon at 180×330 (matching 60×110 aspect ratio) for crisp scaling at any size
     QSvgRenderer renderer(QString(":/ic-robot1.svg"));
     if (renderer.isValid()) {
-        m_robotPixmap = QPixmap(256, 256);
+        m_robotPixmap = QPixmap(180, 330);
         m_robotPixmap.fill(Qt::transparent);
         QPainter rp(&m_robotPixmap);
         rp.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
         renderer.render(&rp);
     }
     setupUI();
+    connect(&RobotInfoManager::instance(), &RobotInfoManager::currentRobotInfoUpdated,
+            this, &MapViewWidget::onRobotInfoUpdated);
+    onRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
 }
 
 MapViewWidget::~MapViewWidget() {}
@@ -577,13 +581,15 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
         l->setStyleSheet("color:#c8d0d8; font-size:12px;");
         return l;
     };
-    m_carNameLabel = mkInfoLabel();
-    m_batteryLabel = mkInfoLabel();
-    m_speedLabel   = mkInfoLabel();
-    m_covLabel     = mkInfoLabel();
-    m_posLabel     = mkInfoLabel();
+    m_carNameLabel      = mkInfoLabel();
+    m_deviceStatusLabel = mkInfoLabel();
+    m_batteryLabel      = mkInfoLabel();
+    m_speedLabel        = mkInfoLabel();
+    m_covLabel          = mkInfoLabel();
+    m_posLabel          = mkInfoLabel();
 
     carForm->addRow("设备:", m_carNameLabel);
+    carForm->addRow("状态:", m_deviceStatusLabel);
     carForm->addRow("电量:", m_batteryLabel);
     carForm->addRow("速度:", m_speedLabel);
     carForm->addRow("置信度:", m_covLabel);
@@ -1533,14 +1539,34 @@ void MapViewWidget::renderRobot()
     double yawDeg      = yawRad * 180.0 / M_PI;
     double screenAngle = 90.0 - yawDeg;
 
+    // 地图比例尺计算: ppm (pixels per meter)
+    double mapW = m_worldR - m_worldL;
+    double mapH = m_worldT - m_worldB;
+    double ppm = 20.0; // 默认备用比例尺 0.05m/px
+    if (m_imgW > 0 && mapW > 0 && m_imgH > 0 && mapH > 0) {
+        ppm = ((double)m_imgW / mapW + (double)m_imgH / mapH) / 2.0;
+    } else if (m_imgW > 0 && mapW > 0) {
+        ppm = (double)m_imgW / mapW;
+    }
+
+    // 真实尺寸: 车长 1.10m (纵向/车头朝向), 车宽 0.60m (横向)
+    const double kRobotLength = 1.10;
+    const double kRobotWidth  = 0.60;
+    double sceneW = kRobotWidth * ppm;
+    double sceneH = kRobotLength * ppm;
+
     if (!m_robotPixmap.isNull()) {
-        const double iconSz = 26.0;   // 场景像素尺寸，清晰工整
-        const double srcSz  = 256.0;  // 预渲染尺寸
-        const double pivot  = srcSz / 2.0;
+        const double srcW   = m_robotPixmap.width();
+        const double srcH   = m_robotPixmap.height();
+        const double pivotX = srcW / 2.0;
+        const double pivotY = srcH / 2.0;
+        const double scale  = (srcW > 0) ? (sceneW / srcW) : 1.0;
 
         auto *pixItem = dynamic_cast<QGraphicsPixmapItem *>(m_robotItem);
         if (pixItem) {
-            pixItem->setPos(sp.x() - pivot, sp.y() - pivot);
+            pixItem->setScale(scale);
+            pixItem->setTransformOriginPoint(pivotX, pivotY);
+            pixItem->setPos(sp.x() - pivotX, sp.y() - pivotY);
             pixItem->setRotation(screenAngle);
         } else {
             if (m_robotItem) {
@@ -1549,30 +1575,35 @@ void MapViewWidget::renderRobot()
                 m_robotItem = nullptr;
             }
             auto *robotItem = m_scene->addPixmap(m_robotPixmap);
-            robotItem->setScale(iconSz / srcSz);
-            robotItem->setTransformOriginPoint(pivot, pivot);
-            robotItem->setPos(sp.x() - pivot, sp.y() - pivot);
+            robotItem->setScale(scale);
+            robotItem->setTransformOriginPoint(pivotX, pivotY);
+            robotItem->setPos(sp.x() - pivotX, sp.y() - pivotY);
             robotItem->setRotation(screenAngle);
             robotItem->setData(0, 3);
             robotItem->setZValue(120);
             m_robotItem = robotItem;
         }
     } else {
-        // Fallback: draw triangle
+        // Fallback: draw 110*60 rectangle with light-blue head
         if (m_robotItem) {
             m_scene->removeItem(m_robotItem);
             delete m_robotItem;
             m_robotItem = nullptr;
         }
-        QPolygonF tri;
-        tri << QPointF(0, -12) << QPointF(-8, 8) << QPointF(8, 8);
+        double halfW = sceneW / 2.0;
+        double halfH = sceneH / 2.0;
+        QPolygonF rectPoly;
+        rectPoly << QPointF(-halfW, -halfH)
+                 << QPointF(halfW, -halfH)
+                 << QPointF(halfW, halfH)
+                 << QPointF(-halfW, halfH);
         QTransform t;
         t.translate(sp.x(), sp.y());
         t.rotate(screenAngle);
-        tri = t.map(tri);
-        auto *marker = m_scene->addPolygon(tri,
-            QPen(QColor(255, 220, 50), 2),
-            QBrush(QColor(255, 180, 0, 200)));
+        rectPoly = t.map(rectPoly);
+        auto *marker = m_scene->addPolygon(rectPoly,
+            QPen(QColor(56, 189, 248), 1.5),
+            QBrush(QColor(30, 41, 59, 220)));
         marker->setData(0, 3);
         marker->setZValue(120);
         m_robotItem = marker;
@@ -1671,48 +1702,18 @@ void MapViewWidget::onMqttMessage(const QString &topic, const QByteArray &payloa
     const bool isInfoTopic = topic.endsWith("/info") || topic.endsWith("info") || topic.contains("/info");
 
     if (isInfoTopic) {
-        bool poseUpdated = false;
-        if (hasKey({"car_x", "carX", "x"})) {
-            m_robot.wx = dv({"car_x", "carX", "x"}, m_robot.wx);
-            poseUpdated = true;
+        RobotInfoManager::instance().updateFromPayload(topic, cleanPayload);
+        if (m_statusDialog) {
+            m_statusDialog->onMqttMessage(topic, cleanPayload);
         }
-        if (hasKey({"car_y", "carY", "y"})) {
-            m_robot.wy = dv({"car_y", "carY", "y"}, m_robot.wy);
-            poseUpdated = true;
-        }
-        // 朝向角优先按 car_yaw 读取 (弧度)
-        if (hasKey({"car_yaw", "carYaw", "yaw", "angle", "car_theta", "carTheta", "heading"})) {
-            m_robot.yawRad = dv({"car_yaw", "carYaw", "yaw", "angle", "car_theta", "carTheta", "heading"}, m_robot.yawRad);
-            poseUpdated = true;
-        } else if (hasKey({"theta"})) {
-            m_robot.yawRad = dv({"theta"}, m_robot.yawRad);
-            poseUpdated = true;
-        }
-
-        if (poseUpdated) {
-            m_robot.posValid = true;
-        }
-
-        if (hasKey({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"})) {
-            m_robot.speed = dv({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"}, m_robot.speed);
-        }
-        if (hasKey({"battery", "power", "bat", "soc", "battery_level"})) {
-            double bat = dv({"battery", "power", "bat", "soc", "battery_level"}, m_robot.battery);
-            if (bat > 0 && bat <= 1.0) bat *= 100.0;
-            m_robot.battery = bat;
-        }
-        if (hasKey({"covariance_score", "covarianceScore", "covariance", "score", "confidence"})) {
-            m_robot.covScore = dv({"covariance_score", "covarianceScore", "covariance", "score", "confidence"}, m_robot.covScore);
-        }
-
-        renderRobot();
-        updateInfoPanel();
+        return;
     } else {
         // 非 info 话题 (如 status, carto_pose 等)：仅补充线速度与电池电量，绝不修改地图设备位置和朝向
-        if (hasKey({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"})) {
+        const RobotInfo &curInfo = RobotInfoManager::instance().currentInfo();
+        if (!curInfo.actual_vel.valid && hasKey({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"})) {
             m_robot.speed = dv({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"}, m_robot.speed);
         }
-        if (hasKey({"power", "battery", "bat", "soc", "battery_level"})) {
+        if (curInfo.battery < 0.0 && hasKey({"power", "battery", "bat", "soc", "battery_level"})) {
             double bat = dv({"power", "battery", "bat", "soc", "battery_level"}, m_robot.battery);
             if (bat > 0 && bat <= 1.0) bat *= 100.0;
             m_robot.battery = bat;
@@ -1723,6 +1724,36 @@ void MapViewWidget::onMqttMessage(const QString &topic, const QByteArray &payloa
     if (m_statusDialog) {
         m_statusDialog->onMqttMessage(topic, cleanPayload);
     }
+}
+
+void MapViewWidget::onRobotInfoUpdated(const RobotInfo &info)
+{
+    if (info.hasPose) {
+        m_robot.wx = info.car_x;
+        m_robot.wy = info.car_y;
+        m_robot.yawRad = info.car_yaw;
+        m_robot.posValid = true;
+    }
+    if (info.battery >= 0.0) {
+        m_robot.battery = info.batteryPercent();
+    }
+    if (info.actual_vel.valid) {
+        m_robot.speed = info.actualLinearSpeed();
+    }
+    if (info.covScore >= 0.0) {
+        m_robot.covScore = info.covScore;
+    }
+    if (!info.carName.isEmpty()) {
+        m_robot.carName = info.carName;
+    }
+
+    if (m_deviceStatusLabel) {
+        m_deviceStatusLabel->setText(info.statusText());
+        m_deviceStatusLabel->setStyleSheet(QString("color:%1; font-size:12px; font-weight:600;").arg(info.statusColor()));
+    }
+
+    renderRobot();
+    updateInfoPanel();
 }
 
 void MapViewWidget::updateInfoPanel()
@@ -2497,6 +2528,7 @@ void MapViewWidget::onShowRobotStatus()
         m_statusDialog = new RobotStatusDialog(this);
     }
     m_statusDialog->setMapInfo(m_mapId, m_mapName);
+    m_statusDialog->updateFromRobotInfo(RobotInfoManager::instance().currentInfo());
     m_statusDialog->updateFromRobotState(m_robot.carId, m_robot.wx, m_robot.wy, m_robot.yawRad,
                                          m_robot.speed, m_robot.battery, m_robot.covScore, m_robot.posValid);
     if (!m_lastObstaclePayload.isEmpty()) {

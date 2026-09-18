@@ -6,6 +6,7 @@
 #include <QGraphicsScene>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPolygonItem>
+#include <QGraphicsPixmapItem>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <functional>
@@ -282,7 +283,8 @@ private:
 
     // 实时设备位置标记（开关控制显示）
     bool                   m_showRobotPosition = false;
-    QGraphicsPolygonItem  *m_robotItem         = nullptr;
+    QGraphicsPixmapItem   *m_robotItem         = nullptr;
+    QPixmap                m_robotPixmap;
     double                 m_carX = 0, m_carY = 0, m_carYaw = 0, m_carTheta = 0;
     bool                   m_hasCarPose        = false;
     // 设备相对定位末端坐标(epc): 由 /rob/{id}/info 推送，用于充电桩/高精度点打点

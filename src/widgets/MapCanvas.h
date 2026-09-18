@@ -9,7 +9,7 @@
 #include <QPixmap>
 
 // Info for rendering robots via MQTT
-struct RobotInfo {
+struct CanvasRobotMarker {
     QString carId;
     QString carName;
     double x = 0;
@@ -79,7 +79,7 @@ private:
 
     // Robot Tracking
     QString m_trackedCarId = "1";
-    QMap<QString, RobotInfo> m_carInfos;
+    QMap<QString, CanvasRobotMarker> m_carInfos;
     QPixmap m_robotPixmap;
 
     // Trackpad gestures state

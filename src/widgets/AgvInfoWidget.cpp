@@ -3,6 +3,7 @@
 #include "core/MqttService.h"
 #include "core/ApiService.h"
 #include "core/Toast.h"
+#include "core/RobotInfoManager.h"
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -35,11 +36,16 @@ AgvInfoWidget::AgvInfoWidget(QWidget *parent)
 
     connect(&MqttService::instance(), &MqttService::connected, this, &AgvInfoWidget::onMqttConnected);
     connect(&MqttService::instance(), &MqttService::disconnected, this, &AgvInfoWidget::onMqttDisconnected);
+
+    connect(&RobotInfoManager::instance(), &RobotInfoManager::currentRobotInfoUpdated,
+            this, &AgvInfoWidget::updateFromRobotInfo);
+    updateFromRobotInfo(RobotInfoManager::instance().currentInfo());
 }
 
 void AgvInfoWidget::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
+    updateFromRobotInfo(RobotInfoManager::instance().currentInfo());
     // 如果 MQTT 已连接但尚未初始化订阅，则初始化
     if (MqttService::instance().isConnected()) {
         initMqtt();
@@ -177,6 +183,30 @@ void AgvInfoWidget::initMqtt()
     }
 }
 
+void AgvInfoWidget::updateFromRobotInfo(const RobotInfo &info)
+{
+    if (info.hasPose) {
+        m_machine.x = info.car_x;
+        m_machine.y = info.car_y;
+        m_machine.angle = info.car_yaw * 180.0 / M_PI;
+        if (m_xLabel) m_xLabel->setText(QString::number(m_machine.x, 'f', 2));
+        if (m_yLabel) m_yLabel->setText(QString::number(m_machine.y, 'f', 2));
+        if (m_angleLabel) m_angleLabel->setText(QString::number(m_machine.angle, 'f', 2));
+    }
+    if (info.actual_vel.valid) {
+        m_machine.linear_x = info.actualLinearSpeed();
+        if (m_linearLabel) m_linearLabel->setText(QString::number(m_machine.linear_x, 'f', 2));
+    }
+    if (info.battery >= 0.0) {
+        m_machine.power = info.batteryPercent();
+        if (m_powerLabel) m_powerLabel->setText(QString::number(m_machine.power, 'f', 1) + "%");
+    }
+    if (!info.status.isEmpty()) {
+        m_machine.alarminfo = info.statusText();
+        if (m_alarmLabel) m_alarmLabel->setText(m_machine.alarminfo);
+    }
+}
+
 void AgvInfoWidget::handleMqttMessage(const QString &topic, const QByteArray &payload)
 {
     QJsonParseError err;
@@ -196,19 +226,27 @@ void AgvInfoWidget::handleMqttMessage(const QString &topic, const QByteArray &pa
     };
 
     if (topic.contains("/status")) {
-        m_machine.alarminfo = data.value("alarminfo").toString(data.value("alarmInfo").toString(m_machine.alarminfo.isEmpty() ? "无" : m_machine.alarminfo));
-        m_machine.linear_x = fmt(data.value("linear_x").isNull() ? data.value("linearX") : data.value("linear_x"));
-        m_machine.power = fmt(data.value("power"));
-        m_machine.x = fmt(data.value("x"));
-        m_machine.y = fmt(data.value("y"));
-        m_machine.angle = fmt(data.value("angle"));
-
-        m_alarmLabel->setText(m_machine.alarminfo);
-        m_linearLabel->setText(QString::number(m_machine.linear_x, 'f', 2));
-        m_powerLabel->setText(QString::number(m_machine.power, 'f', 2) + "%");
-        m_xLabel->setText(QString::number(m_machine.x, 'f', 2));
-        m_yLabel->setText(QString::number(m_machine.y, 'f', 2));
-        m_angleLabel->setText(QString::number(m_machine.angle, 'f', 2));
+        const RobotInfo &curInfo = RobotInfoManager::instance().currentInfo();
+        if (curInfo.status.isEmpty()) {
+            m_machine.alarminfo = data.value("alarminfo").toString(data.value("alarmInfo").toString(m_machine.alarminfo.isEmpty() ? "无" : m_machine.alarminfo));
+            if (m_alarmLabel) m_alarmLabel->setText(m_machine.alarminfo);
+        }
+        if (!curInfo.actual_vel.valid) {
+            m_machine.linear_x = fmt(data.value("linear_x").isNull() ? data.value("linearX") : data.value("linear_x"));
+            if (m_linearLabel) m_linearLabel->setText(QString::number(m_machine.linear_x, 'f', 2));
+        }
+        if (curInfo.battery < 0.0) {
+            m_machine.power = fmt(data.value("power"));
+            if (m_powerLabel) m_powerLabel->setText(QString::number(m_machine.power, 'f', 2) + "%");
+        }
+        if (!curInfo.hasPose) {
+            m_machine.x = fmt(data.value("x"));
+            m_machine.y = fmt(data.value("y"));
+            m_machine.angle = fmt(data.value("angle"));
+            if (m_xLabel) m_xLabel->setText(QString::number(m_machine.x, 'f', 2));
+            if (m_yLabel) m_yLabel->setText(QString::number(m_machine.y, 'f', 2));
+            if (m_angleLabel) m_angleLabel->setText(QString::number(m_machine.angle, 'f', 2));
+        }
         return;
     }
 

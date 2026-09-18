@@ -8,6 +8,8 @@
 #include <QTimer>
 #include <QJsonObject>
 
+struct RobotInfo;
+
 // 对应 agv-info/index.vue - AGV 设备信息与控制面板
 // 包含 MQTT 实时状态、日志输出、控制操作（自检/启动终端/停止终端/顶升置零）
 class AgvInfoWidget : public QWidget
@@ -30,6 +32,7 @@ private slots:
 private:
     void setupUI();
     void initMqtt();
+    void updateFromRobotInfo(const RobotInfo &info);
     void handleMqttMessage(const QString &topic, const QByteArray &payload);
     void pushLog(const QString &line);
     void scrollToLast();

@@ -578,11 +578,14 @@ bool RouteNetworkApi::validate(const RouteNetwork &network, QStringList &warning
         errors.append("路网中无任何有效站点 (Point/Charge/HighPrecision)");
     }
 
-    // 检查线路关联关系
+    // 检查线路关联关系与拓扑合法性
     auto checkSeg = [&](const RouteSegment &seg) {
         if (seg.startId.isEmpty() || seg.endId.isEmpty()) {
             errors.append(QString("线路 %1 未指定起终点").arg(seg.id));
         } else {
+            if (seg.startId == seg.endId) {
+                warnings.append(QString("线路 %1 存在自环 (起终点均为 %2)").arg(seg.id, seg.startId));
+            }
             if (!pointIds.contains(seg.startId)) {
                 warnings.append(QString("线路 %1 的起点 %2 不在站点列表中").arg(seg.id, seg.startId));
             }
@@ -605,8 +608,9 @@ bool RouteNetworkApi::validate(const RouteNetwork &network, QStringList &warning
 //  异步网络服务 API
 // ============================================================================
 
-void RouteNetworkApi::loadNetwork(const QString &/*mapId*/, LoadCallback cb)
+void RouteNetworkApi::loadNetwork(const QString &mapId, LoadCallback cb)
 {
+    Q_UNUSED(mapId);
     ApiService::instance().loadEditedMap([cb](int code, const QJsonObject &resp) {
         if (code != 200) {
             if (cb) cb(false, RouteNetwork(), "HTTP 请求失败或接口异常");

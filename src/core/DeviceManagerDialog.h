@@ -87,6 +87,7 @@ private:
     bool         m_isOnline     = false;
     QString      m_fwVersion;
     QString      m_remark;
+    QString      m_statusText;
     QTimer      *m_latencyTimer = nullptr;
 
     // 自动连接该设备专属 MQTT，持续订阅 /rob/{carId}/info 实时更新与缓存设备信息

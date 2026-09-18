@@ -51,7 +51,6 @@ private slots:
     void onTableSelectionChanged();
     void onTaskSelectionChanged();
     void onMqttMessage(const QString &topic, const QByteArray &payload);
-    void onWebSocketNotification(const QJsonObject &msg);
 
     // 任务执行控制
     void onLoadTask();
@@ -129,7 +128,7 @@ private:
     int m_pageSize = 9999;   // 一次性加载所有任务，表格自身滚动显示
     int m_total = 0;
     QString m_lastSelectedTaskId;      // 刷新前列表选中的 taskId，刷新后恢复选中
-    QTimer *m_refreshDebounce = nullptr;  // 合并频繁的 WebSocket 触发的刷新请求
+    QTimer *m_refreshDebounce = nullptr;  // 合并频繁的刷新请求
     bool m_suppressTaskLoad = false;      // 刷新列表恢复选中时，不触发 loadCurrentTask
 
     // 地图数据

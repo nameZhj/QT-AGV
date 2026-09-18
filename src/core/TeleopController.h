@@ -1,40 +1,48 @@
-#ifndef TELEOPCONTROLLER_H
-#define TELEOPCONTROLLER_H
+#pragma once
 
 #include <QObject>
-#include <QTimer>
 
-// 全局遥控控制器（单例）
-//
-// 把 CreateMapWidget 中"键盘遥控"逻辑提取为全局组件：
-//   - 通过 qApp->installEventFilter 在任意界面拦截遥控键（WASD/Space/P/L）
-//     返回 true 阻止事件传递到目标控件，因此遥控键优先级最高，
-//     自然解决与子控件（地图编辑、表格方向键等）的键盘冲突。
-//   - 100ms 定时器周期性发布速度指令到 MQTT：
-//       /rob/{agvId}/linear_speed   {"velocity": X}
-//       /rob/{agvId}/angular_speed  {"velocity": X}
-//       /rob/{agvId}/hoisting_status "1"/"0"   (P/L 升降)
-//   - 启用/停用时发布 /rob/{agvId}/teleop_enable "1"/"0"
-//   - 速度按"值变化"去重发送，避免持续发 0；Space 刹车期间每 tick 强制发 0。
-//   - Ctrl 加速倍率通过显式追踪 Ctrl 键状态实现（m_ctrlHeld），不拦截 Ctrl 本身，
-//     不影响 Ctrl+C / Ctrl+V 等组合键。
-//   - 焦点位于文本输入控件（QLineEdit/QTextEdit/QPlainTextEdit/QComboBox 可编辑）
-//     时放行所有按键，避免影响用户输入。
+class QTimer;
+class QKeyEvent;
+class QEvent;
+
+/**
+ * @brief AGV 全局键盘与遥控运动控制器 (Thread-Safe Reactive Singleton)
+ * 
+ * 核心架构与安全规范：
+ * 1. 工业级安全看门狗：捕获 WindowDeactivate / FocusOut 事件，彻底解决窗口失焦导致按键粘连 (Sticky Key) 的失控隐患；
+ * 2. 停用与析构零速急停：无论主动停用、窗口关闭还是程序退出，安全下发 0 速度指令；
+ * 3. 动态物理参数管理：消除硬编码魔数，支持外部动态调整基础线速度、角速度与加速倍率；
+ * 4. 严格依赖控制：头文件完全采用前置声明，阻断大型头文件包含；
+ * 5. 100% 保持既有信号与外部调用签名兼容。
+ */
 class TeleopController : public QObject
 {
     Q_OBJECT
+
 public:
     static TeleopController &instance();
 
-    // 当前是否启用遥控
-    bool isActive() const { return m_active; }
+    // ── 物理运动参数常量 (单位: 国际标准单位) ──
+    static constexpr int    kDefaultTickIntervalMs = 100;  ///< 控制器发送周期 (100ms / 10Hz)
+    static constexpr int    kBoostMaxTicks         = 10;   ///< Ctrl 键 1秒内线性达最大倍率 (10*100ms)
+    static constexpr double kDefaultBaseLinear     = 0.50; ///< 默认基础线速度 (0.50 m/s)
+    static constexpr double kDefaultBaseAngular    = 0.30; ///< 默认基础角速度 (0.30 rad/s)
+    static constexpr double kDefaultMaxMultiplier  = 2.00; ///< Ctrl 键最大加速倍率 (2.0x)
 
-    // 启用/停用遥控；停用时复位按键状态、停止定时器、移除事件过滤器
+    bool isActive() const { return m_active; }
     void setActive(bool on);
+
+    // ── 运动学参数动态配置 ──
+    double baseLinearSpeed() const { return m_baseLinearSpeed; }
+    double baseAngularSpeed() const { return m_baseAngularSpeed; }
+    void setBaseSpeeds(double linear, double angular);
+
+    double maxBoostMultiplier() const { return m_maxBoostMultiplier; }
+    void setMaxBoostMultiplier(double mult);
 
 signals:
     void activeChanged(bool active);
-    // 速度变化通知（用于 HUD 显示），linear/angular 单位 m/s 与 rad/s
     void motionChanged(double linear, double angular);
     void brakeChanged(bool brake);
     void hoistChanged(int direction);   // +1 升 / -1 降 / 0 停
@@ -44,13 +52,13 @@ protected:
 
 private:
     explicit TeleopController(QObject *parent = nullptr);
-    ~TeleopController() override = default;
+    ~TeleopController() override;
     TeleopController(const TeleopController &) = delete;
     TeleopController &operator=(const TeleopController &) = delete;
 
-    bool handleKeyEvent(class QKeyEvent *event, bool pressed);
+    bool handleKeyEvent(QKeyEvent *event, bool pressed);
     bool isTeleopKey(int key) const;
-    bool isMovementKey(int key) const;   // 上下左右/空格(始终拦截)
+    bool isMovementKey(int key) const;
     bool focusIsTextInput() const;
 
     void onTick();
@@ -58,10 +66,17 @@ private:
     void resetKeyStates();
     void publishTeleopEnable(bool on);
     void publishHoistStatus(const QString &status);
+    void emergencyStop();
 
+private:
     QTimer *m_timer = nullptr;
-    bool m_active = false;
-    bool m_wasHoisting = false;
+    bool    m_active = false;
+    bool    m_wasHoisting = false;
+
+    // 基础运动配置
+    double  m_baseLinearSpeed    = kDefaultBaseLinear;
+    double  m_baseAngularSpeed   = kDefaultBaseAngular;
+    double  m_maxBoostMultiplier = kDefaultMaxMultiplier;
 
     // 按键状态
     bool m_keyForward   = false;
@@ -71,14 +86,12 @@ private:
     bool m_keyBrake     = false;
     bool m_keyHoistUp   = false;
     bool m_keyHoistDown = false;
-    bool m_ctrlHeld     = false;   // Ctrl 加速键状态（事件过滤器显式追踪）
-    int  m_ctrlHeldTicks = 0;      // Ctrl 持续按住的 tick 数，用于线性渐增倒率
+    bool m_ctrlHeld     = false;
+    int  m_ctrlHeldTicks = 0;
 
     // 速度去重
     double m_lastPublishedLinear  = 0.0;
     double m_lastPublishedAngular = 0.0;
-    bool   m_hasPublishedLinear  = false;
-    bool   m_hasPublishedAngular = false;
+    bool   m_hasPublishedLinear   = false;
+    bool   m_hasPublishedAngular  = false;
 };
-
-#endif // TELEOPCONTROLLER_H

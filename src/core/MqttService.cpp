@@ -151,7 +151,7 @@ void MqttService::publish(const QString &topic, const QByteArray &payload, int q
         qWarning().noquote() << QStringLiteral("[MQTT PUB FAIL] Not connected, topic: ") << topic;
         return;
     }
-    if (!topic.contains(QStringLiteral("/log")) && topic != QStringLiteral("log")) {
+    if (m_loggingEnabled && !topic.contains(QStringLiteral("/log")) && topic != QStringLiteral("log")) {
         qDebug().noquote() << QStringLiteral("[MQTT PUB] Topic: %1 | Payload: %2")
                               .arg(topic, QString::fromUtf8(payload).left(300));
     }
@@ -165,7 +165,9 @@ void MqttService::publishJson(const QString &topic, const QJsonObject &jsonObj, 
 
 void MqttService::onConnected()
 {
-    qDebug().noquote() << QStringLiteral("[MQTT Connected] Connected to broker successfully");
+    if (m_loggingEnabled) {
+        qDebug().noquote() << QStringLiteral("[MQTT Connected] Connected to broker successfully");
+    }
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();
     }
@@ -176,7 +178,9 @@ void MqttService::onConnected()
 
 void MqttService::onDisconnected()
 {
-    qDebug().noquote() << QStringLiteral("[MQTT Disconnected] Disconnected from broker");
+    if (m_loggingEnabled) {
+        qDebug().noquote() << QStringLiteral("[MQTT Disconnected] Disconnected from broker");
+    }
     emit disconnected();
     if (!m_explicitDisconnect && !m_lastHost.isEmpty() && m_reconnectTimer && !m_reconnectTimer->isActive()) {
         m_reconnectTimer->setInterval(m_currentBackoffMs);
@@ -214,8 +218,10 @@ void MqttService::onErrorChanged(QMqttClient::ClientError error)
 void MqttService::onReconnectTimeout()
 {
     if (!m_explicitDisconnect && !m_lastHost.isEmpty() && m_client && m_client->state() == QMqttClient::Disconnected) {
-        qDebug().noquote() << QStringLiteral("[MQTT Reconnect] 尝试重新连接到 %1:%2 (退避周期: %3ms)")
-                              .arg(m_lastHost).arg(m_lastPort).arg(m_currentBackoffMs);
+        if (m_loggingEnabled) {
+            qDebug().noquote() << QStringLiteral("[MQTT Reconnect] 尝试重新连接到 %1:%2 (退避周期: %3ms)")
+                                  .arg(m_lastHost).arg(m_lastPort).arg(m_currentBackoffMs);
+        }
         m_client->connectToHost();
 
         m_currentBackoffMs = qMin(kMaxBackoffMs, static_cast<int>(m_currentBackoffMs * 1.5));
@@ -283,8 +289,8 @@ void MqttService::onMessageReceived(const QByteArray &message, const QMqttTopicN
 {
     const QString topicStr = topic.name();
 
-    // 打印接收日志，保留关键业务追踪
-    if (!topicStr.contains(QStringLiteral("/log")) && topicStr != QStringLiteral("log")) {
+    // 打印接收日志 (受 m_loggingEnabled 开关控制，默认关闭以避免刷屏)
+    if (m_loggingEnabled && !topicStr.contains(QStringLiteral("/log")) && topicStr != QStringLiteral("log")) {
         qDebug().noquote() << QStringLiteral("[MQTT RECV] Topic: %1 | Payload: %2")
                               .arg(topicStr, QString::fromUtf8(message).left(300));
     }

@@ -11,11 +11,11 @@
 #include "widgets/TaskChainWidget.h"
 #include "core/AppConfig.h"
 #include "core/MqttService.h"
-#include "core/WebSocketService.h"
 #include "core/DeviceManagerDialog.h"
 #include "core/Toast.h"
 #include "core/TeleopController.h"
 #include "core/ApiService.h"
+#include "core/RobotInfoManager.h"
 #include <QDebug>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -559,13 +559,12 @@ void MainWindow::setupStatusBar()
 
 void MainWindow::connectServices()
 {
+    RobotInfoManager::instance().init();
+
     QString ip = AppConfig::instance().serverIp();
     if (ip.isEmpty()) return;
 
     MqttService::instance().connectToHost(ip, 1883);
-
-    QString wsUrl = QString("ws://%1:8048/websocket/message").arg(ip);
-    WebSocketService::instance().connectToServer(wsUrl);
 }
 
 // ── Slots ──────────────────────────────────────────────────────────────────

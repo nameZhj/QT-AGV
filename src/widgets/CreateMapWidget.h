@@ -118,7 +118,7 @@ protected:
             if (s_robotPix.isNull()) {
                 QSvgRenderer renderer(QString(":/ic-robot1.svg"));
                 if (renderer.isValid()) {
-                    s_robotPix = QPixmap(128, 128);
+                    s_robotPix = QPixmap(180, 330);
                     s_robotPix.fill(Qt::transparent);
                     QPainter rp(&s_robotPix);
                     rp.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
@@ -126,16 +126,25 @@ protected:
                 }
             }
 
-            const int iconSz = 14;  // 减半自28
-            // 用setScale思路：直接用128px源图在QPainter中缩放绘制，避免重采样锯齿
+            // scale 为当前屏幕像素/米 (ppm)。真实尺寸: 长 1.10m, 宽 0.60m
+            const double kRobotLength = 1.10;
+            const double kRobotWidth  = 0.60;
+            double sceneW = kRobotWidth * scale;
+            double sceneH = kRobotLength * scale;
+
             p.save();
             p.translate(px, py);
             p.rotate(90.0 - qRadiansToDegrees(angle));
             if (!s_robotPix.isNull()) {
-                double s = (double)iconSz / s_robotPix.width();
-                p.scale(s, s);
+                double sx = sceneW / (double)s_robotPix.width();
+                double sy = sceneH / (double)s_robotPix.height();
+                p.scale(sx, sy);
                 p.setRenderHint(QPainter::SmoothPixmapTransform);
                 p.drawPixmap(-s_robotPix.width() / 2, -s_robotPix.height() / 2, s_robotPix);
+            } else {
+                p.setBrush(QColor(30, 41, 59, 220));
+                p.setPen(QPen(QColor(56, 189, 248), 1.5));
+                p.drawRect(QRectF(-sceneW / 2.0, -sceneH / 2.0, sceneW, sceneH));
             }
             p.restore();
         }

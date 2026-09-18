@@ -2,6 +2,7 @@
 #include "core/ApiService.h"
 #include "core/AppConfig.h"
 #include "core/MqttService.h"
+#include "core/RobotInfoManager.h"
 #include "core/LoadingDialog.h"
 #include "core/MapPgmUtil.h"
 #include <QPushButton>
@@ -33,10 +34,10 @@
 MapShowWidget::MapShowWidget(const QString &mapId, QWidget *parent)
     : QWidget(parent), m_mapId(mapId)
 {
-    // Load robot SVG icon at 128×128 for crisp display
+    // Load robot SVG icon at 180×330 (matching 60×110 aspect ratio) for crisp display
     QSvgRenderer renderer(QString(":/ic-robot1.svg"));
     if (renderer.isValid()) {
-        m_robotPix = QPixmap(128, 128);
+        m_robotPix = QPixmap(180, 330);
         m_robotPix.fill(Qt::transparent);
         QPainter rp(&m_robotPix);
         rp.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
@@ -824,10 +825,21 @@ void MapShowWidget::updateCarPosition(const QString &carId, double x, double y, 
         loggedCars.insert(carId);
     }
 
-    // 图标显示尺寸(场景单位=图像像素)
-    const double iconSz  = 14.0;   // 显示尺寸（场景像素）
-    const double srcSz   = 128.0;  // 预渲染尺寸
-    const double pivot   = srcSz / 2.0;  // 旋转/缩放锚点 = 中心
+    // 地图比例尺计算: ppm (pixels per meter)
+    double mapW = m_worldR - m_worldL;
+    double mapH = m_worldT - m_worldB;
+    double ppm = 20.0; // 默认备用比例尺 0.05m/px
+    if (m_imgW > 0 && mapW > 0 && m_imgH > 0 && mapH > 0) {
+        ppm = ((double)m_imgW / mapW + (double)m_imgH / mapH) / 2.0;
+    } else if (m_imgW > 0 && mapW > 0) {
+        ppm = (double)m_imgW / mapW;
+    }
+
+    // 真实尺寸: 车长 1.10m (纵向/车头朝向), 车宽 0.60m (横向)
+    const double kRobotLength = 1.10;
+    const double kRobotWidth  = 0.60;
+    double sceneW = kRobotWidth * ppm;
+    double sceneH = kRobotLength * ppm;
 
     // 旋转角度计算 - 严格对齐 Vue show.vue drawCar()
     // Vue: rotation = Math.PI - yaw (OpenLayers Icon.rotation, CW, 默认图标朝左/西)
@@ -845,25 +857,37 @@ void MapShowWidget::updateCarPosition(const QString &carId, double x, double y, 
     double yawDeg = yawRad * 180.0 / M_PI;
     double screenAngle = 90.0 - yawDeg;
 
-    QGraphicsPixmapItem *marker;
+    QGraphicsItem *marker = nullptr;
     if (!m_robotPix.isNull()) {
-        marker = new QGraphicsPixmapItem(m_robotPix);
-        marker->setScale(iconSz / srcSz);
-        marker->setTransformOriginPoint(pivot, pivot);
-        marker->setRotation(screenAngle);
-        // 缩放轴心(pivot)在场景中的位置 = pos + pivot → 令其等于 sp
-        marker->setPos(sp.x() - pivot, sp.y() - pivot);
+        const double srcW   = m_robotPix.width();
+        const double srcH   = m_robotPix.height();
+        const double pivotX = srcW / 2.0;
+        const double pivotY = srcH / 2.0;
+        const double scale  = (srcW > 0) ? (sceneW / srcW) : 1.0;
+
+        auto *pix = new QGraphicsPixmapItem(m_robotPix);
+        pix->setScale(scale);
+        pix->setTransformOriginPoint(pivotX, pivotY);
+        pix->setRotation(screenAngle);
+        pix->setPos(sp.x() - pivotX, sp.y() - pivotY);
+        marker = pix;
     } else {
-        // fallback: 简单三角形 (尖端朝上=北)
-        const double half = iconSz / 2.0;
-        QPolygonF tri;
-        tri << QPointF(0, -half) << QPointF(-half * 0.6, half * 0.6) << QPointF(half * 0.6, half * 0.6);
+        // fallback: 110*60 矩形 (车头浅蓝)
+        double halfW = sceneW / 2.0;
+        double halfH = sceneH / 2.0;
+        QPolygonF rectPoly;
+        rectPoly << QPointF(-halfW, -halfH)
+                 << QPointF(halfW, -halfH)
+                 << QPointF(halfW, halfH)
+                 << QPointF(-halfW, halfH);
         QTransform t;
         t.rotate(screenAngle);
-        tri = t.map(tri);
+        rectPoly = t.map(rectPoly);
         QPolygonF translated;
-        for (const QPointF &pt : tri) translated << pt + sp;
-        auto *polyItem = m_scene->addPolygon(translated, QPen(Qt::red, 2), QBrush(Qt::red));
+        for (const QPointF &pt : rectPoly) translated << pt + sp;
+        auto *polyItem = m_scene->addPolygon(translated,
+            QPen(QColor(56, 189, 248), 1.5),
+            QBrush(QColor(30, 41, 59, 220)));
         polyItem->setZValue(50);
         info.marker = polyItem;
         info.x = x; info.y = y; info.angle = angle;
@@ -938,6 +962,8 @@ void MapShowWidget::onMqttMessage(const QString &topic, const QByteArray &payloa
     QJsonObject poseObj = data.value("pose").toObject();
 
     if (topic.contains("info")) {
+        RobotInfoManager::instance().updateFromPayload(topic, payload);
+
         QString carId;
         // 从topic提取carId: /rob/{carId}/info
         QRegularExpression re("/rob/(.+)/info");

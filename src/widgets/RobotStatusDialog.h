@@ -18,6 +18,8 @@
  * 动态读取上位机真实网络、Wi-Fi 信号/网卡、当前地图以及 MQTT "/info" 话题数据。
  * 无对应版本/参数的字段严格显示为 "--"，有真实数据的字段实时展现真实值。
  */
+struct RobotInfo;
+
 class RobotStatusDialog : public QDialog
 {
     Q_OBJECT
@@ -27,6 +29,9 @@ public:
 
     // 更新当前地图上下文
     void setMapInfo(const QString &mapId, const QString &mapName);
+
+    // 从全局 RobotInfo 同步全量车辆信息
+    void updateFromRobotInfo(const RobotInfo &info);
 
     // 从 MapViewWidget 同步机器人状态
     void updateFromRobotState(const QString &carId, double x, double y, double yawRad,
