@@ -3,6 +3,7 @@
 #include "core/ApiService.h"
 #include "core/MqttService.h"
 #include "core/RobotInfoManager.h"
+#include "core/TeleopController.h"
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
@@ -55,12 +56,19 @@ static const QString kToolBtnStyle =
     "QToolButton{background:#252a35;color:#c8d0d8;border:1px solid #3a3f4a;"
     "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
     "QToolButton:hover{background:#2d3340;border-color:#4a9eff;}"
-    "QToolButton:pressed{background:#1e4080;}";
+    "QToolButton:pressed{background:#1e4080;}"
+    "QToolButton:disabled{background:#1c1f26;color:#556070;border-color:#2a2e38;}";
 static const QString kToolBtnPrimary =
     "QToolButton{background:#1e6fd4;color:#fff;border:none;"
     "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
     "QToolButton:hover{background:#2980e8;}"
-    "QToolButton:pressed{background:#155db8;}";
+    "QToolButton:pressed{background:#155db8;}"
+    "QToolButton:disabled{background:#1c1f26;color:#556070;border:none;}";
+static const QString kToolBtnDanger =
+    "QToolButton{background:#c0392b;color:#fff;border:none;"
+    "border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;}"
+    "QToolButton:hover{background:#e74c3c;}"
+    "QToolButton:pressed{background:#a93226;}";
 static const QString kBtnPrimary = "background:#2980b9; color:white; border-radius:4px; padding:6px 12px;";
 
 // ── Toolbar icon helpers ─────────────────────────────────────────────────────
@@ -235,6 +243,43 @@ QPixmap drawMapToolIcon(const QString &name, const QColor &col, int sz = 20)
               << QPointF(sz*0.68, sz*0.52)
               << QPointF(sz*0.78, sz*0.52);
         p.drawPolyline(pulse);
+    } else if (name == "move") {
+        // 移动图标：四向移动十字箭头
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(c, sz*0.20), QPointF(c, sz*0.80));
+        p.drawLine(QPointF(sz*0.20, c), QPointF(sz*0.80, c));
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        QPolygonF topA; topA << QPointF(c, sz*0.10) << QPointF(c - sz*0.10, sz*0.24) << QPointF(c + sz*0.10, sz*0.24);
+        p.drawPolygon(topA);
+        QPolygonF botA; botA << QPointF(c, sz*0.90) << QPointF(c - sz*0.10, sz*0.76) << QPointF(c + sz*0.10, sz*0.76);
+        p.drawPolygon(botA);
+        QPolygonF lftA; lftA << QPointF(sz*0.10, c) << QPointF(sz*0.24, c - sz*0.10) << QPointF(sz*0.24, c + sz*0.10);
+        p.drawPolygon(lftA);
+        QPolygonF rgtA; rgtA << QPointF(sz*0.90, c) << QPointF(sz*0.76, c - sz*0.10) << QPointF(sz*0.76, c + sz*0.10);
+        p.drawPolygon(rgtA);
+    } else if (name == "cancel") {
+        // 取消图标：圆圈内打叉
+        p.setPen(QPen(col, 1.4)); p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPointF(c, c), sz*0.38, sz*0.38);
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(c - sz*0.16, c - sz*0.16), QPointF(c + sz*0.16, c + sz*0.16));
+        p.drawLine(QPointF(c + sz*0.16, c - sz*0.16), QPointF(c - sz*0.16, c + sz*0.16));
+    } else if (name == "pause") {
+        // 暂停图标：两条垂直实心圆角柱
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        p.drawRoundedRect(QRectF(sz*0.26, sz*0.20, sz*0.16, sz*0.60), 2, 2);
+        p.drawRoundedRect(QRectF(sz*0.58, sz*0.20, sz*0.16, sz*0.60), 2, 2);
+    } else if (name == "teleop") {
+        // 遥控手柄图标：手柄外壳 + 十字键 + 按键点
+        p.setPen(QPen(col, 1.4)); p.setBrush(Qt::NoBrush);
+        QRectF body(sz*0.14, sz*0.26, sz*0.72, sz*0.48);
+        p.drawRoundedRect(body, sz*0.18, sz*0.18);
+        p.setPen(QPen(col, 1.5, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(sz*0.34, sz*0.40), QPointF(sz*0.34, sz*0.60));
+        p.drawLine(QPointF(sz*0.24, sz*0.50), QPointF(sz*0.44, sz*0.50));
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        p.drawEllipse(QPointF(sz*0.68, sz*0.44), sz*0.05, sz*0.05);
+        p.drawEllipse(QPointF(sz*0.60, sz*0.54), sz*0.05, sz*0.05);
     }
 
     p.end();
@@ -384,6 +429,8 @@ MapViewWidget::MapViewWidget(QWidget *parent)
     setupUI();
     connect(&RobotInfoManager::instance(), &RobotInfoManager::currentRobotInfoUpdated,
             this, &MapViewWidget::onRobotInfoUpdated);
+    connect(&TeleopController::instance(), &TeleopController::activeChanged,
+            this, &MapViewWidget::onTeleopActiveChanged);
     onRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
 }
 
@@ -518,38 +565,78 @@ void MapViewWidget::setupToolbar(QWidget *parent)
         return b;
     };
 
+    // 1. 启用编辑
+    m_editMapBtn = addBtn("edit", "启用编辑", SLOT(onEditMap()));
+    m_editMapBtn->setToolTip("进入地图编辑与拓扑标注模式");
+
+    // 2. 加载地图 (原 smap上传)
+    m_uploadSmapBtn = addBtn("smap-upload", "加载地图", SLOT(onUploadSmap()));
+    m_uploadSmapBtn->setToolTip("选择本地 .smap 地图文件加载至当前视图");
+
+    // 3. 2D建图
     m_createMapBtn = addBtn("add", "2D建图", SLOT(onCreateMap()));
-    m_uploadMapBtn = addBtn("map-upload", "地图上传", SLOT(onUploadMap()));
-    m_uploadSmapBtn = addBtn("smap-upload", "smap上传", SLOT(onUploadSmap()));
-    m_refreshBtn    = addBtn("refresh", "刷新", SLOT(onRefreshMap()));
+    m_createMapBtn->setToolTip("开启 2D SLAM 激光扫描建图模式");
 
-    auto *sepCreate = new QFrame; sepCreate->setFrameShape(QFrame::VLine);
-    sepCreate->setStyleSheet("color:#2d3340;"); lay->addWidget(sepCreate);
-
-    m_switchMapBtn = addBtn("swap", "切换地图", SLOT(onSwitchMap()));
-    m_switchMapBtn->setStyleSheet(kToolBtnPrimary);
-
+    // 4. 重定位 (点击一次即激活，修复点两次bug)
     m_relocBtn = addBtn("target", "重定位", SLOT(onRelocalize()));
     m_relocBtn->setCheckable(true);
+    m_relocBtn->setToolTip("单次点击激活：在地图上点击并拖拽设定初始位姿");
 
+    // 5. 路径导航
     m_navModeBtn = addBtn("route", "路径导航", SLOT(onToggleNavMode()));
     m_navModeBtn->setCheckable(true);
+    m_navModeBtn->setToolTip("路径导航模式：点击地图上的站点发起导航任务");
 
+    // 6. 移动 (自由点移动模式)
+    m_moveBtn = addBtn("move", "移动", SLOT(onToggleMoveMode()));
+    m_moveBtn->setCheckable(true);
+    m_moveBtn->setToolTip("自由移动模式：点击地图任意空白位置下发移动坐标");
+
+    // 7. 取消导航 (不执行时置灰不可点击)
+    m_cancelNavBtn = addBtn("cancel", "取消导航", SLOT(onCancelNavigation()));
+    m_cancelNavBtn->setEnabled(false);
+    m_cancelNavBtn->setToolTip("取消当前执行中的导航或移动任务");
+
+    // 8. 暂停导航 (不执行时置灰不可点击)
+    m_pauseNavBtn = addBtn("pause", "暂停导航", SLOT(onPauseNavigation()));
+    m_pauseNavBtn->setEnabled(false);
+    m_pauseNavBtn->setToolTip("暂停或恢复当前执行中的导航任务");
+
+    auto *sepNav = new QFrame; sepNav->setFrameShape(QFrame::VLine);
+    sepNav->setStyleSheet("color:#2d3340;"); lay->addWidget(sepNav);
+
+    // 9. 推送地图 (原 地图上传)
+    m_uploadMapBtn = addBtn("map-upload", "推送地图", SLOT(onUploadMap()));
+    m_uploadMapBtn->setToolTip("将当前地图推送到设备/服务端");
+
+    // 10. 拉取地图 (原 下载原文件)
+    m_downloadMapBtn = addBtn("file-download", "拉取地图", SLOT(onDownloadSource()));
+    m_downloadMapBtn->setToolTip("从设备/服务端拉取下载地图原文件 (.pcd/.smap)");
+
+    // 11. 地图管理 (原 切换地图)
+    m_switchMapBtn = addBtn("swap", "地图管理", SLOT(onSwitchMap()));
+    m_switchMapBtn->setStyleSheet(kToolBtnPrimary);
+    m_switchMapBtn->setToolTip("地图管理：切换、重命名或删除地图");
+
+    // 12. 抢占控制权 (从底栏移入顶栏)
+    m_teleopBtn = addBtn("teleop", "抢占控制权", SLOT(onTeleopClicked()));
+    m_teleopBtn->setToolTip(
+        "点击抢占控制权（暂停导航并接管键盘控制），再次点击恢复导航\n"
+        "键盘: W A S D 移动 | Space 刹车 | Ctrl 加速 | P 升降上 | L 升降下");
+
+    // 13. 状态
     m_statusBtn = addBtn("status", "状态", SLOT(onShowRobotStatus()));
-    m_statusBtn->setToolTip("运行状态 / 基本信息");
+    m_statusBtn->setToolTip("查看机器人运行状态与详细诊断信息");
 
-    auto *sep2 = new QFrame; sep2->setFrameShape(QFrame::VLine);
-    sep2->setStyleSheet("color:#2d3340;"); lay->addWidget(sep2);
+    auto *sepEnd = new QFrame; sepEnd->setFrameShape(QFrame::VLine);
+    sepEnd->setStyleSheet("color:#2d3340;"); lay->addWidget(sepEnd);
 
-    addBtn("edit",          "编辑地图",   SLOT(onEditMap()));
-    addBtn("tag",           "重命名",     SLOT(onRenameMap()));
-    addBtn("file-download", "下载原文件", SLOT(onDownloadSource()));
-    addBtn("trash",         "删除地图",   SLOT(onDeleteMap()));
-
-    auto *sep3 = new QFrame; sep3->setFrameShape(QFrame::VLine);
-    sep3->setStyleSheet("color:#2d3340;"); lay->addWidget(sep3);
-
+    // 辅助工具：重置视图与刷新
     m_resetViewBtn = addBtn("reset", "重置视图", SLOT(onResetView()));
+    m_resetViewBtn->setToolTip("复位视图缩放与中心位置");
+
+    m_refreshBtn = addBtn("refresh", "刷新", SLOT(onRefreshMap()));
+    m_refreshBtn->setToolTip("重新刷新当前地图与路网数据");
 
     lay->addStretch();
 }
@@ -1549,9 +1636,9 @@ void MapViewWidget::renderRobot()
         ppm = (double)m_imgW / mapW;
     }
 
-    // 真实尺寸: 车长 1.10m (纵向/车头朝向), 车宽 0.60m (横向)
-    const double kRobotLength = 1.10;
-    const double kRobotWidth  = 0.60;
+    // 真实尺寸: 车长 1.0m (纵向/车头朝向), 车宽 0.5m (横向)
+    const double kRobotLength = 1.0;
+    const double kRobotWidth  = 0.5;
     double sceneW = kRobotWidth * ppm;
     double sceneH = kRobotLength * ppm;
 
@@ -1642,49 +1729,10 @@ void MapViewWidget::onMqttMessage(const QString &topic, const QByteArray &payloa
     QJsonDocument doc = QJsonDocument::fromJson(cleanPayload, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
 
-    if (topic.contains("obstacle") || topic.contains("nearest")) {
-        m_lastObstacleTopic = topic;
-        m_lastObstaclePayload = cleanPayload;
-        if (m_statusDialog) {
-            m_statusDialog->onMqttMessage(topic, cleanPayload);
-        }
-        return;
-    }
-
-    if (!topic.contains("info") && !topic.contains("status") && !topic.contains("carto_pose")) return;
-
-    QJsonObject d = doc.object();
-    QJsonObject dataObj = d.value("data").toObject();
-    QJsonObject poseObj = d.value("pose").toObject();
-
-    auto dv = [&](const QStringList &keys, double def = 0) -> double {
-        for (const QString &k : keys) {
-            if (d.contains(k)) {
-                QJsonValue v = d.value(k);
-                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
-            }
-            if (!dataObj.isEmpty() && dataObj.contains(k)) {
-                QJsonValue v = dataObj.value(k);
-                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
-            }
-            if (!poseObj.isEmpty() && poseObj.contains(k)) {
-                QJsonValue v = poseObj.value(k);
-                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
-            }
-        }
-        return def;
-    };
-
-    auto hasKey = [&](const QStringList &keys) -> bool {
-        for (const QString &k : keys) {
-            if (d.contains(k) && !d.value(k).isNull() && !d.value(k).isUndefined()) return true;
-            if (!dataObj.isEmpty() && dataObj.contains(k) && !dataObj.value(k).isNull() && !dataObj.value(k).isUndefined()) return true;
-            if (!poseObj.isEmpty() && poseObj.contains(k) && !poseObj.value(k).isNull() && !poseObj.value(k).isUndefined()) return true;
-        }
-        return false;
-    };
+    if (!topic.contains("info")) return;
 
     // 过滤非当前跟踪设备的消息 (多机防干扰)
+    QJsonObject d = doc.object();
     QString msgCarId;
     if (d.contains("car_id")) msgCarId = d.value("car_id").toVariant().toString().trimmed();
     else if (d.contains("carId")) msgCarId = d.value("carId").toVariant().toString().trimmed();
@@ -1698,32 +1746,7 @@ void MapViewWidget::onMqttMessage(const QString &topic, const QByteArray &payloa
         return;
     }
 
-    // 地图上设备图标位置和朝向严格根据 “info” 话题提供的定位信息来确定
-    const bool isInfoTopic = topic.endsWith("/info") || topic.endsWith("info") || topic.contains("/info");
-
-    if (isInfoTopic) {
-        RobotInfoManager::instance().updateFromPayload(topic, cleanPayload);
-        if (m_statusDialog) {
-            m_statusDialog->onMqttMessage(topic, cleanPayload);
-        }
-        return;
-    } else {
-        // 非 info 话题 (如 status, carto_pose 等)：仅补充线速度与电池电量，绝不修改地图设备位置和朝向
-        const RobotInfo &curInfo = RobotInfoManager::instance().currentInfo();
-        if (!curInfo.actual_vel.valid && hasKey({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"})) {
-            m_robot.speed = dv({"speed", "linear_x", "linearX", "linear_velocity", "v", "velocity"}, m_robot.speed);
-        }
-        if (curInfo.battery < 0.0 && hasKey({"power", "battery", "bat", "soc", "battery_level"})) {
-            double bat = dv({"power", "battery", "bat", "soc", "battery_level"}, m_robot.battery);
-            if (bat > 0 && bat <= 1.0) bat *= 100.0;
-            m_robot.battery = bat;
-        }
-        updateInfoPanel();
-    }
-
-    if (m_statusDialog) {
-        m_statusDialog->onMqttMessage(topic, cleanPayload);
-    }
+    RobotInfoManager::instance().updateFromPayload(topic, cleanPayload);
 }
 
 void MapViewWidget::onRobotInfoUpdated(const RobotInfo &info)
@@ -1754,6 +1777,11 @@ void MapViewWidget::onRobotInfoUpdated(const RobotInfo &info)
 
     renderRobot();
     updateInfoPanel();
+
+    if (info.status != "3" && info.status != "5") {
+        m_navActive = false;
+    }
+    updateNavButtonsState();
 }
 
 void MapViewWidget::updateInfoPanel()
@@ -1836,10 +1864,11 @@ void MapViewWidget::onToggleNavMode()
     m_navMode = m_navModeBtn ? m_navModeBtn->isChecked() : false;
     if (m_navMode) {
         m_navModeBtn->setStyleSheet(kToolBtnPrimary);
-        if (m_relocMode && m_relocBtn) {
-            m_relocMode = false;
-            m_relocBtn->setChecked(false);
-            m_relocBtn->setStyleSheet(kToolBtnStyle);
+        if (m_relocMode) exitRelocMode();
+        if (m_moveMode && m_moveBtn) {
+            m_moveMode = false;
+            m_moveBtn->setChecked(false);
+            m_moveBtn->setStyleSheet(kToolBtnStyle);
         }
         if (m_canvas) {
             m_canvas->setPanWithLeftButton(false);
@@ -1849,7 +1878,7 @@ void MapViewWidget::onToggleNavMode()
     } else {
         if (m_navModeBtn) m_navModeBtn->setStyleSheet(kToolBtnStyle);
         if (m_canvas) {
-            m_canvas->setPanWithLeftButton(!m_relocMode);
+            m_canvas->setPanWithLeftButton(!m_relocMode && !m_moveMode);
             m_canvas->setCursor(Qt::CrossCursor);
         }
         setStatus("已退出路径导航模式");
@@ -1936,8 +1965,48 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
                 QString("/rob/%1/navigation").arg(carId),
                 QJsonDocument(mqttData).toJson(QJsonDocument::Compact));
 
+            m_navActive = true;
+            updateNavButtonsState();
+
             setStatus(QString("已下发导航指令至点位 “%1” (%2, %3)").arg(ptName).arg(wPos.x(), 0, 'f', 2).arg(wPos.y(), 0, 'f', 2), "#00e676");
             Toast::success(this, QString("导航指令已下发: “%1”").arg(ptName));
+        }
+        return;
+    }
+
+    if (m_moveMode) {
+        QMessageBox moveBox(this);
+        moveBox.setWindowTitle("自由移动");
+        moveBox.setIcon(QMessageBox::Question);
+        moveBox.setText(QString("是否移动至目标坐标 (%1, %2)？")
+                        .arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2));
+        QPushButton *startBtn = moveBox.addButton("开始移动", QMessageBox::AcceptRole);
+        QPushButton *cancelBtn = moveBox.addButton("取消", QMessageBox::RejectRole);
+        moveBox.setDefaultButton(startBtn);
+        moveBox.exec();
+
+        if (moveBox.clickedButton() == startBtn) {
+            QString carId = AppConfig::instance().currentDevice().carId;
+            if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+            if (carId.isEmpty()) carId = "1";
+
+            QJsonObject mqttData;
+            mqttData["command"] = "navigate";
+            mqttData["point_id"] = "";
+            mqttData["point_name"] = QString("坐标(%1,%2)").arg(world.x(), 0, 'f', 1).arg(world.y(), 0, 'f', 1);
+            mqttData["target_x"] = world.x();
+            mqttData["target_y"] = world.y();
+            mqttData["sender"] = "QT-AGV";
+
+            MqttService::instance().publish(
+                QString("/rob/%1/navigation").arg(carId),
+                QJsonDocument(mqttData).toJson(QJsonDocument::Compact));
+
+            m_navActive = true;
+            updateNavButtonsState();
+
+            setStatus(QString("已下发移动指令至 (%1, %2)").arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2), "#00e676");
+            Toast::success(this, QString("移动指令已下发: (%1, %2)").arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2));
         }
         return;
     }
@@ -2034,9 +2103,7 @@ void MapViewWidget::onSceneReleased(const QPointF &scenePos, Qt::MouseButton btn
         } else {
             setStatus("重定位失败", "#e05555");
         }
-        m_relocMode = false;
-        m_relocBtn->setStyleSheet(kToolBtnStyle);
-        m_canvas->setPanWithLeftButton(true);
+        exitRelocMode();
     });
 }
 
@@ -2134,6 +2201,71 @@ void MapViewWidget::onRefreshMap()
 
         loadMapById(mapId);
         Toast::success(this, "已获取绑定地图并刷新");
+    });
+}
+
+void MapViewWidget::forceRefreshAfterMapping()
+{
+    // 重置所有节流与请求锁，确保不被500ms防抖或并发锁阻断
+    m_lastRefreshMs = 0;
+    m_isLoadingCar  = false;
+    m_loadingMapId.clear();
+
+    setStatus("建图完成，正在获取最新地图...");
+    QString carId = AppConfig::instance().agvId();
+    if (carId.isEmpty()) carId = "1";
+
+    ApiService::instance().getCar(carId, [this](int code, const QJsonObject &data) {
+        if (code != 200) {
+            setStatus("获取设备信息失败", "#e05555");
+            Toast::error(this, "获取设备信息失败");
+            return;
+        }
+        QJsonObject car = data.value("data").toObject(data);
+
+        // 更新右侧面板车辆名称
+        QString carName = car.value("carName").toString().trimmed();
+        if (carName.isEmpty()) carName = QString("AGV-%1").arg(AppConfig::instance().agvId());
+        m_robot.carName = carName;
+        m_carNameLabel->setText(carName);
+        updateInfoPanel();
+
+        // 获取当前绑定的 mapId
+        QString mapId = jsonIdStr(car.value("mapId"));
+        if (mapId.isEmpty() || mapId == "0") mapId = jsonIdStr(car.value("map_id"));
+        if (mapId.isEmpty() || mapId == "0") mapId = jsonIdStr(data.value("mapId"));
+
+        if (mapId.isEmpty() || mapId == "0") {
+            setStatus("设备当前未绑定地图", "#e05555");
+            Toast::info(this, "设备当前未绑定地图");
+            return;
+        }
+
+        // 清理该 mapId 对应的本地缓存，强制重新从服务端下载最新 zip
+        QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + mapId;
+        QDir dir(localDir);
+        if (dir.exists()) {
+            // 删除所有 yaml/pgm/zip/meta 文件，保留 route.json 等其他文件
+            const QStringList patterns = {"*.yaml", "*.yml", "*.pgm", "*.zip", "meta.json"};
+            for (const QString &pattern : patterns) {
+                for (const QString &f : dir.entryList({pattern}, QDir::Files)) {
+                    dir.remove(f);
+                    qDebug() << "[forceRefreshAfterMapping] Removed stale cache file:" << f;
+                }
+            }
+        }
+
+        // 清理路网与位姿缓存
+        m_points = QJsonArray();
+        m_lines  = QJsonArray();
+        m_curves = QJsonArray();
+        m_charges = QJsonArray();
+        m_highPrecisionPoints = QJsonArray();
+        m_routeLoaded = false;
+        m_robot.posValid = false;
+
+        loadMapById(mapId);
+        Toast::success(this, "建图完成，正在加载最新地图");
     });
 }
 
@@ -2485,6 +2617,7 @@ void MapViewWidget::onSwitchMap()
     });
 
     if (dlg.exec() == QDialog::Accepted && !selectedMapId.isEmpty()) {
+        exitRelocMode();
         // 成功切换地图后，清理旧的路径和点位，刷新加载新地图
         m_points = QJsonArray();
         m_lines  = QJsonArray();
@@ -2501,24 +2634,160 @@ void MapViewWidget::onSwitchMap()
 void MapViewWidget::onRelocalize()
 {
     m_relocMode = m_relocBtn ? m_relocBtn->isChecked() : !m_relocMode;
-    if (m_relocMode && m_navMode && m_navModeBtn) {
-        m_navMode = false;
-        m_navModeBtn->setChecked(false);
-        m_navModeBtn->setStyleSheet(kToolBtnStyle);
-    }
-    if (m_canvas) {
-        m_canvas->setPanWithLeftButton(!m_relocMode && !m_navMode);
-    }
     if (m_relocMode) {
-        m_relocBtn->setStyleSheet(kToolBtnPrimary);
+        if (m_relocBtn) {
+            m_relocBtn->setChecked(true);
+            m_relocBtn->setStyleSheet(kToolBtnPrimary);
+        }
+        if (m_navMode && m_navModeBtn) {
+            m_navMode = false;
+            m_navModeBtn->setChecked(false);
+            m_navModeBtn->setStyleSheet(kToolBtnStyle);
+        }
+        if (m_moveMode && m_moveBtn) {
+            m_moveMode = false;
+            m_moveBtn->setChecked(false);
+            m_moveBtn->setStyleSheet(kToolBtnStyle);
+        }
+        if (m_canvas) {
+            m_canvas->setPanWithLeftButton(false);
+        }
         setStatus("点击地图选择位置，拖拽设定朝向 (再次点击按钮取消)", "#4a9eff");
     } else {
-        // Cancel: clean up any in-progress drag
-        m_relocDragging = false;
-        if (m_poseDotItem)   { m_scene->removeItem(m_poseDotItem);   delete m_poseDotItem;   m_poseDotItem   = nullptr; }
-        if (m_poseArrowItem) { m_scene->removeItem(m_poseArrowItem); delete m_poseArrowItem; m_poseArrowItem = nullptr; }
-        m_relocBtn->setStyleSheet(kToolBtnStyle);
+        exitRelocMode();
         setStatus("就绪");
+    }
+}
+
+void MapViewWidget::exitRelocMode()
+{
+    m_relocMode = false;
+    m_relocDragging = false;
+    if (m_relocBtn) {
+        m_relocBtn->setChecked(false);
+        m_relocBtn->setStyleSheet(kToolBtnStyle);
+    }
+    if (m_poseDotItem)   { m_scene->removeItem(m_poseDotItem);   delete m_poseDotItem;   m_poseDotItem   = nullptr; }
+    if (m_poseArrowItem) { m_scene->removeItem(m_poseArrowItem); delete m_poseArrowItem; m_poseArrowItem = nullptr; }
+    if (m_canvas) {
+        m_canvas->setPanWithLeftButton(!m_navMode && !m_moveMode);
+    }
+}
+
+void MapViewWidget::onToggleMoveMode()
+{
+    m_moveMode = m_moveBtn ? m_moveBtn->isChecked() : !m_moveMode;
+    if (m_moveMode) {
+        if (m_moveBtn) {
+            m_moveBtn->setChecked(true);
+            m_moveBtn->setStyleSheet(kToolBtnPrimary);
+        }
+        if (m_relocMode) exitRelocMode();
+        if (m_navMode && m_navModeBtn) {
+            m_navMode = false;
+            m_navModeBtn->setChecked(false);
+            m_navModeBtn->setStyleSheet(kToolBtnStyle);
+        }
+        if (m_canvas) {
+            m_canvas->setPanWithLeftButton(false);
+            m_canvas->setCursor(Qt::PointingHandCursor);
+        }
+        setStatus("点移动模式已开启: 请在地图上点击任意位置发起移动", "#00bcd4");
+    } else {
+        if (m_moveBtn) {
+            m_moveBtn->setChecked(false);
+            m_moveBtn->setStyleSheet(kToolBtnStyle);
+        }
+        if (m_canvas) {
+            m_canvas->setPanWithLeftButton(!m_relocMode && !m_navMode);
+            m_canvas->setCursor(Qt::CrossCursor);
+        }
+        setStatus("已退出移动模式");
+    }
+}
+
+void MapViewWidget::onCancelNavigation()
+{
+    QString carId = AppConfig::instance().currentDevice().carId;
+    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+    if (carId.isEmpty()) carId = "1";
+
+    MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
+    ApiService::instance().suspendWork([](int, const QJsonObject &) {});
+
+    m_navActive = false;
+    updateNavButtonsState();
+    setStatus("已取消导航", "#f59e0b");
+    Toast::info(this, "已下发取消导航指令");
+}
+
+void MapViewWidget::onPauseNavigation()
+{
+    QString carId = AppConfig::instance().currentDevice().carId;
+    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+    if (carId.isEmpty()) carId = "1";
+
+    const RobotInfo &info = RobotInfoManager::instance().currentInfo();
+    const bool isPaused = (info.status == "5");
+
+    if (isPaused) {
+        MqttService::instance().publish(QString("/rob/%1/navigationContinue").arg(carId), "1");
+        ApiService::instance().continueWork([](int, const QJsonObject &) {});
+        setStatus("已继续导航", "#00e676");
+        Toast::success(this, "已继续导航");
+    } else {
+        MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
+        ApiService::instance().suspendWork([](int, const QJsonObject &) {});
+        setStatus("导航已暂停", "#f59e0b");
+        Toast::info(this, "导航已暂停");
+    }
+}
+
+void MapViewWidget::updateNavButtonsState()
+{
+    const RobotInfo &info = RobotInfoManager::instance().currentInfo();
+    const bool isNav = (info.status == "3" || info.status == "5" || m_navActive);
+
+    if (m_cancelNavBtn) {
+        m_cancelNavBtn->setEnabled(isNav);
+    }
+    if (m_pauseNavBtn) {
+        m_pauseNavBtn->setEnabled(isNav);
+        if (info.status == "5") {
+            m_pauseNavBtn->setText("恢复导航");
+            m_pauseNavBtn->setIcon(makeMapToolIcon("route"));
+        } else {
+            m_pauseNavBtn->setText("暂停导航");
+            m_pauseNavBtn->setIcon(makeMapToolIcon("pause"));
+        }
+    }
+}
+
+void MapViewWidget::onTeleopClicked()
+{
+    TeleopController::instance().setActive(!TeleopController::instance().isActive());
+}
+
+void MapViewWidget::onTeleopActiveChanged(bool active)
+{
+    if (!m_teleopBtn) return;
+    if (active) {
+        m_teleopBtn->setText("恢复导航");
+        m_teleopBtn->setStyleSheet(kToolBtnDanger);
+        Toast::info(this, "已抢占控制权：WASD 移动 | Space 刹车 | Ctrl 加速 | P/L 升降");
+        ApiService::instance().suspendWork([](int code, const QJsonObject &) {
+            if (code != 200) {
+                qWarning("暂停导航失败 (HTTP %d)，遥控可能受影响", code);
+            }
+        });
+    } else {
+        m_teleopBtn->setText("抢占控制权");
+        m_teleopBtn->setStyleSheet(kToolBtnStyle);
+        ApiService::instance().continueWork([](int code, const QJsonObject &) {
+            if (code != 200) {
+                qWarning("恢复导航失败 (HTTP %d)", code);
+            }
+        });
     }
 }
 
@@ -2531,9 +2800,6 @@ void MapViewWidget::onShowRobotStatus()
     m_statusDialog->updateFromRobotInfo(RobotInfoManager::instance().currentInfo());
     m_statusDialog->updateFromRobotState(m_robot.carId, m_robot.wx, m_robot.wy, m_robot.yawRad,
                                          m_robot.speed, m_robot.battery, m_robot.covScore, m_robot.posValid);
-    if (!m_lastObstaclePayload.isEmpty()) {
-        m_statusDialog->onMqttMessage(m_lastObstacleTopic, m_lastObstaclePayload);
-    }
     m_statusDialog->show();
     m_statusDialog->raise();
     m_statusDialog->activateWindow();
@@ -2646,33 +2912,16 @@ void MapViewWidget::initMqtt()
         onMqttMessage(t, p);
     };
 
-    // 订阅标准 /info 及 /status 话题
+    // 订阅设备 info 话题
     MqttService::instance().subscribeTopic("/info", 0, cb);
     MqttService::instance().subscribeTopic("info", 0, cb);
     MqttService::instance().subscribeTopic("/rob/info", 0, cb);
-    MqttService::instance().subscribeTopic("/status", 0, cb);
-    MqttService::instance().subscribeTopic("status", 0, cb);
-    MqttService::instance().subscribeTopic("/rob/status", 0, cb);
 
     // 若绑定了 carId，也订阅特定设备话题
     QString carId = AppConfig::instance().agvId();
     if (carId.isEmpty()) carId = "1";
     m_robot.carId = carId;
     MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic(QString("/rob/%1/status").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic(QString("/rob/%1/carto_pose").arg(carId), 0, cb);
-
-    // 订阅最近障碍物话题 (包含带前缀、空格与下划线多种格式)
-    MqttService::instance().subscribeTopic(QString("/rob/%1/nearest obstacle").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic(QString("/rob/%1/nearest_obstacle").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic(QString(":/rob/%1/nearest obstacle").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic(QString(":/rob/%1/nearest_obstacle").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic("/rob/1/nearest obstacle", 0, cb);
-    MqttService::instance().subscribeTopic("/rob/1/nearest_obstacle", 0, cb);
-    MqttService::instance().subscribeTopic(":/rob/1/nearest obstacle", 0, cb);
-    MqttService::instance().subscribeTopic(":/rob/1/nearest_obstacle", 0, cb);
-    MqttService::instance().subscribeTopic("/nearest obstacle", 0, cb);
-    MqttService::instance().subscribeTopic("/nearest_obstacle", 0, cb);
 }
 
 void MapViewWidget::disconnectMqtt()
@@ -2680,22 +2929,7 @@ void MapViewWidget::disconnectMqtt()
     MqttService::instance().unsubscribeTopic("/info");
     MqttService::instance().unsubscribeTopic("info");
     MqttService::instance().unsubscribeTopic("/rob/info");
-    MqttService::instance().unsubscribeTopic("/status");
-    MqttService::instance().unsubscribeTopic("status");
-    MqttService::instance().unsubscribeTopic("/rob/status");
     QString carId = AppConfig::instance().agvId();
     if (carId.isEmpty()) carId = "1";
     MqttService::instance().unsubscribeTopic(QString("/rob/%1/info").arg(carId));
-    MqttService::instance().unsubscribeTopic(QString("/rob/%1/status").arg(carId));
-    MqttService::instance().unsubscribeTopic(QString("/rob/%1/carto_pose").arg(carId));
-    MqttService::instance().unsubscribeTopic(QString("/rob/%1/nearest obstacle").arg(carId));
-    MqttService::instance().unsubscribeTopic(QString("/rob/%1/nearest_obstacle").arg(carId));
-    MqttService::instance().unsubscribeTopic(QString(":/rob/%1/nearest obstacle").arg(carId));
-    MqttService::instance().unsubscribeTopic(QString(":/rob/%1/nearest_obstacle").arg(carId));
-    MqttService::instance().unsubscribeTopic("/rob/1/nearest obstacle");
-    MqttService::instance().unsubscribeTopic("/rob/1/nearest_obstacle");
-    MqttService::instance().unsubscribeTopic(":/rob/1/nearest obstacle");
-    MqttService::instance().unsubscribeTopic(":/rob/1/nearest_obstacle");
-    MqttService::instance().unsubscribeTopic("/nearest obstacle");
-    MqttService::instance().unsubscribeTopic("/nearest_obstacle");
 }

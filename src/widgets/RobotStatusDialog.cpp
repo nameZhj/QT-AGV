@@ -288,7 +288,6 @@ QWidget *RobotStatusDialog::createBasicInfoTab()
     addBadgeRow(grid2, r2++, "阻挡:", "--", BadgeType::Gray, &m_badgeBlocked);
     addRow(grid2, r2++, "最近障碍物:", "--", &m_valNearestObs);
     addRow(grid2, r2++, "最近动态障碍物:", "--", &m_valDynObs);
-    addRow(grid2, r2++, "障碍物坐标系:", "base_link", &m_valObsFrameId);
     addRow(grid2, r2++, "避障扫描时间:", "--", &m_valObsStamp);
     addRow(grid2, r2++, "阻挡传感器 ID:", "--", &m_valBlockSensorId);
     addBadgeRow(grid2, r2++, "是否抱闸:", "未抱闸", BadgeType::Green, &m_badgeBrake);
@@ -301,7 +300,7 @@ QWidget *RobotStatusDialog::createBasicInfoTab()
     }
 
     addRow(grid2, r2++, "陀螺仪:", "0.000°,1.000°,1.000°", &m_valGyro);
-    addRow(grid2, r2++, "控制模式:", "SRC 控制", &m_valControlMode);
+    addRow(grid2, r2++, "控制模式:", "RT 控制", &m_valControlMode);
     addBadgeRow(grid2, r2++, "底盘是否静止:", "是", BadgeType::Green, &m_badgeStopped);
     grid2->setRowStretch(r2, 1);
     col2Lyt->addLayout(grid2);
@@ -367,8 +366,7 @@ QWidget *RobotStatusDialog::createBasicInfoTab()
     addRow(grid4, r4++, "有线网卡型号:", "--", &m_valWiredNicModel);
     addRow(grid4, r4++, "无线网 MAC:", "--", &m_valWirelessMac);
     addRow(grid4, r4++, "无线网卡型号:", "--", &m_valWirelessNicModel);
-    addRow(grid4, r4++, "避障坐标系 (frame_id):", "base_link", &m_valBaseFrameId);
-    addRow(grid4, r4++, "避障时间戳 (stamp):", "--", &m_valBaseStamp);
+
     grid4->setRowStretch(r4, 1);
     col4Lyt->addLayout(grid4);
     topLyt->addWidget(col4Widget, 1);
@@ -438,26 +436,10 @@ void RobotStatusDialog::initMqttSubscriptions()
     MqttService::instance().subscribeTopic("/info", 0, cb);
     MqttService::instance().subscribeTopic("info", 0, cb);
     MqttService::instance().subscribeTopic("/rob/info", 0, cb);
-    MqttService::instance().subscribeTopic("/status", 0, cb);
-    MqttService::instance().subscribeTopic("status", 0, cb);
-    MqttService::instance().subscribeTopic("/rob/status", 0, cb);
 
     QString carId = AppConfig::instance().agvId();
     if (carId.isEmpty()) carId = "1";
     MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic(QString("/rob/%1/status").arg(carId), 0, cb);
-
-    // ── 订阅最近障碍物话题 (支持空格、下划线及前缀格式) ──
-    MqttService::instance().subscribeTopic(QString("/rob/%1/nearest obstacle").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic(QString("/rob/%1/nearest_obstacle").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic(QString(":/rob/%1/nearest obstacle").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic(QString(":/rob/%1/nearest_obstacle").arg(carId), 0, cb);
-    MqttService::instance().subscribeTopic("/rob/1/nearest obstacle", 0, cb);
-    MqttService::instance().subscribeTopic("/rob/1/nearest_obstacle", 0, cb);
-    MqttService::instance().subscribeTopic(":/rob/1/nearest obstacle", 0, cb);
-    MqttService::instance().subscribeTopic(":/rob/1/nearest_obstacle", 0, cb);
-    MqttService::instance().subscribeTopic("/nearest obstacle", 0, cb);
-    MqttService::instance().subscribeTopic("/nearest_obstacle", 0, cb);
 }
 
 void RobotStatusDialog::setMapInfo(const QString &mapId, const QString &mapName)
@@ -516,14 +498,13 @@ void RobotStatusDialog::updateFromRobotInfo(const RobotInfo &info)
         }
     }
 
-    // 实际速度: vx (m/s), vy (m/s), wz (rad/s 及 °/s)
+    // 实际速度: vx (m/s), vy (m/s), wz (°/s)
     if (m_valActualSpeed) {
         if (info.actual_vel.valid) {
             double wDeg = info.actual_vel.wz * 180.0 / M_PI;
-            m_valActualSpeed->setText(QString("%1 m/s, %2 m/s, %3 rad/s (%4 °/s)")
+            m_valActualSpeed->setText(QString("%1 m/s, %2 m/s, %3 °/s")
                 .arg(info.actual_vel.vx, 0, 'f', 3)
                 .arg(info.actual_vel.vy, 0, 'f', 3)
-                .arg(info.actual_vel.wz, 0, 'f', 3)
                 .arg(wDeg, 0, 'f', 3));
 
             if (m_badgeStopped) {
@@ -537,14 +518,13 @@ void RobotStatusDialog::updateFromRobotInfo(const RobotInfo &info)
         }
     }
 
-    // 接收速度 (最终指令速度 /cmd_vel_safe): vx (m/s), vy (m/s), wz (rad/s 及 °/s)
+    // 接收速度 (最终指令速度 /cmd_vel_safe): vx (m/s), vy (m/s), wz (°/s)
     if (m_valTargetSpeed) {
         if (info.cmd_vel.valid) {
             double cmdWDeg = info.cmd_vel.wz * 180.0 / M_PI;
-            m_valTargetSpeed->setText(QString("%1 m/s, %2 m/s, %3 rad/s (%4 °/s)")
+            m_valTargetSpeed->setText(QString("%1 m/s, %2 m/s, %3 °/s")
                 .arg(info.cmd_vel.vx, 0, 'f', 3)
                 .arg(info.cmd_vel.vy, 0, 'f', 3)
-                .arg(info.cmd_vel.wz, 0, 'f', 3)
                 .arg(cmdWDeg, 0, 'f', 3));
         } else {
             m_valTargetSpeed->setText("--");
@@ -674,326 +654,9 @@ void RobotStatusDialog::onMqttMessage(const QString &topic, const QByteArray &pa
     QJsonDocument doc = QJsonDocument::fromJson(cleanPayload, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
 
-    QJsonObject obj = doc.object();
+    if (!topic.contains("info")) return;
 
-    // 1. 最近障碍物专用话题
-    if (topic.contains("obstacle") || topic.contains("nearest")) {
-        parseNearestObstaclePayload(obj);
-        return;
-    }
-
-    if (!topic.contains("info") && !topic.contains("status") && !topic.contains("carto_pose")) return;
-
-    if (topic.contains("info")) {
-        RobotInfoManager::instance().updateFromPayload(topic, cleanPayload);
-        return;
-    }
-
-    // 2. 通用消息内嵌障碍物信息兼容
-    if (obj.contains("nearest_obstacle") && obj.value("nearest_obstacle").isObject()) {
-        parseNearestObstaclePayload(obj.value("nearest_obstacle").toObject());
-    } else if (obj.contains("nearest obstacle") && obj.value("nearest obstacle").isObject()) {
-        parseNearestObstaclePayload(obj.value("nearest obstacle").toObject());
-    }
-
-    parseMqttPayload(obj);
-}
-
-void RobotStatusDialog::parseNearestObstaclePayload(const QJsonObject &d)
-{
-    m_hasMqttData = true;
-
-    // 1. 提取 valid (数据是否有效; valid=false时坐标和障碍状态应显示--)
-    bool valid = false;
-    if (d.contains("valid")) {
-        QJsonValue vVal = d.value("valid");
-        if (vVal.isBool()) valid = vVal.toBool();
-        else if (vVal.isDouble()) valid = (vVal.toInt() != 0);
-        else if (vVal.isString()) valid = (vVal.toString().compare("true", Qt::CaseInsensitive) == 0);
-    }
-
-    // 2. 提取 blocked (false表示未遮挡，true为遮挡)
-    bool blocked = false;
-    if (d.contains("blocked")) {
-        QJsonValue bVal = d.value("blocked");
-        if (bVal.isBool()) blocked = bVal.toBool();
-        else if (bVal.isDouble()) blocked = (bVal.toInt() != 0);
-        else if (bVal.isString()) blocked = (bVal.toString().compare("true", Qt::CaseInsensitive) == 0);
-    }
-
-    // 3. 提取 frame_id / "frame id" (默认 base_link)
-    QString frameId;
-    if (d.contains("frame_id")) frameId = d.value("frame_id").toString();
-    else if (d.contains("frame id")) frameId = d.value("frame id").toString();
-    else if (d.contains("frameId")) frameId = d.value("frameId").toString();
-    if (frameId.isEmpty()) frameId = "base_link";
-
-    // 4. 提取 stamp (ROS消息时间戳，单位秒; 有效点为扫描时间)
-    double stamp = 0.0;
-    if (d.contains("stamp")) stamp = d.value("stamp").toDouble();
-    else if (d.contains("timestamp")) stamp = d.value("timestamp").toDouble();
-
-    // 5. 提取 point (坐标单位为米)
-    double px = 0.0, py = 0.0, pz = 0.0;
-    if (d.contains("point") && d.value("point").isObject()) {
-        QJsonObject pObj = d.value("point").toObject();
-        px = pObj.value("x").toDouble();
-        py = pObj.value("y").toDouble();
-        pz = pObj.value("z").toDouble();
-    } else if (d.contains("x") && d.contains("y")) {
-        px = d.value("x").toDouble();
-        py = d.value("y").toDouble();
-        pz = d.value("z").toDouble();
-    }
-
-    // ── 根据用户规则刷新 UI ──
-    // valid=false 时坐标和障碍状态应显示 "--"
-    if (!valid) {
-        if (m_badgeBlocked) {
-            updateBadge(m_badgeBlocked, "--", BadgeType::Gray);
-        }
-        if (m_valNearestObs) {
-            m_valNearestObs->setText("--");
-        }
-        if (m_valDynObs) {
-            m_valDynObs->setText("--");
-        }
-        if (m_valObsFrameId) {
-            m_valObsFrameId->setText("--");
-        }
-        if (m_valObsStamp) {
-            m_valObsStamp->setText("--");
-        }
-        if (m_valBaseFrameId) {
-            m_valBaseFrameId->setText("--");
-        }
-        if (m_valBaseStamp) {
-            m_valBaseStamp->setText("--");
-        }
-    } else {
-        // valid=true: blocked=false 表示未遮挡，true 为遮挡
-        if (m_badgeBlocked) {
-            if (blocked) {
-                updateBadge(m_badgeBlocked, "遮挡", BadgeType::Orange);
-            } else {
-                updateBadge(m_badgeBlocked, "未遮挡", BadgeType::Green);
-            }
-        }
-
-        if (m_valNearestObs) {
-            if (std::abs(pz) > 0.001) {
-                m_valNearestObs->setText(QString("%1 m, %2 m, %3 m").arg(px, 0, 'f', 3).arg(py, 0, 'f', 3).arg(pz, 0, 'f', 3));
-            } else {
-                m_valNearestObs->setText(QString("%1 m, %2 m").arg(px, 0, 'f', 3).arg(py, 0, 'f', 3));
-            }
-        }
-
-        if (m_valDynObs) {
-            if (std::abs(pz) > 0.001) {
-                m_valDynObs->setText(QString("x:%1m y:%2m z:%3m").arg(px, 0, 'f', 4).arg(py, 0, 'f', 4).arg(pz, 0, 'f', 4));
-            } else {
-                m_valDynObs->setText(QString("x:%1m y:%2m").arg(px, 0, 'f', 4).arg(py, 0, 'f', 4));
-            }
-        }
-
-        if (m_valObsFrameId) {
-            m_valObsFrameId->setText(frameId);
-        }
-        if (m_valBaseFrameId) {
-            m_valBaseFrameId->setText(frameId);
-        }
-
-        QString stampDisp;
-        if (stamp > 1000000000.0) {
-            QDateTime dt = QDateTime::fromMSecsSinceEpoch(static_cast<qint64>(stamp * 1000.0));
-            stampDisp = dt.toString("yyyy-MM-dd HH:mm:ss.zzz");
-        } else if (stamp > 0.0) {
-            stampDisp = QString("%1 s").arg(stamp, 0, 'f', 3);
-        } else {
-            stampDisp = "--";
-        }
-
-        if (m_valObsStamp) {
-            m_valObsStamp->setText(stampDisp);
-        }
-        if (m_valBaseStamp) {
-            m_valBaseStamp->setText(stampDisp);
-        }
-    }
-}
-
-void RobotStatusDialog::parseMqttPayload(const QJsonObject &d)
-{
-    m_hasMqttData = true;
-
-    QJsonObject dataObj = d.value("data").toObject();
-    QJsonObject poseObj = d.value("pose").toObject();
-
-    auto dv = [&](const QStringList &keys, double def = 0) -> double {
-        for (const QString &k : keys) {
-            if (d.contains(k)) {
-                QJsonValue v = d.value(k);
-                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
-            }
-            if (!dataObj.isEmpty() && dataObj.contains(k)) {
-                QJsonValue v = dataObj.value(k);
-                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
-            }
-            if (!poseObj.isEmpty() && poseObj.contains(k)) {
-                QJsonValue v = poseObj.value(k);
-                if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
-            }
-        }
-        return def;
-    };
-
-    auto sv = [&](const QStringList &keys, const QString &def = QString()) -> QString {
-        for (const QString &k : keys) {
-            if (d.contains(k)) {
-                QJsonValue v = d.value(k);
-                if (v.isString()) return v.toString();
-                if (v.isDouble()) return QString::number(v.toDouble());
-            }
-            if (!dataObj.isEmpty() && dataObj.contains(k)) {
-                QJsonValue v = dataObj.value(k);
-                if (v.isString()) return v.toString();
-                if (v.isDouble()) return QString::number(v.toDouble());
-            }
-        }
-        return def;
-    };
-
-    const RobotInfo &curGlobalInfo = RobotInfoManager::instance().currentInfo();
-
-    // ── 机器人运动状态更新 ──
-    if (!curGlobalInfo.hasPose) {
-        double x = dv({"car_x", "carX", "x", "current_x", "posX"});
-        double y = dv({"car_y", "carY", "y", "current_y", "posY"});
-        double yaw = dv({"car_yaw", "carYaw", "yaw", "angle", "theta"});
-        double yawDeg = yaw * 180.0 / M_PI;
-        if (std::abs(yaw) > 7.0) yawDeg = yaw; // 已经是角度
-
-        if (m_valPosition) {
-            m_valPosition->setText(QString("%1 m, %2 m, %3 °")
-                .arg(x, 0, 'f', 3).arg(y, 0, 'f', 3).arg(yawDeg, 0, 'f', 3));
-        }
-    }
-
-    if (!curGlobalInfo.actual_vel.valid && m_valActualSpeed) {
-        double vx = dv({"speed", "linear_x", "linearX", "v"});
-        double vy = dv({"linear_y", "linearY", "vy"});
-        double w  = dv({"angular_z", "angularZ", "w"});
-        double wDeg = w * 180.0 / M_PI;
-        m_valActualSpeed->setText(QString("%1 m/s, %2 m/s, %3 rad/s (%4 °/s)")
-            .arg(vx, 0, 'f', 3).arg(vy, 0, 'f', 3).arg(w, 0, 'f', 3).arg(wDeg, 0, 'f', 3));
-    }
-
-    if (!curGlobalInfo.cmd_vel.valid && m_valTargetSpeed) {
-        double cmdVx = dv({"cmd_vx", "target_vx", "target_speed", "cmd_speed"});
-        double cmdVy = dv({"cmd_vy", "target_vy"});
-        double cmdW  = dv({"cmd_w", "target_w"});
-        double cmdWDeg = cmdW * 180.0 / M_PI;
-        m_valTargetSpeed->setText(QString("%1 m/s, %2 m/s, %3 rad/s (%4 °/s)")
-            .arg(cmdVx, 0, 'f', 3).arg(cmdVy, 0, 'f', 3).arg(cmdW, 0, 'f', 3).arg(cmdWDeg, 0, 'f', 3));
-    }
-
-    // 置信度
-    double cov = dv({"covariance_score", "covarianceScore", "covariance", "score", "confidence"}, -1);
-    if (cov >= 0 && m_badgeConfidence) {
-        double cs = (cov > 1.0) ? cov / 100.0 : cov;
-        BadgeType bt = cs >= 0.7 ? BadgeType::Green : (cs >= 0.3 ? BadgeType::Orange : BadgeType::Red);
-        updateBadge(m_badgeConfidence, QString::number(cs, 'f', 2), bt);
-        if (m_valLocStatus) {
-            m_valLocStatus->setText(cs < 0.5 ? "<font color='#ef4444'>定位完成(需确认)</font>" : "<font color='#22c55e'>定位完成</font>");
-        }
-    }
-
-    auto hasAny = [&](const QStringList &keys) -> bool {
-        for (const QString &k : keys) {
-            if (d.contains(k) || (!dataObj.isEmpty() && dataObj.contains(k))) return true;
-        }
-        return false;
-    };
-
-    // 阻挡 (仅当明确包含字段时更新，避免覆盖专用话题)
-    if (hasAny({"blocked", "is_blocked", "obstacle", "has_obstacle"})) {
-        double blocked = dv({"blocked", "is_blocked", "obstacle", "has_obstacle"}, 0);
-        if (m_badgeBlocked) {
-            bool isBlk = (blocked > 0.5);
-            updateBadge(m_badgeBlocked, isBlk ? "遮挡" : "未遮挡", isBlk ? BadgeType::Orange : BadgeType::Green);
-        }
-    }
-
-    // 最近障碍物 (仅当明确包含字段时更新，避免写入假数据)
-    if (hasAny({"nearest_obs_x", "obs_x", "obstacle_x"})) {
-        double obsX = dv({"nearest_obs_x", "obs_x", "obstacle_x"}, 0);
-        double obsY = dv({"nearest_obs_y", "obs_y", "obstacle_y"}, 0);
-        if (m_valNearestObs) {
-            m_valNearestObs->setText(QString("%1 m, %2 m").arg(obsX, 0, 'f', 3).arg(obsY, 0, 'f', 3));
-        }
-        if (m_valDynObs) {
-            m_valDynObs->setText(QString("x:%1m y:%2m").arg(obsX, 0, 'f', 4).arg(obsY, 0, 'f', 4));
-        }
-    }
-
-    // 抱闸
-    double brake = dv({"brake", "is_brake", "braking"}, 0);
-    if (m_badgeBrake) {
-        bool isBrake = (brake > 0.5);
-        updateBadge(m_badgeBrake, isBrake ? "已抱闸" : "未抱闸", isBrake ? BadgeType::Orange : BadgeType::Green);
-    }
-
-    // 急停
-    double estop = dv({"emergency", "estop", "is_emergency"}, 0);
-    if (m_badgeEstop1) {
-        bool isEstop = (estop > 0.5);
-        updateBadge(m_badgeEstop1, isEstop ? "急停" : "未急停", isEstop ? BadgeType::Red : BadgeType::Green);
-    }
-
-    // 底盘是否静止 (仅当没有 actual_vel 时备用计算)
-    if (!curGlobalInfo.actual_vel.valid && m_badgeStopped) {
-        double vx = dv({"speed", "linear_x", "linearX", "v"});
-        double w  = dv({"angular_z", "angularZ", "w"});
-        bool stopped = (std::abs(vx) < 0.01 && std::abs(w) < 0.01);
-        updateBadge(m_badgeStopped, stopped ? "是" : "否", stopped ? BadgeType::Green : BadgeType::Orange);
-    }
-
-    // 电量与电压
-    if (curGlobalInfo.battery < 0.0) {
-        double bat = dv({"battery", "power", "bat", "soc", "battery_level"}, -1);
-        if (bat >= 0 && m_valBatteryPct) {
-            double batPct = (bat <= 1.0 && bat > 0) ? bat * 100.0 : bat;
-            m_valBatteryPct->setText(QString::number(batPct, 'f', 1) + " %");
-        }
-    }
-    double volt = dv({"voltage", "bat_voltage", "volt"}, -1);
-    if (volt > 0 && m_valBatteryVolt) {
-        m_valBatteryVolt->setText(QString::number(volt, 'f', 2) + " V");
-    }
-    double curr = dv({"current", "bat_current"}, -999);
-    if (curr > -990 && m_valBatteryCurr) {
-        m_valBatteryCurr->setText(QString::number(curr, 'f', 2) + " A");
-    }
-
-    // 运行模式与导航状态 (仅在未收到 info.status 时备用)
-    if (curGlobalInfo.status.isEmpty()) {
-        QString mode = sv({"mode", "control_mode", "ctrl_mode", "run_mode"});
-        if (!mode.isEmpty() && m_valRunMode) {
-            m_valRunMode->setText(mode);
-        }
-        QString nav = sv({"nav_status", "navStatus", "navigation_status", "navigationStatus"});
-        if (!nav.isEmpty() && m_valNavStatus) {
-            m_valNavStatus->setText(nav);
-        }
-    }
-
-    // 累计里程 (仅在未收到 info.mileage 时备用)
-    if (!curGlobalInfo.mileage.valid) {
-        double dist = dv({"total_mileage", "mileage", "odometry"}, -1);
-        if (dist >= 0 && m_valTotalDist) {
-            m_valTotalDist->setText(QString::number(dist, 'f', 2) + " m");
-        }
-    }
+    RobotInfoManager::instance().updateFromPayload(topic, cleanPayload);
 }
 
 void RobotStatusDialog::refreshNetworkAndWifiInfo()

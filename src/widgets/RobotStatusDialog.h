@@ -53,8 +53,6 @@ private:
 
     void initMqttSubscriptions();
     void refreshNetworkAndWifiInfo();
-    void parseMqttPayload(const QJsonObject &d);
-    void parseNearestObstaclePayload(const QJsonObject &d);
 
     enum class BadgeType {
         Green,   // 绿色正常

@@ -177,9 +177,6 @@ void AgvInfoWidget::initMqtt()
         mqtt.subscribeTopic(base + "log", 0, [this](const QString &t, const QByteArray &m) {
             handleMqttMessage(t, m);
         });
-        mqtt.subscribeTopic(base + "status", 0, [this](const QString &t, const QByteArray &m) {
-            handleMqttMessage(t, m);
-        });
     }
 }
 
@@ -217,38 +214,6 @@ void AgvInfoWidget::handleMqttMessage(const QString &topic, const QByteArray &pa
     }
 
     QJsonObject data = doc.object();
-
-    auto fmt = [](const QJsonValue &v) -> double {
-        if (v.isNull() || v.isUndefined()) return 0;
-        double num = v.toDouble(-999999);
-        if (num == -999999) return 0;
-        return QString::number(num, 'f', 2).toDouble();
-    };
-
-    if (topic.contains("/status")) {
-        const RobotInfo &curInfo = RobotInfoManager::instance().currentInfo();
-        if (curInfo.status.isEmpty()) {
-            m_machine.alarminfo = data.value("alarminfo").toString(data.value("alarmInfo").toString(m_machine.alarminfo.isEmpty() ? "无" : m_machine.alarminfo));
-            if (m_alarmLabel) m_alarmLabel->setText(m_machine.alarminfo);
-        }
-        if (!curInfo.actual_vel.valid) {
-            m_machine.linear_x = fmt(data.value("linear_x").isNull() ? data.value("linearX") : data.value("linear_x"));
-            if (m_linearLabel) m_linearLabel->setText(QString::number(m_machine.linear_x, 'f', 2));
-        }
-        if (curInfo.battery < 0.0) {
-            m_machine.power = fmt(data.value("power"));
-            if (m_powerLabel) m_powerLabel->setText(QString::number(m_machine.power, 'f', 2) + "%");
-        }
-        if (!curInfo.hasPose) {
-            m_machine.x = fmt(data.value("x"));
-            m_machine.y = fmt(data.value("y"));
-            m_machine.angle = fmt(data.value("angle"));
-            if (m_xLabel) m_xLabel->setText(QString::number(m_machine.x, 'f', 2));
-            if (m_yLabel) m_yLabel->setText(QString::number(m_machine.y, 'f', 2));
-            if (m_angleLabel) m_angleLabel->setText(QString::number(m_machine.angle, 'f', 2));
-        }
-        return;
-    }
 
     if (topic.contains("/log")) {
         if (m_selfCheckActive) return;  // 自检期间日志窗口只显示自检相关信息

@@ -126,9 +126,9 @@ protected:
                 }
             }
 
-            // scale 为当前屏幕像素/米 (ppm)。真实尺寸: 长 1.10m, 宽 0.60m
-            const double kRobotLength = 1.10;
-            const double kRobotWidth  = 0.60;
+            // scale 为当前屏幕像素/米 (ppm)。真实尺寸: 长 1.0m, 宽 0.5m
+            const double kRobotLength = 1.0;
+            const double kRobotWidth  = 0.5;
             double sceneW = kRobotWidth * scale;
             double sceneH = kRobotLength * scale;
 

@@ -492,7 +492,7 @@ void MainWindow::initPages()
             this, &MainWindow::onNavigateRequested);
     connect(m_createMapPage, &CreateMapWidget::goBack, this, [this]() {
         m_stack->setCurrentWidget(m_mapPage);
-        m_mapPage->refreshData();
+        m_mapPage->forceRefreshAfterMapping();  // 强制清缓存+重新下载最新地图
         highlightTabForPageIndex(1);
     });
 
@@ -518,25 +518,7 @@ void MainWindow::setupStatusBar()
     sb->addWidget(m_sbCarId);
     sb->addWidget(m_sbConn);
 
-    // 底部"抢占控制权"按钮：选中=暂停导航(抢占)，非选中=恢复导航
-    // 选中后用户在任意界面（除文本输入控件焦点外）通过键盘 WASD 移动、Space 刹车、
-    // Ctrl 加速、P/L 升降；遥控键优先级最高，会拦截其他控件的相同按键。
-    m_teleopBtn = new QPushButton("抢占控制权");
-    m_teleopBtn->setCursor(Qt::PointingHandCursor);
-    m_teleopBtn->setFocusPolicy(Qt::NoFocus);   // 不抢焦点，避免影响键盘遥控
-    m_teleopBtn->setToolTip(
-        "点击抢占控制权（暂停导航），再次点击恢复导航\n"
-        "键盘: W A S D 移动 | Space 刹车 | Ctrl 加速 | P 升降上 | L 升降下\n"
-        "抢占后遥控键优先级最高，会拦截其他控件的相同按键");
-    m_teleopBtn->setStyleSheet(
-        "QPushButton{background:#252a35;border:1px solid #3a3f4a;color:#c8d0d8;"
-        "padding:3px 14px;border-radius:3px;font-size:12px;font-weight:600;}"
-        "QPushButton:hover{background:#2f3540;border-color:#4a9eff;color:#4a9eff;}"
-        "QPushButton:pressed{background:#1e2228;}"
-        "#teleopBtnActive{background:#c0392b;border-color:#e74c3c;color:#ffffff;}"
-        "#teleopBtnActive:hover{background:#e74c3c;}");
-    connect(m_teleopBtn, &QPushButton::clicked, this, &MainWindow::onTeleopToggled);
-    sb->addPermanentWidget(m_teleopBtn);
+    // 抢占控制权按钮已移至顶部地图视图工具栏，底栏不再放置
 
     QString ipText = dev.ip.isEmpty() ? "--" : dev.ip;
     sb->addPermanentWidget(new QLabel(QString("IP: %1").arg(ipText)));

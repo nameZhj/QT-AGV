@@ -251,8 +251,8 @@ bool MqttService::matchTopic(const QString &filter, const QString &topic)
         return true;
     }
 
-    // 针对 /info 与 /status 的全局别名特判：如果订阅了 "/info"，天然匹配所有机器人的 "/rob/+/info" 话题
-    if (cleanFilter == QStringLiteral("/info") || cleanFilter == QStringLiteral("/status")) {
+    // 针对 /info 的全局别名特判：如果订阅了 "/info"，天然匹配所有机器人的 "/rob/+/info" 话题
+    if (cleanFilter == QStringLiteral("/info")) {
         if (cleanTopic.endsWith(cleanFilter)) {
             return true;
         }
@@ -348,10 +348,6 @@ QStringList MqttService::getTopicVariants(const QString &topic)
         variants.append(QStringLiteral("/rob/+/info"));
         variants.append(QStringLiteral(":/rob/+/info"));
         variants.append(QStringLiteral("rob/+/info"));
-    } else if (trimmed == QStringLiteral("/status") || trimmed == QStringLiteral("status") || trimmed == QStringLiteral(":/status")) {
-        variants.append(QStringLiteral("/rob/+/status"));
-        variants.append(QStringLiteral(":/rob/+/status"));
-        variants.append(QStringLiteral("rob/+/status"));
     }
 
     variants.removeDuplicates();

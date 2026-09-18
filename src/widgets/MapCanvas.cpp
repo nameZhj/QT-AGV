@@ -466,9 +466,9 @@ void MapCanvas::drawRobot(const QString &carId)
         ppm = (double)m_imgW / mapW;
     }
 
-    // 真实尺寸: 车长 1.10m (纵向/车头朝向), 车宽 0.60m (横向)
-    const double kRobotLength = 1.10;
-    const double kRobotWidth  = 0.60;
+    // 真实尺寸: 车长 1.0m (纵向/车头朝向), 车宽 0.5m (横向)
+    const double kRobotLength = 1.0;
+    const double kRobotWidth  = 0.5;
     double sceneW = kRobotWidth * ppm;
     double sceneH = kRobotLength * ppm;
 

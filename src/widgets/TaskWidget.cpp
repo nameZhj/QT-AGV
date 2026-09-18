@@ -1403,9 +1403,9 @@ void TaskWidget::updateCarPosition(const QString &carId, double x, double y, dou
         ppm = (double)m_imgW / mapW;
     }
 
-    // 真实尺寸: 车长 1.10m (纵向/车头朝向), 车宽 0.60m (横向)
-    const double kRobotLength = 1.10;
-    const double kRobotWidth  = 0.60;
+    // 真实尺寸: 车长 1.0m (纵向/车头朝向), 车宽 0.5m (横向)
+    const double kRobotLength = 1.0;
+    const double kRobotWidth  = 0.5;
     double sceneW = kRobotWidth * ppm;
     double sceneH = kRobotLength * ppm;
 
@@ -1504,10 +1504,8 @@ void TaskWidget::onMqttMessage(const QString &topic, const QByteArray &payload)
     QJsonObject data = doc.object();
 
     // 处理设备位置信息
-    if (topic.contains("/info") || topic.contains("/status")) {
-        if (topic.contains("/info")) {
-            RobotInfoManager::instance().updateFromPayload(topic, payload);
-        }
+    if (topic.contains("/info")) {
+        RobotInfoManager::instance().updateFromPayload(topic, payload);
 
         QString carId = jsonIdStr(data.value("carId"));
         if (carId.isEmpty()) carId = AppConfig::instance().agvId();

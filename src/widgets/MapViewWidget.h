@@ -56,6 +56,9 @@ public:
     // 刷新当前地图数据(由 MainWindow 在切换菜单时调用)
     void refreshData();
 
+    // 建图成功后强制刷新：清理本地缓存 → getCar获取绑定mapId → 重新下载zip → 解析展示
+    void forceRefreshAfterMapping();
+
 signals:
     void navigateRequested(const QString &target, const QString &id);
 
@@ -83,11 +86,18 @@ private slots:
     void onResetView();
     void onShowRobotStatus();
     void onToggleNavMode();
+    void onToggleMoveMode();
+    void onCancelNavigation();
+    void onPauseNavigation();
+    void onTeleopClicked();
+    void onTeleopActiveChanged(bool active);
 
 private:
     void setupUI();
     void setupToolbar(QWidget *parent);
     void setupRightPanel(QWidget *parent);
+    void exitRelocMode();
+    void updateNavButtonsState();
 
     void loadCurrentCarMap();
     void loadMapById(const QString &mapId, const QString &mapName = QString());
@@ -153,23 +163,29 @@ private:
     // Grid visibility
     bool m_showGrid = false;
 
-    // Toolbar buttons
-    QToolButton *m_createMapBtn = nullptr;
-    QToolButton *m_uploadMapBtn = nullptr;
-    QToolButton *m_uploadSmapBtn = nullptr;
-    QToolButton *m_refreshBtn    = nullptr;
-    QToolButton *m_switchMapBtn = nullptr;
-    QToolButton *m_relocBtn     = nullptr;
-    QToolButton *m_navModeBtn   = nullptr;
-    QToolButton *m_statusBtn    = nullptr;
-    QToolButton *m_resetViewBtn = nullptr;
-    QPushButton *m_gridBtn      = nullptr;
+    // Toolbar buttons (13 buttons from left to right)
+    QToolButton *m_editMapBtn     = nullptr; // 1. 启用编辑
+    QToolButton *m_uploadSmapBtn  = nullptr; // 2. 加载地图 (原 smap上传)
+    QToolButton *m_createMapBtn   = nullptr; // 3. 2D建图
+    QToolButton *m_relocBtn       = nullptr; // 4. 重定位
+    QToolButton *m_navModeBtn     = nullptr; // 5. 路径导航
+    QToolButton *m_moveBtn        = nullptr; // 6. 移动
+    QToolButton *m_cancelNavBtn   = nullptr; // 7. 取消导航
+    QToolButton *m_pauseNavBtn    = nullptr; // 8. 暂停导航
+    QToolButton *m_uploadMapBtn   = nullptr; // 9. 推送地图 (原 地图上传)
+    QToolButton *m_downloadMapBtn = nullptr; // 10. 拉取地图 (原 下载原文件)
+    QToolButton *m_switchMapBtn   = nullptr; // 11. 地图管理 (原 切换地图)
+    QToolButton *m_teleopBtn      = nullptr; // 12. 抢占控制权
+    QToolButton *m_statusBtn      = nullptr; // 13. 状态
+    QToolButton *m_resetViewBtn   = nullptr;
+    QToolButton *m_refreshBtn     = nullptr;
+    QPushButton *m_gridBtn        = nullptr;
     RobotStatusDialog *m_statusDialog = nullptr;
-    QByteArray  m_lastObstaclePayload;
-    QString     m_lastObstacleTopic;
 
-    // Navigation mode
+    // Navigation & Move modes
     bool        m_navMode          = false;
+    bool        m_moveMode         = false;
+    bool        m_navActive        = false;
 
     // Relocalization mode (click+drag to set position and heading)
     bool        m_relocMode        = false;
