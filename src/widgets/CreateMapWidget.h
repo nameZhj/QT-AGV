@@ -180,6 +180,7 @@ signals:
 protected:
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
     void onStartAdaptiveClick();
@@ -214,8 +215,9 @@ private:
     QLabel *m_teleopLabel = nullptr;
     QLabel *m_brakeLabel = nullptr;
 
-    // 地图画布区域
+    // 地图画布区域与方向控制盘
     MapCanvasWidget *m_mapCanvas = nullptr;
+    class DirectionPadWidget *m_directionPad = nullptr;
 
     // 遥控面板
     QWidget *m_teleopPanel = nullptr;

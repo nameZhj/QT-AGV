@@ -12,6 +12,7 @@
 #include <QComboBox>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSettings>
 #include <QDebug>
 
 TeleopController &TeleopController::instance()
@@ -26,6 +27,11 @@ TeleopController::TeleopController(QObject *parent)
 {
     m_timer->setInterval(kDefaultTickIntervalMs);
     connect(m_timer, &QTimer::timeout, this, &TeleopController::onTick);
+
+    // 读取持久化速度设置 (默认线速度 0.50 m/s，默认角速度 45.0 °/s 对应约 0.785 rad/s)
+    QSettings s;
+    m_baseLinearSpeed  = s.value(QStringLiteral("teleop/baseLinearSpeed"), kDefaultBaseLinear).toDouble();
+    m_baseAngularSpeed = s.value(QStringLiteral("teleop/baseAngularSpeed"), 45.0 * 3.14159265358979323846 / 180.0).toDouble();
 }
 
 TeleopController::~TeleopController()
@@ -37,8 +43,12 @@ TeleopController::~TeleopController()
 
 void TeleopController::setBaseSpeeds(double linear, double angular)
 {
-    m_baseLinearSpeed  = qMax(0.05, linear);
-    m_baseAngularSpeed = qMax(0.05, angular);
+    m_baseLinearSpeed  = qMax(0.01, linear);
+    m_baseAngularSpeed = qMax(0.01, angular);
+
+    QSettings s;
+    s.setValue(QStringLiteral("teleop/baseLinearSpeed"), m_baseLinearSpeed);
+    s.setValue(QStringLiteral("teleop/baseAngularSpeed"), m_baseAngularSpeed);
 }
 
 void TeleopController::setMaxBoostMultiplier(double mult)
@@ -195,21 +205,47 @@ bool TeleopController::focusIsTextInput() const
 
 bool TeleopController::handleKeyEvent(QKeyEvent *event, bool pressed)
 {
-    switch (event->key()) {
-    case Qt::Key_W:     m_keyForward   = pressed; break;
-    case Qt::Key_S:     m_keyBack      = pressed; break;
-    case Qt::Key_A:     m_keyLeft      = pressed; break;
-    case Qt::Key_D:     m_keyRight     = pressed; break;
-    case Qt::Key_Space: m_keyBrake     = pressed; break;
+    const int key = event->key();
+    switch (key) {
+    case Qt::Key_W:
+        if (m_keyForward != pressed) {
+            m_keyForward = pressed;
+            emit keyStateChanged(Qt::Key_W, pressed);
+        }
+        break;
+    case Qt::Key_S:
+        if (m_keyBack != pressed) {
+            m_keyBack = pressed;
+            emit keyStateChanged(Qt::Key_S, pressed);
+        }
+        break;
+    case Qt::Key_A:
+        if (m_keyLeft != pressed) {
+            m_keyLeft = pressed;
+            emit keyStateChanged(Qt::Key_A, pressed);
+        }
+        break;
+    case Qt::Key_D:
+        if (m_keyRight != pressed) {
+            m_keyRight = pressed;
+            emit keyStateChanged(Qt::Key_D, pressed);
+        }
+        break;
+    case Qt::Key_Space:
+        if (m_keyBrake != pressed) {
+            m_keyBrake = pressed;
+            emit keyStateChanged(Qt::Key_Space, pressed);
+        }
+        break;
     case Qt::Key_P:     m_keyHoistUp   = pressed; break;
     case Qt::Key_L:     m_keyHoistDown = pressed; break;
     default: return false;
     }
 
-    if (event->key() == Qt::Key_Space) {
+    if (key == Qt::Key_Space) {
         emit brakeChanged(m_keyBrake);
     }
-    if (event->key() == Qt::Key_P || event->key() == Qt::Key_L) {
+    if (key == Qt::Key_P || key == Qt::Key_L) {
         int dir = 0;
         if (m_keyHoistUp)   dir = +1;
         else if (m_keyHoistDown) dir = -1;
@@ -220,6 +256,72 @@ bool TeleopController::handleKeyEvent(QKeyEvent *event, bool pressed)
 
     updateMotion();
     return true;
+}
+
+void TeleopController::setVirtualKey(int key, bool pressed)
+{
+    if (!m_active && pressed) {
+        setActive(true);
+    }
+
+    switch (key) {
+    case Qt::Key_W:
+        if (m_keyForward != pressed) {
+            m_keyForward = pressed;
+            emit keyStateChanged(Qt::Key_W, pressed);
+        }
+        break;
+    case Qt::Key_S:
+        if (m_keyBack != pressed) {
+            m_keyBack = pressed;
+            emit keyStateChanged(Qt::Key_S, pressed);
+        }
+        break;
+    case Qt::Key_A:
+        if (m_keyLeft != pressed) {
+            m_keyLeft = pressed;
+            emit keyStateChanged(Qt::Key_A, pressed);
+        }
+        break;
+    case Qt::Key_D:
+        if (m_keyRight != pressed) {
+            m_keyRight = pressed;
+            emit keyStateChanged(Qt::Key_D, pressed);
+        }
+        break;
+    case Qt::Key_Space:
+        if (m_keyBrake != pressed) {
+            m_keyBrake = pressed;
+            emit keyStateChanged(Qt::Key_Space, pressed);
+            emit brakeChanged(m_keyBrake);
+        }
+        break;
+    default:
+        return;
+    }
+
+    updateMotion();
+}
+
+bool TeleopController::isKeyPressed(int key) const
+{
+    switch (key) {
+    case Qt::Key_W:     return m_keyForward;
+    case Qt::Key_S:     return m_keyBack;
+    case Qt::Key_A:     return m_keyLeft;
+    case Qt::Key_D:     return m_keyRight;
+    case Qt::Key_Space: return m_keyBrake;
+    case Qt::Key_P:     return m_keyHoistUp;
+    case Qt::Key_L:     return m_keyHoistDown;
+    default: return false;
+    }
+}
+
+void TeleopController::stopAllMotion()
+{
+    resetKeyStates();
+    emergencyStop();
+    emit motionChanged(0.0, 0.0);
 }
 
 void TeleopController::onTick()
@@ -294,6 +396,12 @@ void TeleopController::updateMotion()
 
 void TeleopController::resetKeyStates()
 {
+    const bool hadForward = m_keyForward;
+    const bool hadBack    = m_keyBack;
+    const bool hadLeft    = m_keyLeft;
+    const bool hadRight   = m_keyRight;
+    const bool hadBrake   = m_keyBrake;
+
     m_keyForward   = false;
     m_keyBack      = false;
     m_keyLeft      = false;
@@ -308,6 +416,12 @@ void TeleopController::resetKeyStates()
     m_hasPublishedAngular  = false;
     m_lastPublishedLinear  = 0.0;
     m_lastPublishedAngular = 0.0;
+
+    if (hadForward) emit keyStateChanged(Qt::Key_W, false);
+    if (hadBack)    emit keyStateChanged(Qt::Key_S, false);
+    if (hadLeft)    emit keyStateChanged(Qt::Key_A, false);
+    if (hadRight)   emit keyStateChanged(Qt::Key_D, false);
+    if (hadBrake)   emit keyStateChanged(Qt::Key_Space, false);
 }
 
 void TeleopController::publishTeleopEnable(bool on)

@@ -76,6 +76,7 @@ protected:
     void showEvent(QShowEvent *event) override;
 
 private:
+    void executeSingleAction(const QJsonObject &action);
     void setupUI();
     void setupPanel1Chain(QVBoxLayout *layout);
     void setupPanel2Task(QVBoxLayout *layout);

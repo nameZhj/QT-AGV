@@ -5,6 +5,7 @@
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
 #include "core/TeleopController.h"
+#include "DirectionPadWidget.h"
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -189,6 +190,13 @@ void CreateMapWidget::setupUI()
     // 地图画布
     m_mapCanvas = new MapCanvasWidget;
     m_mapCanvas->setStyleSheet("background: #1a1a2e;");
+
+    // 方向控制盘 (左下角常驻，对标参考图1)
+    m_directionPad = new DirectionPadWidget(m_mapCanvas);
+    m_directionPad->move(16, qMax(16, m_mapCanvas->height() - m_directionPad->height() - 16));
+    m_directionPad->raise();
+    m_mapCanvas->installEventFilter(this);
+
     splitter->addWidget(m_mapCanvas);
 
     // 右侧面板 (HUD + 遥控)
@@ -262,44 +270,20 @@ void CreateMapWidget::setupUI()
     dirLayout->addWidget(m_rightBtn, 1, 2);
     dirLayout->addWidget(m_backwardBtn, 2, 1);
 
-    // 遥控按钮 - 按下发送速度，松开发送0
-    auto setupDirBtn = [](QPushButton *btn, double linear, double angular) {
-        QObject::connect(btn, &QPushButton::pressed, [linear, angular]() {
-            QString agvId = AppConfig::instance().agvId();
-            QJsonObject cmd;
-            cmd["linear_x"] = linear;
-            cmd["angular_z"] = angular;
-            MqttService::instance().publish(
-                QString("/rob/%1/cmd_vel").arg(agvId),
-                QJsonDocument(cmd).toJson());
+    // 遥控按钮 - 统一委托给全局 TeleopController (消除影子逻辑与多协议冲突)
+    auto setupDirBtn = [](QPushButton *btn, int key) {
+        QObject::connect(btn, &QPushButton::pressed, [key]() {
+            TeleopController::instance().setVirtualKey(key, true);
         });
-        QObject::connect(btn, &QPushButton::released, []() {
-            QString agvId = AppConfig::instance().agvId();
-            QJsonObject cmd;
-            cmd["linear_x"] = 0.0;
-            cmd["angular_z"] = 0.0;
-            MqttService::instance().publish(
-                QString("/rob/%1/cmd_vel").arg(agvId),
-                QJsonDocument(cmd).toJson());
+        QObject::connect(btn, &QPushButton::released, [key]() {
+            TeleopController::instance().setVirtualKey(key, false);
         });
     };
-    setupDirBtn(m_forwardBtn, 0.3, 0.0);
-    setupDirBtn(m_backwardBtn, -0.3, 0.0);
-    setupDirBtn(m_leftBtn, 0.0, 0.5);
-    setupDirBtn(m_rightBtn, 0.0, -0.5);
-
-    connect(m_brakeBtn, &QPushButton::pressed, this, [this]() {
-        m_brakeActive = true;
-        m_brakeLabel->setText("按下");
-        QString agvId = AppConfig::instance().agvId();
-        MqttService::instance().publish(QString("/rob/%1/brake").arg(agvId), "1");
-    });
-    connect(m_brakeBtn, &QPushButton::released, this, [this]() {
-        m_brakeActive = false;
-        m_brakeLabel->setText("松开");
-        QString agvId = AppConfig::instance().agvId();
-        MqttService::instance().publish(QString("/rob/%1/brake").arg(agvId), "0");
-    });
+    setupDirBtn(m_forwardBtn, Qt::Key_W);
+    setupDirBtn(m_backwardBtn, Qt::Key_S);
+    setupDirBtn(m_leftBtn, Qt::Key_A);
+    setupDirBtn(m_rightBtn, Qt::Key_D);
+    setupDirBtn(m_brakeBtn, Qt::Key_Space);
 
     teleopLayout->addLayout(dirLayout);
 
@@ -332,6 +316,27 @@ void CreateMapWidget::showEvent(QShowEvent *event)
     if (!m_mappingActive && !m_highMappingActive) {
         m_mapCanvas->setMapData(QJsonObject());
     }
+
+    if (m_directionPad) {
+        m_directionPad->move(16, qMax(16, m_mapCanvas->height() - m_directionPad->height() - 16));
+        m_directionPad->raise();
+    }
+
+    // 页面显示时保证遥控状态就绪
+    if (!TeleopController::instance().isActive()) {
+        TeleopController::instance().setActive(true);
+    }
+}
+
+bool CreateMapWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_mapCanvas && event->type() == QEvent::Resize) {
+        if (m_directionPad) {
+            m_directionPad->move(16, qMax(16, m_mapCanvas->height() - m_directionPad->height() - 16));
+            m_directionPad->raise();
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void CreateMapWidget::hideEvent(QHideEvent *event)

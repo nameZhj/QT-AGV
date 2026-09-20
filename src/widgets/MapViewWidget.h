@@ -13,6 +13,7 @@
 #include <QPushButton>
 #include <QToolButton>
 #include <QScrollArea>
+#include <QGroupBox>
 #include <QPixmap>
 #include <cmath>
 
@@ -180,7 +181,9 @@ private:
     QToolButton *m_resetViewBtn   = nullptr;
     QToolButton *m_refreshBtn     = nullptr;
     QPushButton *m_gridBtn        = nullptr;
+    class DirectionPadWidget *m_directionPad = nullptr;
     RobotStatusDialog *m_statusDialog = nullptr;
+    class MotionDialog *m_motionDialog = nullptr;
 
     // Navigation & Move modes
     bool        m_navMode          = false;
@@ -213,6 +216,28 @@ private:
     QLabel *m_infoSizeLabel   = nullptr;
     QLabel *m_infoResLabel    = nullptr;
     QLabel *m_infoOriginLabel = nullptr;
+
+    // Station info (对齐"启用编辑"站点属性面板规范)
+    void showStationDetails(const QJsonObject &pt, const QString &type);
+    void clearStationDetails();
+
+    QGroupBox            *m_stationGroup         = nullptr;
+    QLabel               *m_stationBadge         = nullptr;
+    QLabel               *m_stationEmptyHint     = nullptr;
+    QWidget              *m_stationContentWidget = nullptr;
+    QLabel               *m_stationTypeVal       = nullptr;
+    QLabel               *m_stationIdVal         = nullptr;
+    QLabel               *m_stationNameVal       = nullptr;
+    QLabel               *m_stationPosVal        = nullptr;
+    QLabel               *m_stationYawVal        = nullptr;
+    QLabel               *m_stationDockVal       = nullptr;
+    QLabel               *m_stationRotateVal     = nullptr;
+    QLabel               *m_stationPgvVal        = nullptr;
+    QWidget              *m_stationEpcGroup      = nullptr;
+    QLabel               *m_stationEpcPosVal     = nullptr;
+    QLabel               *m_stationEpcYawVal     = nullptr;
+    QGraphicsEllipseItem *m_selectedPointRing    = nullptr;
+    QString               m_selectedStationId;
 
     // 请求去重与防抖节流
     bool    m_isLoadingCar  = false;

@@ -437,7 +437,8 @@ void RobotStatusDialog::initMqttSubscriptions()
     MqttService::instance().subscribeTopic("info", 0, cb);
     MqttService::instance().subscribeTopic("/rob/info", 0, cb);
 
-    QString carId = AppConfig::instance().agvId();
+    QString carId = AppConfig::instance().currentDevice().carId;
+    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
     if (carId.isEmpty()) carId = "1";
     MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, cb);
 }
@@ -835,19 +836,21 @@ void RobotStatusDialog::refreshNetworkAndWifiInfo()
 
 void RobotStatusDialog::onPeriodicRefresh()
 {
-    // 更新本次运行时间
-    qint64 elapsedSec = (QDateTime::currentMSecsSinceEpoch() - m_startTimeMs) / 1000;
-    int days = elapsedSec / 86400;
-    int hours = (elapsedSec % 86400) / 3600;
-    int minutes = (elapsedSec % 3600) / 60;
-    int seconds = elapsedSec % 60;
-
+    // 本次运行时间与累计运行时间严格来源于 MQTT 话题 "info" 中的 runtime 数据 (不再使用上位机假时间覆盖)
+    const RobotInfo &info = RobotInfoManager::instance().currentInfo();
     if (m_valThisTime) {
-        m_valThisTime->setText(QString("%1天/%2时/%3分/%4秒")
-            .arg(days, 2, 10, QChar('0'))
-            .arg(hours, 2, 10, QChar('0'))
-            .arg(minutes, 2, 10, QChar('0'))
-            .arg(seconds, 2, 10, QChar('0')));
+        if (info.runtime.valid) {
+            m_valThisTime->setText(RobotInfoManager::formatDuration(info.runtime.current_runtime_sec));
+        } else if (!m_hasMqttData) {
+            m_valThisTime->setText("--");
+        }
+    }
+    if (m_valTotalTime) {
+        if (info.runtime.valid) {
+            m_valTotalTime->setText(RobotInfoManager::formatDuration(info.runtime.total_runtime_sec));
+        } else if (!m_hasMqttData) {
+            m_valTotalTime->setText("--");
+        }
     }
 
     // 轻量定时更新网络详情时间戳

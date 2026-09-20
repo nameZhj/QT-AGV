@@ -12,6 +12,8 @@
 #include "MapUploadDialog.h"
 #include "SmapUploadDialog.h"
 #include "RobotStatusDialog.h"
+#include "DirectionPadWidget.h"
+#include "MotionDialog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -512,10 +514,19 @@ void MapViewWidget::setupUI()
         renderAxesAndGrid();
     });
 
-    // Reposition grid button on canvas resize
+    // Direction pad overlay (bottom-left of canvas, persistent)
+    m_directionPad = new DirectionPadWidget(m_canvas);
+    m_directionPad->move(16, qMax(16, m_canvas->height() - m_directionPad->height() - 16));
+    m_directionPad->raise();
+
+    // Reposition overlays on canvas resize
     connect(m_canvas, &MapCanvas::canvasResized, this, [this](const QSize &sz) {
         m_gridBtn->move(sz.width() - m_gridBtn->width() - 8,
                         sz.height() - m_gridBtn->height() - 8);
+        if (m_directionPad) {
+            m_directionPad->move(16, sz.height() - m_directionPad->height() - 16);
+            m_directionPad->raise();
+        }
     });
 
     connect(m_canvas, &MapCanvas::transformChanged, this, &MapViewWidget::onViewTransformChanged);
@@ -542,14 +553,6 @@ void MapViewWidget::setupToolbar(QWidget *parent)
     auto *lay = new QHBoxLayout(parent);
     lay->setContentsMargins(8, 0, 8, 0);
     lay->setSpacing(4);
-
-    m_mapNameLabel = new QLabel("未加载地图");
-    m_mapNameLabel->setStyleSheet("color:#c8d0d8; font-size:13px; font-weight:600;");
-    m_mapNameLabel->setMinimumWidth(80);
-    lay->addWidget(m_mapNameLabel);
-
-    auto *sep1 = new QFrame; sep1->setFrameShape(QFrame::VLine);
-    sep1->setStyleSheet("color:#2d3340;"); lay->addWidget(sep1);
 
     auto addBtn = [&](const QString &iconName, const QString &text, const char *slot) {
         auto *b = new QToolButton(parent);
@@ -587,10 +590,10 @@ void MapViewWidget::setupToolbar(QWidget *parent)
     m_navModeBtn->setCheckable(true);
     m_navModeBtn->setToolTip("路径导航模式：点击地图上的站点发起导航任务");
 
-    // 6. 移动 (自由点移动模式)
+    // 6. 移动 (平动转动控制弹窗)
     m_moveBtn = addBtn("move", "移动", SLOT(onToggleMoveMode()));
-    m_moveBtn->setCheckable(true);
-    m_moveBtn->setToolTip("自由移动模式：点击地图任意空白位置下发移动坐标");
+    m_moveBtn->setCheckable(false);
+    m_moveBtn->setToolTip("平动与转动控制弹窗");
 
     // 7. 取消导航 (不执行时置灰不可点击)
     m_cancelNavBtn = addBtn("cancel", "取消导航", SLOT(onCancelNavigation()));
@@ -643,9 +646,24 @@ void MapViewWidget::setupToolbar(QWidget *parent)
 
 void MapViewWidget::setupRightPanel(QWidget *parent)
 {
-    auto *lay = new QVBoxLayout(parent);
+    parent->setFixedWidth(260);
+    auto *outerLay = new QVBoxLayout(parent);
+    outerLay->setContentsMargins(0, 0, 0, 0);
+
+    auto *scrollArea = new QScrollArea(parent);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scrollArea->setStyleSheet(
+        "QScrollArea { border: none; background: transparent; }"
+        "QScrollBar:vertical { background: #12151a; width: 6px; }"
+        "QScrollBar::handle:vertical { background: #2d3340; border-radius: 3px; min-height: 20px; }"
+        "QScrollBar::handle:vertical:hover { background: #3d4758; }");
+
+    auto *container = new QWidget;
+    container->setStyleSheet("background: transparent;");
+    auto *lay = new QVBoxLayout(container);
     lay->setContentsMargins(10, 10, 10, 10);
-    lay->setSpacing(8);
+    lay->setSpacing(10);
 
     auto mkGroup = [](const QString &title) {
         auto *g = new QGroupBox(title);
@@ -657,17 +675,18 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
         return g;
     };
 
-    // ── Car info ───────────────────────────────────────────────────────────
-    auto *carGroup = mkGroup("设备状态");
-    auto *carForm  = new QFormLayout(carGroup);
-    carForm->setSpacing(6);
-    carForm->setLabelAlignment(Qt::AlignRight);
-
     auto mkInfoLabel = [](const QString &val = "--") {
         auto *l = new QLabel(val);
         l->setStyleSheet("color:#c8d0d8; font-size:12px;");
         return l;
     };
+
+    // ── 1. Car info ───────────────────────────────────────────────────────────
+    auto *carGroup = mkGroup("设备状态");
+    auto *carForm  = new QFormLayout(carGroup);
+    carForm->setSpacing(6);
+    carForm->setLabelAlignment(Qt::AlignRight);
+
     m_carNameLabel      = mkInfoLabel();
     m_deviceStatusLabel = mkInfoLabel();
     m_batteryLabel      = mkInfoLabel();
@@ -683,7 +702,79 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     carForm->addRow("坐标:", m_posLabel);
     lay->addWidget(carGroup);
 
-    // ── Map info (moved here from the status bar above the canvas) ──────────
+    // ── 2. Station info (对标"启用编辑"右侧站点属性) ──────────────────────────
+    m_stationGroup = mkGroup("站点属性");
+    auto *stationMainLay = new QVBoxLayout(m_stationGroup);
+    stationMainLay->setContentsMargins(8, 12, 8, 8);
+    stationMainLay->setSpacing(6);
+
+    // 顶部标题行: 类型徽章
+    auto *badgeRow = new QHBoxLayout;
+    badgeRow->addStretch();
+    m_stationBadge = new QLabel;
+    m_stationBadge->setStyleSheet("border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
+    m_stationBadge->setVisible(false);
+    badgeRow->addWidget(m_stationBadge);
+    stationMainLay->addLayout(badgeRow);
+
+    // 默认空提示
+    m_stationEmptyHint = new QLabel("点击地图上的点位\n查看站点信息");
+    m_stationEmptyHint->setAlignment(Qt::AlignCenter);
+    m_stationEmptyHint->setStyleSheet("color:#556677; font-size:12px; padding:14px 0;");
+    stationMainLay->addWidget(m_stationEmptyHint);
+
+    // 属性表单容器
+    m_stationContentWidget = new QWidget;
+    m_stationContentWidget->setStyleSheet("background:transparent; border:none;");
+    auto *stForm = new QFormLayout(m_stationContentWidget);
+    stForm->setContentsMargins(0, 0, 0, 0);
+    stForm->setSpacing(6);
+    stForm->setLabelAlignment(Qt::AlignRight);
+
+    m_stationTypeVal   = mkInfoLabel();
+    m_stationIdVal     = mkInfoLabel();
+    m_stationNameVal   = mkInfoLabel();
+    m_stationPosVal    = mkInfoLabel();
+    m_stationYawVal    = mkInfoLabel();
+    m_stationDockVal   = mkInfoLabel();
+    m_stationRotateVal = mkInfoLabel();
+    m_stationPgvVal    = mkInfoLabel();
+
+    stForm->addRow("类型:", m_stationTypeVal);
+    stForm->addRow("编号:", m_stationIdVal);
+    stForm->addRow("名称:", m_stationNameVal);
+    stForm->addRow("坐标:", m_stationPosVal);
+    stForm->addRow("朝向:", m_stationYawVal);
+    stForm->addRow("停靠:", m_stationDockVal);
+    stForm->addRow("转身:", m_stationRotateVal);
+    stForm->addRow("PGV:",  m_stationPgvVal);
+
+    // EPC 相对定位数据卡片
+    m_stationEpcGroup = new QWidget;
+    m_stationEpcGroup->setStyleSheet("background:#141a26; border:1px solid #222b3c; border-radius:4px; margin-top:4px;");
+    auto *epcL = new QVBoxLayout(m_stationEpcGroup);
+    epcL->setContentsMargins(6, 6, 6, 6);
+    epcL->setSpacing(3);
+    auto *epcTitle = new QLabel("设备相对校准 (EPC)");
+    epcTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
+    epcL->addWidget(epcTitle);
+    auto *epcForm = new QFormLayout;
+    epcForm->setContentsMargins(0, 0, 0, 0);
+    epcForm->setSpacing(3);
+    epcForm->setLabelAlignment(Qt::AlignRight);
+    m_stationEpcPosVal = mkInfoLabel();
+    m_stationEpcYawVal = mkInfoLabel();
+    epcForm->addRow("相对坐标:", m_stationEpcPosVal);
+    epcForm->addRow("相对偏角:", m_stationEpcYawVal);
+    epcL->addLayout(epcForm);
+    stForm->addRow(m_stationEpcGroup);
+    m_stationEpcGroup->setVisible(false);
+
+    stationMainLay->addWidget(m_stationContentWidget);
+    m_stationContentWidget->setVisible(false);
+    lay->addWidget(m_stationGroup);
+
+    // ── 3. Map info ──────────────────────────────────────────────────────────
     auto *infoGroup = mkGroup("地图信息");
     auto *infoForm  = new QFormLayout(infoGroup);
     infoForm->setSpacing(6);
@@ -703,7 +794,8 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
 
     auto *hint = new QLabel(
         "<small style='color:#556677;'>"
-        "左键单击: 设置初始位姿<br>"
+        "左键点击点位: 查看站点信息<br>"
+        "路径导航模式: 点击点位导航<br>"
         "Alt+拖拽 / 中键: 平移<br>"
         "滚轮/触控板双指: 缩放<br>"
         "Ctrl+滚轮/触控板: 旋转"
@@ -712,6 +804,111 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     hint->setWordWrap(true);
     lay->addWidget(hint);
     lay->addStretch();
+
+    scrollArea->setWidget(container);
+    outerLay->addWidget(scrollArea);
+}
+
+void MapViewWidget::showStationDetails(const QJsonObject &pt, const QString &type)
+{
+    QString id = pt.value("id").toString();
+    QString name = pt.value("name").toString();
+    if (name.isEmpty()) name = id;
+    m_selectedStationId = id;
+
+    // 徽章与类型展示 (对标 MapEditWidget)
+    QString typeText = "普通站点 (LM)";
+    QString badgeText = "LM";
+    QString badgeStyle = "background:#1e3a5f; color:#60a5fa; border:1px solid #2563eb; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;";
+    if (type == "charge" || type == "chargeEpc") {
+        typeText = "充电桩 (CP)";
+        badgeText = "CP";
+        badgeStyle = "background:#4d3800; color:#fbbf24; border:1px solid #d97706; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;";
+    } else if (type == "highPrecision" || type == "highPrecisionEpc") {
+        typeText = "高精定位点 (TL)";
+        badgeText = "TL";
+        badgeStyle = "background:#4d1414; color:#f87171; border:1px solid #dc2626; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;";
+    }
+
+    if (m_stationBadge) {
+        m_stationBadge->setText(badgeText);
+        m_stationBadge->setStyleSheet(badgeStyle);
+        m_stationBadge->setVisible(true);
+    }
+
+    if (m_stationTypeVal)   m_stationTypeVal->setText(typeText);
+    if (m_stationIdVal)     m_stationIdVal->setText(id);
+    if (m_stationNameVal)   m_stationNameVal->setText(name);
+
+    double x = pt.value("x").toDouble();
+    double y = pt.value("y").toDouble();
+    if (m_stationPosVal) {
+        m_stationPosVal->setText(QString("(%1, %2) m").arg(x, 0, 'f', 3).arg(y, 0, 'f', 3));
+    }
+
+    double yawVal = 0.0;
+    if (pt.contains("yaw")) yawVal = pt.value("yaw").toDouble();
+    else if (pt.contains("robotYaw")) yawVal = pt.value("robotYaw").toDouble();
+    else if (pt.contains("theta")) yawVal = pt.value("theta").toDouble() * M_PI / 180.0;
+    if (m_stationYawVal) {
+        m_stationYawVal->setText(QString("%1° (%2 rad)").arg(yawVal * 180.0 / M_PI, 0, 'f', 1).arg(yawVal, 0, 'f', 3));
+    }
+
+    if (m_stationDockVal) {
+        m_stationDockVal->setText(pt.value("rdsDockable").toBool(true) ? "允许停靠" : "禁止停靠");
+    }
+    if (m_stationRotateVal) {
+        m_stationRotateVal->setText(pt.value("allowRotate").toBool(true) ? "允许转身" : "禁止转身");
+    }
+    if (m_stationPgvVal) {
+        m_stationPgvVal->setText(pt.value("useDownPGV").toBool(false) ? "使用PGV" : "不使用PGV");
+    }
+
+    // EPC 相对定位数据
+    bool isDevicePoint = (type == "charge" || type == "highPrecision" || type == "chargeEpc" || type == "highPrecisionEpc");
+    if (isDevicePoint && (pt.contains("epc_x") || pt.contains("epcX") || pt.contains("epc_y") || pt.contains("epcY"))) {
+        double epcX = pt.contains("epc_x") ? pt.value("epc_x").toDouble() : pt.value("epcX").toDouble();
+        double epcY = pt.contains("epc_y") ? pt.value("epc_y").toDouble() : pt.value("epcY").toDouble();
+        double epcTheta = pt.contains("epc_theta") ? pt.value("epc_theta").toDouble() : pt.value("epcTheta").toDouble();
+        if (m_stationEpcPosVal) {
+            m_stationEpcPosVal->setText(QString("(%1, %2) m").arg(epcX, 0, 'f', 3).arg(epcY, 0, 'f', 3));
+        }
+        if (m_stationEpcYawVal) {
+            m_stationEpcYawVal->setText(QString("%1° (%2 rad)").arg(epcTheta * 180.0 / M_PI, 0, 'f', 1).arg(epcTheta, 0, 'f', 3));
+        }
+        if (m_stationEpcGroup) m_stationEpcGroup->setVisible(true);
+    } else {
+        if (m_stationEpcGroup) m_stationEpcGroup->setVisible(false);
+    }
+
+    if (m_stationEmptyHint)     m_stationEmptyHint->setVisible(false);
+    if (m_stationContentWidget) m_stationContentWidget->setVisible(true);
+
+    // 在地图上绘制翠绿色高亮选中光环
+    QPointF sp = worldToScene(x, y);
+    if (!m_selectedPointRing && m_scene) {
+        m_selectedPointRing = new QGraphicsEllipseItem;
+        m_selectedPointRing->setPen(QPen(QColor("#2ecc71"), 2.0));
+        m_selectedPointRing->setBrush(QBrush(QColor(46, 204, 113, 70)));
+        m_selectedPointRing->setZValue(25);
+        m_scene->addItem(m_selectedPointRing);
+    }
+    if (m_selectedPointRing) {
+        m_selectedPointRing->setRect(sp.x() - 14, sp.y() - 14, 28, 28);
+        m_selectedPointRing->setVisible(true);
+    }
+}
+
+void MapViewWidget::clearStationDetails()
+{
+    m_selectedStationId.clear();
+    if (m_stationBadge) {
+        m_stationBadge->setText("");
+        m_stationBadge->setVisible(false);
+    }
+    if (m_stationContentWidget) m_stationContentWidget->setVisible(false);
+    if (m_stationEmptyHint)     m_stationEmptyHint->setVisible(true);
+    if (m_selectedPointRing)    m_selectedPointRing->setVisible(false);
 }
 
 // ── Show / hide ──────────────────────────────────────────────────────────────
@@ -979,7 +1176,7 @@ void MapViewWidget::loadMapById(const QString &mapId, const QString &mapName)
     m_mapId = mapId;
     if (!mapName.isEmpty()) {
         m_mapName = mapName;
-        m_mapNameLabel->setText(m_mapName);
+        if (m_mapNameLabel) m_mapNameLabel->setText(m_mapName);
     }
 
     setStatus(QString("正在加载地图 %1...").arg(mapId));
@@ -1011,7 +1208,7 @@ void MapViewWidget::loadMapById(const QString &mapId, const QString &mapName)
             QString base = yfi.completeBaseName();
             if (base.endsWith(".map", Qt::CaseInsensitive)) base.chop(4);
             m_mapName = !targetMapName.isEmpty() ? targetMapName : base;
-            m_mapNameLabel->setText(m_mapName);
+            if (m_mapNameLabel) m_mapNameLabel->setText(m_mapName);
 
             if (loadMapFromLocalFiles(yamlPath, pgmPath)) {
                 m_loadingMapId.clear();
@@ -1074,7 +1271,7 @@ void MapViewWidget::loadMapById(const QString &mapId, const QString &mapName)
             QString base = yfi.completeBaseName();
             if (base.endsWith(".map", Qt::CaseInsensitive)) base.chop(4);
             m_mapName = !targetMapName.isEmpty() ? targetMapName : base;
-            m_mapNameLabel->setText(m_mapName);
+            if (m_mapNameLabel) m_mapNameLabel->setText(m_mapName);
 
             // 存储 meta.json 锁定当前解析映射
             QFile metaFile(localDir + "/meta.json");
@@ -1153,7 +1350,7 @@ void MapViewWidget::applyMapData(const QJsonObject &mapInfo)
     double apiOriginX = tryOrigin({"offsetX","mapOffsetX","offset_x"});
     double apiOriginY = tryOrigin({"offsetY","mapOffsetY","offset_y"});
 
-    m_mapNameLabel->setText(m_mapName);
+    if (m_mapNameLabel) m_mapNameLabel->setText(m_mapName);
     m_mapReady = false;
 
     loadMapFromPgm(apiOriginX, apiOriginY, physW, physH);
@@ -1448,7 +1645,11 @@ void MapViewWidget::renderAxesAndGrid()
 
 void MapViewWidget::renderRoute()
 {
-    if (!m_mapReady || !m_routeLoaded) return;
+    if (m_selectedPointRing) {
+        m_scene->removeItem(m_selectedPointRing);
+        delete m_selectedPointRing;
+        m_selectedPointRing = nullptr;
+    }
 
     for (auto *item : m_scene->items()) {
         if (item->data(0).toInt() == 2) {
@@ -1895,19 +2096,56 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
 
     if (btn != Qt::LeftButton) return;
 
-    if (m_navMode) {
-        // 使用单点 scenePos 检索鼠标指针【精确落在其形状/长方形范围内部】的图元
-        QGraphicsItem *targetItem = nullptr;
-        for (auto *it : m_scene->items(scenePos)) {
+    // 优先检索鼠标指针所在位置的站点图元 (支持微小点击容差)
+    QGraphicsItem *stationItem = nullptr;
+    for (auto *it : m_scene->items(scenePos)) {
+        QGraphicsItem *cur = it;
+        if (!cur->data(1).isValid() && cur->parentItem()) cur = cur->parentItem();
+        if (cur->data(0).toInt() == 2 && cur->data(1).isValid()) {
+            stationItem = cur;
+            break;
+        }
+    }
+    if (!stationItem) {
+        const double tol = 8.0;
+        for (auto *it : m_scene->items(QRectF(scenePos.x() - tol, scenePos.y() - tol, tol * 2, tol * 2))) {
             QGraphicsItem *cur = it;
             if (!cur->data(1).isValid() && cur->parentItem()) cur = cur->parentItem();
             if (cur->data(0).toInt() == 2 && cur->data(1).isValid()) {
-                targetItem = cur;
+                stationItem = cur;
                 break;
             }
         }
+    }
 
-        // 只有鼠标点击位置精确落在点及绘制的长方形范围内部时才响应；在长方形范围之外点击直接静默忽略
+    if (stationItem) {
+        QString ptId   = stationItem->data(1).toString();
+        QString ptType = stationItem->data(2).toString();
+
+        auto findIn = [&](const QJsonArray &arr) -> QJsonObject {
+            for (const auto &v : arr) {
+                QJsonObject o = v.toObject();
+                if (o.value("id").toString() == ptId) return o;
+            }
+            return QJsonObject();
+        };
+
+        QJsonObject ptObj;
+        if (ptType == "charge") ptObj = findIn(m_charges);
+        else if (ptType == "highPrecision") ptObj = findIn(m_highPrecisionPoints);
+        else ptObj = findIn(m_points);
+
+        if (!ptObj.isEmpty()) {
+            showStationDetails(ptObj, ptType);
+        }
+    } else {
+        if (!m_navMode && !m_moveMode && !m_relocMode) {
+            clearStationDetails();
+        }
+    }
+
+    if (m_navMode) {
+        QGraphicsItem *targetItem = stationItem;
         if (!targetItem) {
             return;
         }
@@ -1941,16 +2179,28 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
             if (carId.isEmpty()) carId = AppConfig::instance().agvId();
             if (carId.isEmpty()) carId = "1";
 
-            // 1. HTTP API 下发路径导航指令 (POST /robot/navigation/navigate/to?locationId=...)
-            ApiService::instance().navigateTo(ptId, [this, ptName](int code, const QJsonObject &resp) {
+            int actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
+            double speed = TeleopController::instance().baseLinearSpeed();
+            if (speed <= 0.01) speed = 0.5;
+
+            QString mapName = AppConfig::instance().currentDevice().mapName;
+            if (mapName.isEmpty()) mapName = m_mapName;
+
+            // 1. 控制器 8061 端口标准固定路径导航 (Table 3 set_robot_fix_path)
+            ApiService::instance().navigateToStation(ptId, mapName, wPos.x(), wPos.y(), speed, actionId, [this, ptName](int code, const QJsonObject &resp) {
                 if (code == 200) {
-                    Toast::success(this, QString("已开始导航至点位 “%1”").arg(ptName));
+                    QString msg = resp.value("data").toObject().value("msg").toString("ok");
+                    if (msg == "failed") {
+                        QString err = resp.value("data").toObject().value("error_info").toString();
+                        Toast::error(this, QString("控制器拒绝导航: %1").arg(err.isEmpty() ? "执行中或格式错误" : err));
+                    } else {
+                        Toast::success(this, QString("已开始路径导航至点位 “%1”").arg(ptName));
+                    }
                 } else {
-                    QString msg = resp.value("msg").toString("导航服务响应失败");
+                    QString msg = resp.value("msg").toString("控制器未响应");
                     Toast::error(this, QString("导航请求失败(%1): %2").arg(code).arg(msg));
                 }
             });
-
 
             // 2. MQTT 协议实时发布导航目标指令
             QJsonObject mqttData;
@@ -1968,8 +2218,7 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
             m_navActive = true;
             updateNavButtonsState();
 
-            setStatus(QString("已下发导航指令至点位 “%1” (%2, %3)").arg(ptName).arg(wPos.x(), 0, 'f', 2).arg(wPos.y(), 0, 'f', 2), "#00e676");
-            Toast::success(this, QString("导航指令已下发: “%1”").arg(ptName));
+            setStatus(QString("已下发控制器路径导航指令至点位 “%1” (%2, %3)").arg(ptName).arg(wPos.x(), 0, 'f', 2).arg(wPos.y(), 0, 'f', 2), "#00e676");
         }
         return;
     }
@@ -1990,6 +2239,27 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
             if (carId.isEmpty()) carId = AppConfig::instance().agvId();
             if (carId.isEmpty()) carId = "1";
 
+            int actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
+            double speed = TeleopController::instance().baseLinearSpeed();
+            if (speed <= 0.01) speed = 0.5;
+
+            // 1. 控制器 8061 端口三方固定路径点导航 (Table 4 set_third_fix_path)
+            ApiService::instance().navigateToPose(m_robot.wx, m_robot.wy, world.x(), world.y(), speed, actionId, [this, world](int code, const QJsonObject &resp) {
+                if (code == 200) {
+                    QString msg = resp.value("data").toObject().value("msg").toString("ok");
+                    if (msg == "failed") {
+                        QString err = resp.value("data").toObject().value("error_info").toString();
+                        Toast::error(this, QString("控制器拒绝移动: %1").arg(err.isEmpty() ? "执行中或格式错误" : err));
+                    } else {
+                        Toast::success(this, QString("已开始移动至 (%1, %2)").arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2));
+                    }
+                } else {
+                    QString msg = resp.value("msg").toString("控制器未响应");
+                    Toast::error(this, QString("移动请求失败(%1): %2").arg(code).arg(msg));
+                }
+            });
+
+            // 2. MQTT 协议实时发布移动目标指令
             QJsonObject mqttData;
             mqttData["command"] = "navigate";
             mqttData["point_id"] = "";
@@ -2676,34 +2946,12 @@ void MapViewWidget::exitRelocMode()
 
 void MapViewWidget::onToggleMoveMode()
 {
-    m_moveMode = m_moveBtn ? m_moveBtn->isChecked() : !m_moveMode;
-    if (m_moveMode) {
-        if (m_moveBtn) {
-            m_moveBtn->setChecked(true);
-            m_moveBtn->setStyleSheet(kToolBtnPrimary);
-        }
-        if (m_relocMode) exitRelocMode();
-        if (m_navMode && m_navModeBtn) {
-            m_navMode = false;
-            m_navModeBtn->setChecked(false);
-            m_navModeBtn->setStyleSheet(kToolBtnStyle);
-        }
-        if (m_canvas) {
-            m_canvas->setPanWithLeftButton(false);
-            m_canvas->setCursor(Qt::PointingHandCursor);
-        }
-        setStatus("点移动模式已开启: 请在地图上点击任意位置发起移动", "#00bcd4");
-    } else {
-        if (m_moveBtn) {
-            m_moveBtn->setChecked(false);
-            m_moveBtn->setStyleSheet(kToolBtnStyle);
-        }
-        if (m_canvas) {
-            m_canvas->setPanWithLeftButton(!m_relocMode && !m_navMode);
-            m_canvas->setCursor(Qt::CrossCursor);
-        }
-        setStatus("已退出移动模式");
+    if (!m_motionDialog) {
+        m_motionDialog = new MotionDialog(this);
     }
+    m_motionDialog->show();
+    m_motionDialog->raise();
+    m_motionDialog->activateWindow();
 }
 
 void MapViewWidget::onCancelNavigation()
@@ -2712,8 +2960,12 @@ void MapViewWidget::onCancelNavigation()
     if (carId.isEmpty()) carId = AppConfig::instance().agvId();
     if (carId.isEmpty()) carId = "1";
 
+    // 1. MQTT 广播取消
     MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
-    ApiService::instance().suspendWork([](int, const QJsonObject &) {});
+    // 2. 控制器 8061 端口取消任务接口 (Table 8 stop_task)
+    ApiService::instance().stopRobotTask(true, [](int code, const QJsonObject &resp) {
+        qDebug() << "[MapViewWidget] stopRobotTask 8061 code:" << code << resp;
+    });
 
     m_navActive = false;
     updateNavButtonsState();
@@ -2731,13 +2983,21 @@ void MapViewWidget::onPauseNavigation()
     const bool isPaused = (info.status == "5");
 
     if (isPaused) {
+        // 1. MQTT 继续
         MqttService::instance().publish(QString("/rob/%1/navigationContinue").arg(carId), "1");
-        ApiService::instance().continueWork([](int, const QJsonObject &) {});
+        // 2. 控制器 8061 端口恢复运行接口 (Table 7 continue)
+        ApiService::instance().continueRobot([](int code, const QJsonObject &resp) {
+            qDebug() << "[MapViewWidget] continueRobot 8061 code:" << code << resp;
+        });
         setStatus("已继续导航", "#00e676");
         Toast::success(this, "已继续导航");
     } else {
+        // 1. MQTT 暂停
         MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
-        ApiService::instance().suspendWork([](int, const QJsonObject &) {});
+        // 2. 控制器 8061 端口暂停接口 (Table 6 suspend)
+        ApiService::instance().suspendRobot([](int code, const QJsonObject &resp) {
+            qDebug() << "[MapViewWidget] suspendRobot 8061 code:" << code << resp;
+        });
         setStatus("导航已暂停", "#f59e0b");
         Toast::info(this, "导航已暂停");
     }
@@ -2834,7 +3094,7 @@ void MapViewWidget::onRenameMap()
         loading->deleteLater();
         if (code == 200) {
             m_mapName = name.trimmed();
-            m_mapNameLabel->setText(m_mapName);
+            if (m_mapNameLabel) m_mapNameLabel->setText(m_mapName);
             setStatus("重命名成功");
             Toast::success(this, "重命名成功");
         } else {
@@ -2880,7 +3140,7 @@ void MapViewWidget::onDeleteMap()
             m_mapId.clear(); m_mapName.clear();
             m_scene->clear();
             m_mapBg = m_robotItem = m_routeLayer = m_axesLayer = nullptr;
-            m_mapNameLabel->setText("已删除");
+            if (m_mapNameLabel) m_mapNameLabel->setText("已删除");
             setStatus("地图已删除，请切换地图");
             Toast::success(this, "地图已删除");
         } else {

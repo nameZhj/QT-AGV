@@ -274,13 +274,20 @@ bool RobotInfoManager::parseInfoJson(const QJsonObject &d, RobotInfo *outInfo)
             outInfo->runtime.valid = true;
             if (r.contains(QStringLiteral("current_runtime_sec")) && !r.value(QStringLiteral("current_runtime_sec")).isNull()) {
                 outInfo->runtime.current_runtime_sec = r.value(QStringLiteral("current_runtime_sec")).toVariant().toLongLong();
+            } else if (r.contains(QStringLiteral("current_runtime")) && !r.value(QStringLiteral("current_runtime")).isNull()) {
+                outInfo->runtime.current_runtime_sec = r.value(QStringLiteral("current_runtime")).toVariant().toLongLong();
             }
             if (r.contains(QStringLiteral("total_runtime_sec")) && !r.value(QStringLiteral("total_runtime_sec")).isNull()) {
                 outInfo->runtime.total_runtime_sec = r.value(QStringLiteral("total_runtime_sec")).toVariant().toLongLong();
+            } else if (r.contains(QStringLiteral("total_runtime")) && !r.value(QStringLiteral("total_runtime")).isNull()) {
+                outInfo->runtime.total_runtime_sec = r.value(QStringLiteral("total_runtime")).toVariant().toLongLong();
             }
         } else if (rv.isNull()) {
             outInfo->runtime.valid = false;
         }
+    } else if (d.contains(QStringLiteral("current_runtime_sec"))) {
+        outInfo->runtime.valid = true;
+        outInfo->runtime.current_runtime_sec = d.value(QStringLiteral("current_runtime_sec")).toVariant().toLongLong();
     }
 
     // 12. obstacle (对象可能为 null)

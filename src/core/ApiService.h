@@ -143,6 +143,44 @@ public:
     void removeTask(const QJsonObject &data, const Callback &cb);
     void commandTask(const QJsonObject &data, const Callback &cb);
 
+    // ========== 控制器接口 (端口 8061, 参考控制器APP规范) ==========
+    static constexpr int kControllerPort = 8061;
+
+    // 1. AGV 动作控制 (包括平动 action_type=6、转动 action_type=5、顶升 action_type=0/3 等)
+    void setActionControl(const QJsonObject &data, const Callback &cb);
+
+    // 平动便捷方法 (action_type: 6, vx, vy, distance)
+    void setLinearMotion(double vx, double vy, double distance, int actionId, const Callback &cb);
+
+    // 转动便捷方法 (action_type: 5, rotate_angle, rotate_speed)
+    void setRotateMotion(double rotateAngleRad, double rotateSpeed, int actionId, const Callback &cb);
+
+    // 顶升便捷方法 (action_type: 3, action: 1抬升/0下降, height)
+    void setJackControl(int action, double height, int actionId, const Callback &cb);
+
+    // 2. AGV 固定路径导航下发
+    void setRobotFixPath(const QJsonObject &data, const Callback &cb);
+    void setThirdFixPath(const QJsonObject &data, const Callback &cb);
+    // 控制器 8061 端口路径导航便捷方法 (对齐文档 Table 3 set_robot_fix_path 与 Table 4 set_third_fix_path)
+    void navigateToStation(const QString &targetStation, const QString &mapCode, double targetX, double targetY, double speed, int actionId, const Callback &cb);
+    void navigateToPose(double startX, double startY, double goalX, double goalY, double speed, int actionId, const Callback &cb);
+
+    // 3. 运行状态与动作状态查询
+    void getRobotRunStatus(const Callback &cb);
+    void queryActionIdStatus(int actionId, const Callback &cb);
+
+    // 4. 暂停、继续与取消任务 (端口 8061)
+    void suspendRobot(const Callback &cb);
+    void continueRobot(const Callback &cb);
+    void stopRobotTask(bool stopInPoint, const Callback &cb);
+
+    // 5. 重定位 (端口 8061)
+    void setInitPose8061(double x, double y, double angleRad, const Callback &cb);
+
+    // 6. 速度设置接口 (端口 8061)
+    void setRobotSpeed(double linearSpeed, double angularSpeed, const Callback &cb = nullptr);
+    void modifyPathSpeed(const QString &mapName, double pathSpeed, double speedProportion = 0.1, const Callback &cb = nullptr);
+
     // ========== 任务日志接口 ==========
     void listTasklog(const QJsonObject &query, const Callback &cb);
     void getTasklog(const QString &tasklogId, const Callback &cb);

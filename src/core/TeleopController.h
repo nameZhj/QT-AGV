@@ -41,11 +41,17 @@ public:
     double maxBoostMultiplier() const { return m_maxBoostMultiplier; }
     void setMaxBoostMultiplier(double mult);
 
+    // ── 虚拟按键接口 (供 UI 控制盘调用) ──
+    void setVirtualKey(int key, bool pressed);
+    bool isKeyPressed(int key) const;
+    void stopAllMotion();
+
 signals:
     void activeChanged(bool active);
     void motionChanged(double linear, double angular);
     void brakeChanged(bool brake);
     void hoistChanged(int direction);   // +1 升 / -1 降 / 0 停
+    void keyStateChanged(int key, bool pressed); ///< WASD/Space 状态变化 (用于 UI 联动)
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;

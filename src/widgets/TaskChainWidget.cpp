@@ -2,6 +2,7 @@
 #include "core/Toast.h"
 #include "core/AppConfig.h"
 #include "core/ApiService.h"
+#include "core/MqttService.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -46,6 +47,26 @@ static QPushButton *makeBtn(const QString &text) {
     auto *btn = new QPushButton(text);
     btn->setStyleSheet(S_BTN_STYLE);
     return btn;
+}
+
+static QString actionTypeFromName(const QString &name) {
+    if (name == "路径导航") return "0";
+    if (name == "平动") return "1";
+    if (name == "转动") return "2";
+    if (name == "播放音频") return "3";
+    if (name == "顶升") return "4";
+    if (name == "停止播放音频") return "5";
+    return "0";
+}
+
+static QString actionDescFromType(const QString &type) {
+    if (type == "0") return "路径导航";
+    if (type == "1") return "平动";
+    if (type == "2") return "转动";
+    if (type == "3") return "播放音频";
+    if (type == "4") return "顶升";
+    if (type == "5") return "停止播放音频";
+    return "路径导航";
 }
 
 // 可拖拽的列表项 — 支持拖出动作标签
@@ -183,6 +204,10 @@ void TaskChainWidget::setupUI()
     setupBottomBar(root);
 
     updateBottomBar();
+
+    if (m_chains.isEmpty()) {
+        onChainNew();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -359,11 +384,35 @@ void TaskChainWidget::setupPanel3Group(QVBoxLayout *layout)
             return;
         }
 
-        // 添加动作到组
+        // 添加动作到组 (初始化规范参数)
         QJsonArray actions = group.value("actions").toArray();
         QJsonObject action;
-        action["name"] = actionName;
-        action["params"] = QJsonObject();
+        action["name"]        = actionName;
+        action["action_desc"] = actionName;
+        action["action_type"] = actionTypeFromName(actionName);
+
+        QJsonObject params;
+        if (actionName == "路径导航") {
+            QString stName = !m_stations.isEmpty() ? m_stations[0].name : "LM3";
+            action["target_station"] = stName;
+            params["target_station"] = stName;
+            params["target"]         = stName;
+        } else if (actionName == "平动") {
+            action["direction"] = "前进";
+            action["distance"]  = 1.0;
+            action["speed"]     = 0.2;
+            params["direction"] = "前进";
+            params["distance"]  = 1.0;
+            params["speed"]     = 0.2;
+        } else if (actionName == "转动") {
+            action["direction"] = "顺时针(右转)";
+            action["angle"]     = 90.0;
+            action["speed"]     = 0.5;
+            params["direction"] = "顺时针(右转)";
+            params["angle"]     = 90.0;
+            params["speed"]     = 0.5;
+        }
+        action["params"] = params;
         actions.append(action);
         group["actions"] = actions;
         groups[groupIdx] = group;
@@ -496,9 +545,10 @@ void TaskChainWidget::createChainRowWidget(QListWidgetItem *item, int chainIndex
     hbox->addWidget(deleteBtn);
 
     // 信号
-    connect(exportBtn, &QToolButton::clicked, this, [this, chainIndex, name]() {
-        // 占位: 导出逻辑
-        updateStatus(QStringLiteral("导出任务链: %1 (占位)").arg(name));
+    connect(exportBtn, &QToolButton::clicked, this, [this, chainIndex]() {
+        if (chainIndex < 0 || chainIndex >= m_chains.size()) return;
+        selectChain(chainIndex);
+        onChainSave();
     });
 
     connect(renameBtn, &QToolButton::clicked, this, [this, chainIndex, nameLabel]() {
@@ -1087,9 +1137,14 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
             resultParams[param.key] = combo->currentText();
         } else if (param.type == "station_combo") {
             auto *combo = qobject_cast<QComboBox*>(w);
-            QString selectedId = combo->currentData().toString();
-            resultParams["target_station"] = selectedId;
-            resultParams["target"]         = selectedId;
+            QString stationName = combo->currentText();
+            if (stationName.isEmpty() || stationName == QStringLiteral("未知")) {
+                stationName = combo->currentData().toString();
+            }
+            if (stationName.isEmpty() || stationName == QStringLiteral("未知")) {
+                stationName = "LM3";
+            }
+            resultParams["target_station"] = stationName;
         }
     }
 
@@ -1164,10 +1219,64 @@ void TaskChainWidget::updateStatus(const QString &text)
 
 void TaskChainWidget::onChainNew()
 {
-    // 自动生成 task_时间戳 命名
-    QString name = "task_" + QDateTime::currentDateTime().toString("yyyyMMddHHmmss");
-    addChainItem(name);
-    updateStatus(QStringLiteral("已新建任务链: %1").arg(name));
+    // 基于规范格式自动生成: task_yyyyMMdd00001 (如 task_2026080400001)
+    QString dateStr = QDateTime::currentDateTime().toString("yyyyMMdd");
+    int seq = 1;
+    for (const auto &c : m_chains) {
+        if (c.name.startsWith("task_" + dateStr)) {
+            QString numPart = c.name.mid(5 + dateStr.length());
+            bool ok = false;
+            int n = numPart.toInt(&ok);
+            if (ok && n >= seq) seq = n + 1;
+        }
+    }
+    QString name = QString("task_%1%2").arg(dateStr).arg(seq, 5, 10, QChar('0'));
+
+    ChainData data;
+    data.name = name;
+
+    // 创建默认的标准子任务与组结构
+    QJsonObject defaultTask;
+    defaultTask["sub_task_name"] = "sub_task_1";
+    defaultTask["name"]          = "sub_task_1";
+    defaultTask["enable"]        = true;
+    defaultTask["checked"]       = true;
+    defaultTask["note"]          = "";
+
+    QJsonObject defaultGroup;
+    defaultGroup["group_name"] = "group_1";
+    defaultGroup["name"]       = "group_1";
+    defaultGroup["enable"]     = true;
+    defaultGroup["checked"]    = true;
+    defaultGroup["actionType"] = "路径导航";
+
+    QJsonObject defaultAction;
+    defaultAction["name"]           = "路径导航";
+    defaultAction["action_desc"]    = "路径导航";
+    defaultAction["action_type"]    = "0";
+    QString stName = !m_stations.isEmpty() ? m_stations[0].name : "LM3";
+    defaultAction["target_station"] = stName;
+
+    QJsonObject params;
+    params["target_station"] = stName;
+    params["target"]         = stName;
+    defaultAction["params"]  = params;
+
+    QJsonArray actions;
+    actions.append(defaultAction);
+    defaultGroup["actions"] = actions;
+
+    QJsonArray groups;
+    groups.append(defaultGroup);
+    defaultTask["group_info"] = groups;
+    defaultTask["groups"]     = groups;
+
+    data.tasks.append(defaultTask);
+
+    m_chains.append(data);
+    refreshChainList();
+    selectChain(m_chains.size() - 1);
+    updateStatus(QStringLiteral("已新建标准任务链: %1").arg(name));
 }
 
 void TaskChainWidget::onChainLoad()
@@ -1447,39 +1556,164 @@ void TaskChainWidget::onGroupLoopToggled(bool checked)
 
 void TaskChainWidget::onGroupSendSelected()
 {
-    int checked = 0;
-    for (int i = 0; i < m_taskList->count(); ++i)
-        if (m_taskList->item(i)->checkState() == Qt::Checked) ++checked;
-    if (checked == 0) {
-        QMessageBox::warning(this, QStringLiteral("提示"),
-            QStringLiteral("未勾选任务, 无法执行任务链"));
+    int idx = currentChainIndex();
+    if (idx < 0) {
+        QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("请先选择任务链"));
         return;
     }
-    updateStatus(QStringLiteral("已发送 %1 个勾选任务").arg(checked));
+
+    QJsonObject chainJson = exportChainToJson(m_chains[idx], true);
+    QJsonArray subTasks = chainJson.value("sub_task_info").toArray();
+    if (subTasks.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("提示"),
+            QStringLiteral("未勾选有效任务或任务链数据为空"));
+        return;
+    }
+
+    QString carId = AppConfig::instance().currentDevice().carId;
+    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+    if (carId.isEmpty()) carId = "1";
+
+    QByteArray payload = QJsonDocument(chainJson).toJson(QJsonDocument::Compact);
+
+    // 1. MQTT 发布至小车任务链主题
+    MqttService::instance().publish(QString("/rob/%1/task_chain").arg(carId), payload);
+    MqttService::instance().publish(QString("/rob/%1/task").arg(carId), payload);
+
+    // 2. HTTP 接口同步下发任务
+    ApiService::instance().loadTask(chainJson, [this](int, const QJsonObject &) {});
+
+    // 3. 同时触发首个动作向 8061 控制器执行
+    for (const auto &subVal : subTasks) {
+        QJsonObject subObj = subVal.toObject();
+        QJsonArray groups = subObj.value("group_info").toArray();
+        for (const auto &gVal : groups) {
+            QJsonObject gObj = gVal.toObject();
+            QJsonArray acts = gObj.value("actions").toArray();
+            if (!acts.isEmpty()) {
+                executeSingleAction(acts[0].toObject());
+                break;
+            }
+        }
+        break;
+    }
+
+    m_execStatus = Running;
+    updateBottomBar();
+    updateStatus(QStringLiteral("已按规范下发任务链数据并联动控制器: %1 (包含 %2 个子任务)").arg(m_chains[idx].name).arg(subTasks.size()));
+    Toast::success(this, QStringLiteral("任务链数据已成功下发至设备"));
 }
 
 void TaskChainWidget::onGroupSendAll()
 {
-    if (m_taskList->count() == 0) {
+    int idx = currentChainIndex();
+    if (idx < 0) {
+        QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("请先选择任务链"));
+        return;
+    }
+
+    QJsonObject chainJson = exportChainToJson(m_chains[idx], false);
+    QJsonArray subTasks = chainJson.value("sub_task_info").toArray();
+    if (subTasks.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("提示"),
             QStringLiteral("任务链数据为空"));
         return;
     }
-    updateStatus(QStringLiteral("已发送全部 %1 个任务").arg(m_taskList->count()));
+
+    QString carId = AppConfig::instance().currentDevice().carId;
+    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+    if (carId.isEmpty()) carId = "1";
+
+    QByteArray payload = QJsonDocument(chainJson).toJson(QJsonDocument::Compact);
+
+    // 1. MQTT 发布至小车任务链主题
+    MqttService::instance().publish(QString("/rob/%1/task_chain").arg(carId), payload);
+    MqttService::instance().publish(QString("/rob/%1/task").arg(carId), payload);
+
+    // 2. HTTP 接口同步下发任务
+    ApiService::instance().loadTask(chainJson, [this](int, const QJsonObject &) {});
+
+    // 3. 同时触发首个动作向 8061 控制器执行
+    for (const auto &subVal : subTasks) {
+        QJsonObject subObj = subVal.toObject();
+        QJsonArray groups = subObj.value("group_info").toArray();
+        for (const auto &gVal : groups) {
+            QJsonObject gObj = gVal.toObject();
+            QJsonArray acts = gObj.value("actions").toArray();
+            if (!acts.isEmpty()) {
+                executeSingleAction(acts[0].toObject());
+                break;
+            }
+        }
+        break;
+    }
+
+    m_execStatus = Running;
+    updateBottomBar();
+    updateStatus(QStringLiteral("已按规范下发全部任务链数据并联动控制器: %1 (包含 %2 个子任务)").arg(m_chains[idx].name).arg(subTasks.size()));
+    Toast::success(this, QStringLiteral("全部任务链数据已成功下发至设备"));
 }
 
 // ── 面板4: 可拖拽标签 ──
 
 void TaskChainWidget::onActionTriggered(const QString &actionName)
 {
-    // 双击也可添加到组列表
-    int row = m_groupList->currentRow();
-    auto *item = new QListWidgetItem(actionName);
-    item->setFlags(item->flags() | Qt::ItemIsEditable);
-    if (row >= 0)
-        m_groupList->insertItem(row + 1, item);
-    else
-        m_groupList->addItem(item);
+    if (m_currentTaskIndex < 0) {
+        QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("请先选择一个任务"));
+        return;
+    }
+
+    QJsonArray groups = currentTaskGroups();
+    if (groups.isEmpty()) {
+        QJsonObject newGroup;
+        newGroup["group_name"] = "group_1";
+        newGroup["name"]       = "group_1";
+        newGroup["enable"]     = true;
+        newGroup["checked"]    = true;
+        groups.append(newGroup);
+    }
+
+    int groupIdx = m_groupList->currentRow();
+    if (groupIdx < 0 || groupIdx >= groups.size()) groupIdx = groups.size() - 1;
+
+    QJsonObject group = groups[groupIdx].toObject();
+    group["actionType"] = actionName;
+
+    QJsonArray actions = group.value("actions").toArray();
+    QJsonObject action;
+    action["name"]        = actionName;
+    action["action_desc"] = actionName;
+    action["action_type"] = actionTypeFromName(actionName);
+
+    QJsonObject params;
+    if (actionName == "路径导航") {
+        QString stName = !m_stations.isEmpty() ? m_stations[0].name : "LM3";
+        action["target_station"] = stName;
+        params["target_station"] = stName;
+        params["target"]         = stName;
+    } else if (actionName == "平动") {
+        action["direction"] = "前进";
+        action["distance"]  = 1.0;
+        action["speed"]     = 0.2;
+        params["direction"] = "前进";
+        params["distance"]  = 1.0;
+        params["speed"]     = 0.2;
+    } else if (actionName == "转动") {
+        action["direction"] = "顺时针(右转)";
+        action["angle"]     = 90.0;
+        action["speed"]     = 0.5;
+        params["direction"] = "顺时针(右转)";
+        params["angle"]     = 90.0;
+        params["speed"]     = 0.5;
+    }
+    action["params"] = params;
+    actions.append(action);
+    group["actions"] = actions;
+    groups[groupIdx] = group;
+    setCurrentTaskGroups(groups);
+
+    refreshGroupList();
+    updateStatus(QStringLiteral("已添加动作: %1").arg(actionName));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1649,26 +1883,6 @@ void TaskChainWidget::updateGroupSelectBtn()
     }
 }
 
-static QString actionTypeFromName(const QString &name) {
-    if (name == "路径导航") return "0";
-    if (name == "平动") return "1";
-    if (name == "转动") return "2";
-    if (name == "播放音频") return "3";
-    if (name == "顶升") return "4";
-    if (name == "停止播放音频") return "5";
-    return "0";
-}
-
-static QString actionDescFromType(const QString &type) {
-    if (type == "0") return "路径导航";
-    if (type == "1") return "平动";
-    if (type == "2") return "转动";
-    if (type == "3") return "播放音频";
-    if (type == "4") return "顶升";
-    if (type == "5") return "停止播放音频";
-    return "路径导航";
-}
-
 QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool onlyChecked) const
 {
     QJsonObject root;
@@ -1726,15 +1940,46 @@ QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool only
                 action["action_desc"] = name.isEmpty() ? actionDescFromType(actionType) : name;
 
                 QJsonObject params = rawAction.value("params").toObject();
-                for (auto it = params.begin(); it != params.end(); ++it) {
-                    QString key = it.key();
-                    if (key == "target") key = "target_station";
-                    else if (key == "audioName") key = "audio_name";
-                    action[key] = it.value();
-                }
-                for (auto it = rawAction.begin(); it != rawAction.end(); ++it) {
-                    if (it.key() != "name" && it.key() != "params" && it.key() != "action_type" && it.key() != "action_desc") {
-                        action[it.key()] = it.value();
+
+                if (actionType == "0") {
+                    // 路径导航: 纯净字段 target_station (如 "LM3")
+                    QString station = params.value("target_station").toString();
+                    if (station.isEmpty()) station = rawAction.value("target_station").toString();
+                    if (station.isEmpty()) station = params.value("target").toString();
+                    if (station.isEmpty()) station = rawAction.value("target").toString();
+                    if (station.isEmpty() || station == QStringLiteral("未知")) {
+                        station = !m_stations.isEmpty() ? m_stations[0].name : "LM3";
+                    }
+                    action["target_station"] = station;
+                } else if (actionType == "1") {
+                    // 平动
+                    action["direction"] = params.contains("direction") ? params.value("direction").toString() : rawAction.value("direction").toString("前进");
+                    action["distance"]  = params.contains("distance") ? params.value("distance").toDouble() : rawAction.value("distance").toDouble(1.0);
+                    action["speed"]     = params.contains("speed") ? params.value("speed").toDouble() : rawAction.value("speed").toDouble(0.2);
+                } else if (actionType == "2") {
+                    // 转动
+                    action["direction"] = params.contains("direction") ? params.value("direction").toString() : rawAction.value("direction").toString("顺时针(右转)");
+                    action["angle"]     = params.contains("angle") ? params.value("angle").toDouble() : rawAction.value("angle").toDouble(90.0);
+                    action["speed"]     = params.contains("speed") ? params.value("speed").toDouble() : rawAction.value("speed").toDouble(0.5);
+                } else if (actionType == "3") {
+                    // 播放音频
+                    QString audioName = params.value("audio_name").toString();
+                    if (audioName.isEmpty()) audioName = params.value("audioName").toString();
+                    if (audioName.isEmpty()) audioName = rawAction.value("audio_name").toString();
+                    if (audioName.isEmpty()) audioName = rawAction.value("audioName").toString();
+                    action["audio_name"] = audioName;
+                    action["loop"] = params.contains("loop") ? params.value("loop").toString() : rawAction.value("loop").toString("否");
+                } else if (actionType == "4") {
+                    // 顶升
+                    action["operation"] = params.contains("operation") ? params.value("operation").toString() : rawAction.value("operation").toString("顶起");
+                    action["height"]    = params.contains("height") ? params.value("height").toDouble() : rawAction.value("height").toDouble(0.05);
+                } else if (actionType == "5") {
+                    // 停止播放音频
+                } else {
+                    for (auto it = params.begin(); it != params.end(); ++it) {
+                        if (it.key() != "checked" && it.key() != "target" && it.key() != "id") {
+                            action[it.key()] = it.value();
+                        }
                     }
                 }
 
@@ -1842,30 +2087,154 @@ TaskChainWidget::ChainData TaskChainWidget::importChainFromJson(const QJsonObjec
     return chain;
 }
 
+void TaskChainWidget::executeSingleAction(const QJsonObject &action)
+{
+    QString type = action.value("action_type").toString();
+    int actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
+
+    if (type == "0") {
+        // 路径导航: set_robot_fix_path / set_third_fix_path
+        QString targetStation = action.value("target_station").toString();
+        if (targetStation.isEmpty()) targetStation = "LM3";
+
+        QJsonObject fixPath;
+        QJsonObject d;
+        d["action_id"] = actionId;
+        d["mapcode"]   = AppConfig::instance().currentDevice().mapName;
+
+        QJsonArray paths;
+        QJsonObject p;
+        p["start_node"] = 1;
+        bool ok = false;
+        int goalNodeInt = targetStation.toInt(&ok);
+        if (ok) {
+            p["goal_node"] = goalNodeInt;
+        } else {
+            p["goal_node"] = targetStation;
+        }
+        p["index"]      = 1;
+        p["path_speed"] = 0.5;
+        paths.append(p);
+        d["robot_paths"] = paths;
+        fixPath["data"] = d;
+
+        ApiService::instance().setRobotFixPath(fixPath, [this, targetStation](int code, const QJsonObject &resp) {
+            qDebug() << "[TaskChain] setRobotFixPath to" << targetStation << "code:" << code << resp;
+        });
+        updateStatus(QStringLiteral("正在向控制器下发路径导航: 目标站点 %1").arg(targetStation));
+    } else if (type == "1" || type == "6") {
+        // 平动: 按照文档规范调用控制器 set_action_control (action_type: 6)
+        QString dir = action.value("direction").toString("前进");
+        double dist = action.value("distance").toDouble(1.0);
+        double spd  = action.value("speed").toDouble(0.2);
+
+        double vx = 0.0, vy = 0.0, sendDist = dist;
+        if (dir == "前进") {
+            vx = spd; vy = 0.0; sendDist = std::abs(dist);
+        } else if (dir == "后退") {
+            vx = spd; vy = 0.0; sendDist = -std::abs(dist);
+        } else if (dir == "左移") {
+            vx = 0.0; vy = spd; sendDist = std::abs(dist);
+        } else if (dir == "右移") {
+            vx = 0.0; vy = spd; sendDist = -std::abs(dist);
+        }
+
+        ApiService::instance().setLinearMotion(vx, vy, sendDist, actionId, [this, dir, dist](int code, const QJsonObject &resp) {
+            qDebug() << "[TaskChain] setLinearMotion (" << dir << dist << "m) code:" << code << resp;
+        });
+        updateStatus(QStringLiteral("正在向控制器下发平动动作: %1 %2m (速度 %3m/s)").arg(dir).arg(dist).arg(spd));
+    } else if (type == "2" || type == "5") {
+        // 转动: 按照文档规范调用控制器 set_action_control (action_type: 5)
+        QString dir = action.value("direction").toString("顺时针(右转)");
+        double deg  = action.value("angle").toDouble(90.0);
+        double spd  = action.value("speed").toDouble(0.5);
+
+        double angleRad = deg * M_PI / 180.0;
+        if (dir.contains("顺时针") || dir.contains("右转")) {
+            angleRad = -std::abs(angleRad);
+        } else {
+            angleRad = std::abs(angleRad);
+        }
+
+        ApiService::instance().setRotateMotion(angleRad, spd, actionId, [this, dir, deg](int code, const QJsonObject &resp) {
+            qDebug() << "[TaskChain] setRotateMotion (" << dir << deg << "°) code:" << code << resp;
+        });
+        updateStatus(QStringLiteral("正在向控制器下发转动动作: %1 %2° (角速度 %3rad/s)").arg(dir).arg(deg).arg(spd));
+    } else if (type == "4") {
+        // 顶升: 按照文档规范调用控制器 set_action_control (action_type: 3)
+        QString op = action.value("operation").toString("顶起");
+        double h   = action.value("height").toDouble(0.05);
+        int actVal = (op == "顶起") ? 1 : 0;
+
+        ApiService::instance().setJackControl(actVal, h, actionId, [this, op](int code, const QJsonObject &resp) {
+            qDebug() << "[TaskChain] setJackControl (" << op << ") code:" << code << resp;
+        });
+        updateStatus(QStringLiteral("正在向控制器下发顶升动作: %1 (高度 %2m)").arg(op).arg(h));
+    }
+}
+
 void TaskChainWidget::onSuspendResume()
 {
+    QString carId = AppConfig::instance().currentDevice().carId;
+    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+    if (carId.isEmpty()) carId = "1";
+
     if (m_execStatus == Running) {
         m_execStatus = Suspended;
-        updateStatus(QStringLiteral("任务链已暂停"));
+        ApiService::instance().suspendRobot([](int, const QJsonObject &) {});
+        MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
+        updateStatus(QStringLiteral("任务链已向控制器发送暂停指令"));
+        Toast::info(this, QStringLiteral("任务链已暂停"));
     } else if (m_execStatus == Suspended) {
         m_execStatus = Running;
-        updateStatus(QStringLiteral("任务链已继续"));
+        ApiService::instance().continueRobot([](int, const QJsonObject &) {});
+        MqttService::instance().publish(QString("/rob/%1/navigationContinue").arg(carId), "1");
+        updateStatus(QStringLiteral("任务链已向控制器发送继续指令"));
+        Toast::success(this, QStringLiteral("任务链已继续"));
     }
     updateBottomBar();
 }
 
 void TaskChainWidget::onCancelChain()
 {
+    QString carId = AppConfig::instance().currentDevice().carId;
+    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
+    if (carId.isEmpty()) carId = "1";
+
     m_execStatus = NotStarted;
-    updateStatus(QStringLiteral("任务链已取消"));
+    ApiService::instance().stopRobotTask(false, [](int, const QJsonObject &) {});
+    MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
+    updateStatus(QStringLiteral("任务链已向控制器发送取消任务指令"));
+    Toast::info(this, QStringLiteral("任务链已取消"));
     updateBottomBar();
 }
 
 void TaskChainWidget::onExecuteNext()
 {
-    if (m_execStatus == NotStarted || m_execStatus == Completed) {
-        m_execStatus = Running;
-        updateStatus(QStringLiteral("开始执行 Next 任务"));
+    int idx = currentChainIndex();
+    if (idx < 0) return;
+
+    QJsonObject chainJson = exportChainToJson(m_chains[idx], false);
+    QJsonArray subTasks = chainJson.value("sub_task_info").toArray();
+
+    // 寻找可执行动作并调用控制器接口下发
+    bool executed = false;
+    for (const auto &subVal : subTasks) {
+        QJsonObject subObj = subVal.toObject();
+        QJsonArray groups = subObj.value("group_info").toArray();
+        for (const auto &gVal : groups) {
+            QJsonObject gObj = gVal.toObject();
+            QJsonArray acts = gObj.value("actions").toArray();
+            if (!acts.isEmpty()) {
+                executeSingleAction(acts[0].toObject());
+                executed = true;
+                break;
+            }
+        }
+        if (executed) break;
     }
+
+    m_execStatus = Running;
+    updateStatus(QStringLiteral("已向控制器触发 Next 任务动作"));
     updateBottomBar();
 }

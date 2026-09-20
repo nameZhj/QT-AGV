@@ -717,3 +717,238 @@ void ApiService::startTask(const QString &taskId, const Callback &cb)
 {
     startTask(QJsonObject{{"taskId", taskId}}, cb);
 }
+
+// ========== 控制器接口 (端口 8061, 参考控制器APP规范) ==========
+
+void ApiService::setActionControl(const QJsonObject &data, const Callback &cb)
+{
+    QJsonObject root;
+    if (data.contains("data")) {
+        root = data;
+    } else {
+        root["data"] = data;
+    }
+    post("/rbrainrobot/set_action_control", root, cb, kControllerPort, false);
+}
+
+void ApiService::setLinearMotion(double vx, double vy, double distance, int actionId, const Callback &cb)
+{
+    if (actionId <= 0) {
+        actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
+    }
+    QJsonObject actionObj;
+    actionObj["action_id"]   = actionId;
+    actionObj["action_type"] = 6;
+    actionObj["vx"]          = vx;
+    actionObj["vy"]          = vy;
+    actionObj["distance"]    = distance;
+    setActionControl(actionObj, cb);
+}
+
+void ApiService::setRotateMotion(double rotateAngleRad, double rotateSpeed, int actionId, const Callback &cb)
+{
+    if (actionId <= 0) {
+        actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
+    }
+    QJsonObject actionObj;
+    actionObj["action_id"]    = actionId;
+    actionObj["action_type"]  = 5;
+    actionObj["rotate_angle"] = rotateAngleRad;
+    actionObj["rotate_speed"] = rotateSpeed;
+    setActionControl(actionObj, cb);
+}
+
+void ApiService::setJackControl(int action, double height, int actionId, const Callback &cb)
+{
+    if (actionId <= 0) {
+        actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
+    }
+    QJsonObject actionObj;
+    actionObj["action_id"]     = actionId;
+    actionObj["action_type"]   = 3; // 3: 顶升车上升或下降
+    actionObj["action"]        = action;
+    actionObj["action_height"] = height;
+    setActionControl(actionObj, cb);
+}
+
+void ApiService::setRobotFixPath(const QJsonObject &data, const Callback &cb)
+{
+    QJsonObject root;
+    if (data.contains("data")) {
+        root = data;
+    } else {
+        root["data"] = data;
+    }
+    post("/rbrainrobot/set_robot_fix_path", root, cb, kControllerPort, false);
+}
+
+void ApiService::setThirdFixPath(const QJsonObject &data, const Callback &cb)
+{
+    QJsonObject root;
+    if (data.contains("data")) {
+        root = data;
+    } else {
+        root["data"] = data;
+    }
+    post("/rbrainrobot/set_third_fix_path", root, cb, kControllerPort, false);
+}
+
+void ApiService::navigateToStation(const QString &targetStation, const QString &mapCode, double targetX, double targetY, double speed, int actionId, const Callback &cb)
+{
+    if (actionId <= 0) {
+        actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
+    }
+    if (speed <= 0.0) {
+        speed = 0.5;
+    }
+
+    QJsonObject root;
+    QJsonObject d;
+    d["action_id"] = actionId;
+    QString actualMapCode = mapCode.trimmed().isEmpty() ? AppConfig::instance().currentDevice().mapName : mapCode.trimmed();
+    if (actualMapCode.isEmpty()) actualMapCode = "test_map";
+    d["mapcode"] = actualMapCode;
+
+    QJsonArray paths;
+    QJsonObject pathObj;
+
+    bool ok = false;
+    int goalNodeInt = targetStation.toInt(&ok);
+    if (ok) {
+        pathObj["start_node"] = 1;
+        pathObj["goal_node"]  = goalNodeInt;
+    } else {
+        pathObj["start_node"] = "start";
+        pathObj["goal_node"]  = targetStation;
+    }
+    pathObj["index"]            = 1;
+    pathObj["robot_first_path"] = true;
+    pathObj["path_speed"]       = speed;
+    pathObj["reverse"]          = false;
+    paths.append(pathObj);
+
+    d["robot_paths"] = paths;
+    root["data"] = d;
+
+    // 向控制器 8061 端口下发固定路径导航 (Table 3)
+    post("/rbrainrobot/set_robot_fix_path", root, cb, kControllerPort, false);
+}
+
+void ApiService::navigateToPose(double startX, double startY, double goalX, double goalY, double speed, int actionId, const Callback &cb)
+{
+    if (actionId <= 0) {
+        actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
+    }
+    if (speed <= 0.0) {
+        speed = 0.5;
+    }
+
+    QJsonObject root;
+    QJsonObject d;
+    d["action_id"] = actionId;
+
+    QJsonArray paths;
+    QJsonObject pathObj;
+    pathObj["start_node"] = "start";
+    pathObj["goal_node"]  = "goal";
+
+    QJsonObject startPose;
+    startPose["x"] = startX;
+    startPose["y"] = startY;
+    pathObj["start_pose"] = startPose;
+
+    QJsonObject goalPose;
+    goalPose["x"] = goalX;
+    goalPose["y"] = goalY;
+    pathObj["goal_pose"] = goalPose;
+
+    pathObj["index"]            = 1;
+    pathObj["robot_first_path"] = true;
+    pathObj["path_speed"]       = speed;
+    pathObj["reverse"]          = false;
+    paths.append(pathObj);
+
+    d["robot_paths"] = paths;
+    root["data"] = d;
+
+    // 向控制器 8061 端口下发三方固定路径点导航 (Table 4)
+    post("/rbrainrobot/set_third_fix_path", root, cb, kControllerPort, false);
+}
+
+void ApiService::getRobotRunStatus(const Callback &cb)
+{
+    get("/rbrainrobot/get_robot_run_status", cb, kControllerPort, false);
+}
+
+void ApiService::queryActionIdStatus(int actionId, const Callback &cb)
+{
+    QJsonObject root;
+    QJsonObject d;
+    d["action_id"] = actionId;
+    root["data"] = d;
+    post("/rbrainrobot/query_action_id_status", root, cb, kControllerPort, false);
+}
+
+void ApiService::suspendRobot(const Callback &cb)
+{
+    post("/rbrainrobot/suspend", QJsonObject{}, cb, kControllerPort, false);
+}
+
+void ApiService::continueRobot(const Callback &cb)
+{
+    post("/rbrainrobot/continue", QJsonObject{}, cb, kControllerPort, false);
+}
+
+void ApiService::stopRobotTask(bool stopInPoint, const Callback &cb)
+{
+    QString ip = AppConfig::instance().currentDevice().ip;
+    if (ip.isEmpty()) ip = AppConfig::instance().serverIp();
+    QJsonObject root;
+    QJsonObject d;
+    d["robot_ip"]      = ip;
+    d["robot_port"]    = kControllerPort;
+    d["cancle"]        = true;
+    d["stop_in_point"] = stopInPoint;
+    root["data"] = d;
+    post("/rbrainrobot/stop_task", root, cb, kControllerPort, false);
+}
+
+void ApiService::setInitPose8061(double x, double y, double angleRad, const Callback &cb)
+{
+    QJsonObject root;
+    QJsonObject d;
+    d["x"]     = x;
+    d["y"]     = y;
+    d["angle"] = angleRad;
+    root["data"] = d;
+    post("/rbrainrobot/set_init_pose", root, cb, kControllerPort, false);
+}
+
+void ApiService::setRobotSpeed(double linearSpeed, double angularSpeed, const Callback &cb)
+{
+    QJsonObject root;
+    QJsonObject d;
+    d["linear_speed"]      = linearSpeed;
+    d["angular_speed"]     = angularSpeed;
+    d["max_linear_speed"]  = linearSpeed;
+    d["max_angular_speed"] = angularSpeed;
+    root["data"] = d;
+    post("/rbrainrobot/set_speed", root, cb, kControllerPort, false);
+}
+
+void ApiService::modifyPathSpeed(const QString &mapName, double pathSpeed, double speedProportion, const Callback &cb)
+{
+    QJsonObject root;
+    QJsonObject d;
+    d["map_name"]         = mapName;
+    d["speed_proportion"] = speedProportion;
+    
+    QJsonObject pathItem;
+    pathItem["path_speed"] = pathSpeed;
+    QJsonArray pathArr;
+    pathArr.append(pathItem);
+    d["path_info"] = pathArr;
+    
+    root["data"] = d;
+    post("/rbrainrobot/modify_path_property", root, cb, kControllerPort, false);
+}
