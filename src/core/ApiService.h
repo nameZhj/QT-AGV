@@ -49,6 +49,7 @@ public:
     // ========== 通用基础请求 ==========
     void get(const QString &url, const Callback &cb, int port = 8048, bool withToken = true);
     void post(const QString &url, const QJsonObject &data, const Callback &cb, int port = 8048, bool withToken = true);
+    void postArray(const QString &url, const QJsonArray &data, const Callback &cb, int port = 8048, bool withToken = true);
     void put(const QString &url, const QJsonObject &data, const Callback &cb, int port = 8048, bool withToken = true);
     void del(const QString &url, const Callback &cb, int port = 8048, bool withToken = true);
 
@@ -142,6 +143,20 @@ public:
     void startTask(const QString &taskId, const Callback &cb);
     void removeTask(const QJsonObject &data, const Callback &cb);
     void commandTask(const QJsonObject &data, const Callback &cb);
+
+    // ========== 任务链接口 (端口 8048) ==========
+    void saveTaskChain(const QString &filePath, const Callback &cb);              ///< POST /task/chain/save (multipart, 字段 taskFile)
+    void batchSaveTaskChain(const QJsonArray &chains, const Callback &cb);        ///< POST /task/chain/batchSave (JSON 数组: [{fileName, fileContent}])
+    void deleteTaskChain(const QString &fileName, const Callback &cb);            ///< DELETE /task/chain/{fileName}
+    void listTaskChain(const Callback &cb);                                       ///< GET /task/chain/list
+    void sendTaskChain(const QString &taskChainString, bool enabled, const Callback &cb); ///< POST /task/chain/sendTask
+    void controlTaskChain(const QString &command, const Callback &cb);            ///< PUT /task/chain/control?command=...
+
+    // ========== 音频接口 (端口 8048) ==========
+    void listAudio(const Callback &cb);                                    ///< GET  /robot/audio/list
+    void uploadAudio(const QString &filePath, const Callback &cb);         ///< POST /robot/audio/upload (multipart, 字段 file)
+    void downloadAudio(const QString &fileName, const FileCallback &cb);   ///< GET  /robot/audio/download/{name}
+    void deleteAudio(const QString &fileName, const Callback &cb);         ///< DELETE /robot/audio/{name}
 
     // ========== 控制器接口 (端口 8061, 参考控制器APP规范) ==========
     static constexpr int kControllerPort = 8061;

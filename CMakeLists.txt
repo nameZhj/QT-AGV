@@ -14,6 +14,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Widgets
     Network
     Mqtt
+    Multimedia
     Svg
 )
 
@@ -49,6 +50,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Widgets
     Qt6::Network
     Qt6::Mqtt
+    Qt6::Multimedia
     Qt6::Svg
 )
 

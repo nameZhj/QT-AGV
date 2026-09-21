@@ -1,5 +1,6 @@
 #include "ApiService.h"
 #include "AppConfig.h"
+#include "MotionConfigManager.h"
 
 #include <QJsonDocument>
 #include <QNetworkReply>
@@ -107,7 +108,7 @@ void ApiService::handleReply(QNetworkReply *reply, const Callback &cb)
         }
 
         const QByteArray data = reply->readAll();
-        qDebug().noquote() << QStringLiteral("[HTTP IN] %1 -> %2").arg(urlStr, QString::fromUtf8(data).left(500));
+        qDebug().noquote() << QStringLiteral("[HTTP RESP] %1 <- %2").arg(urlStr, QString::fromUtf8(data).left(500));
 
         QJsonParseError err;
         const QJsonDocument doc = QJsonDocument::fromJson(data, &err);
@@ -139,7 +140,7 @@ void ApiService::handleRawReply(QNetworkReply *reply, const RawCallback &cb)
         }
 
         const QByteArray data = reply->readAll();
-        qDebug().noquote() << QStringLiteral("[HTTP RAW IN] %1 -> (bytes: %2)").arg(urlStr).arg(data.size());
+        qDebug().noquote() << QStringLiteral("[HTTP RAW RESP] %1 <- (bytes: %2)").arg(urlStr).arg(data.size());
         cb(200, data);
     });
 }
@@ -161,7 +162,7 @@ void ApiService::handleFileReply(QNetworkReply *reply, const FileCallback &cb)
         }
 
         const QByteArray data = reply->readAll();
-        qDebug().noquote() << QStringLiteral("[HTTP FILE IN] %1 -> (size: %2 bytes)").arg(urlStr).arg(data.size());
+        qDebug().noquote() << QStringLiteral("[HTTP FILE RESP] %1 <- (size: %2 bytes)").arg(urlStr).arg(data.size());
         cb(true, data);
     });
 }
@@ -175,7 +176,7 @@ void ApiService::get(const QString &url, const Callback &cb, int port, bool with
     finalUrl += (finalUrl.contains('?') ? '&' : '?') + timestampParam;
 
     const QString requestUrl = buildUrl(finalUrl, port);
-    qDebug().noquote() << QStringLiteral("[HTTP GET] %1").arg(requestUrl);
+    qDebug().noquote() << QStringLiteral("[HTTP SEND] GET %1").arg(requestUrl);
 
     const QNetworkRequest req = buildRequest(requestUrl, withToken, kDefaultTimeoutMs);
     QNetworkReply *reply = m_manager->get(req);
@@ -186,7 +187,18 @@ void ApiService::post(const QString &url, const QJsonObject &data, const Callbac
 {
     const QString requestUrl = buildUrl(url, port);
     const QByteArray body = QJsonDocument(data).toJson(QJsonDocument::Compact);
-    qDebug().noquote() << QStringLiteral("[HTTP POST] %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
+    qDebug().noquote() << QStringLiteral("[HTTP SEND] POST %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
+
+    const QNetworkRequest req = buildRequest(requestUrl, withToken, kDefaultTimeoutMs);
+    QNetworkReply *reply = m_manager->post(req, body);
+    handleReply(reply, cb);
+}
+
+void ApiService::postArray(const QString &url, const QJsonArray &data, const Callback &cb, int port, bool withToken)
+{
+    const QString requestUrl = buildUrl(url, port);
+    const QByteArray body = QJsonDocument(data).toJson(QJsonDocument::Compact);
+    qDebug().noquote() << QStringLiteral("[HTTP SEND] POST %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
 
     const QNetworkRequest req = buildRequest(requestUrl, withToken, kDefaultTimeoutMs);
     QNetworkReply *reply = m_manager->post(req, body);
@@ -197,7 +209,7 @@ void ApiService::put(const QString &url, const QJsonObject &data, const Callback
 {
     const QString requestUrl = buildUrl(url, port);
     const QByteArray body = QJsonDocument(data).toJson(QJsonDocument::Compact);
-    qDebug().noquote() << QStringLiteral("[HTTP PUT] %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
+    qDebug().noquote() << QStringLiteral("[HTTP SEND] PUT %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
 
     const QNetworkRequest req = buildRequest(requestUrl, withToken, kDefaultTimeoutMs);
     QNetworkReply *reply = m_manager->put(req, body);
@@ -207,7 +219,7 @@ void ApiService::put(const QString &url, const QJsonObject &data, const Callback
 void ApiService::del(const QString &url, const Callback &cb, int port, bool withToken)
 {
     const QString requestUrl = buildUrl(url, port);
-    qDebug().noquote() << QStringLiteral("[HTTP DELETE] %1").arg(requestUrl);
+    qDebug().noquote() << QStringLiteral("[HTTP SEND] DELETE %1").arg(requestUrl);
 
     const QNetworkRequest req = buildRequest(requestUrl, withToken, kDefaultTimeoutMs);
     QNetworkReply *reply = m_manager->deleteResource(req);
@@ -671,6 +683,63 @@ void ApiService::commandTask(const QJsonObject &data, const Callback &cb)
     post("/robot/navigation/command", data, cb);
 }
 
+// ========== 任务链接口 (端口 8048) ==========
+
+void ApiService::saveTaskChain(const QString &filePath, const Callback &cb)
+{
+    uploadFile("/task/chain/save", filePath, "taskFile", cb);
+}
+
+void ApiService::batchSaveTaskChain(const QJsonArray &chains, const Callback &cb)
+{
+    postArray("/task/chain/batchSave", chains, cb);
+}
+
+void ApiService::deleteTaskChain(const QString &fileName, const Callback &cb)
+{
+    del("/task/chain/" + fileName, cb);
+}
+
+void ApiService::listTaskChain(const Callback &cb)
+{
+    get("/task/chain/list", cb);
+}
+
+void ApiService::sendTaskChain(const QString &taskChainString, bool enabled, const Callback &cb)
+{
+    QJsonObject body;
+    body["enabled"]         = enabled;
+    body["taskChainString"] = taskChainString;
+    post("/task/chain/sendTask", body, cb);
+}
+
+void ApiService::controlTaskChain(const QString &command, const Callback &cb)
+{
+    put(appendQuery("/task/chain/control", QJsonObject{{"command", command}}), QJsonObject(), cb);
+}
+
+// ========== 音频接口 (端口 8048) ==========
+
+void ApiService::listAudio(const Callback &cb)
+{
+    get("/robot/audio/list", cb);
+}
+
+void ApiService::uploadAudio(const QString &filePath, const Callback &cb)
+{
+    uploadFile("/robot/audio/upload", filePath, "file", cb);
+}
+
+void ApiService::downloadAudio(const QString &fileName, const FileCallback &cb)
+{
+    downloadFile("/robot/audio/download/" + fileName, cb);
+}
+
+void ApiService::deleteAudio(const QString &fileName, const Callback &cb)
+{
+    del("/robot/audio/" + fileName, cb);
+}
+
 // ========== 任务日志接口 ==========
 
 void ApiService::listTasklog(const QJsonObject &query, const Callback &cb)
@@ -702,8 +771,11 @@ void ApiService::initPose(const QString &carId, const QJsonObject &pose, const C
 void ApiService::navigateTo(const QString &locationId, const Callback &cb)
 {
     QUrlQuery q;
-    q.addQueryItem("locationId", locationId);
-    post("/robot/navigation/navigate/to?" + q.toString(), QJsonObject(), cb);
+    if (!locationId.isEmpty())
+        q.addQueryItem("locationId", locationId);
+    QString url = "/robot/navigation/navigate/to";
+    if (!q.isEmpty()) url += "?" + q.toString();
+    post(url, QJsonObject(), cb);
 }
 
 // ========== 便捷重载 ==========
@@ -736,6 +808,9 @@ void ApiService::setLinearMotion(double vx, double vy, double distance, int acti
     if (actionId <= 0) {
         actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
     }
+    vx = MotionConfigManager::instance().clampSignedLinearSpeed(vx);
+    vy = MotionConfigManager::instance().clampSignedLinearSpeed(vy);
+
     QJsonObject actionObj;
     actionObj["action_id"]   = actionId;
     actionObj["action_type"] = 6;
@@ -750,6 +825,8 @@ void ApiService::setRotateMotion(double rotateAngleRad, double rotateSpeed, int 
     if (actionId <= 0) {
         actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
     }
+    rotateSpeed = MotionConfigManager::instance().clampAngularSpeedRad(rotateSpeed);
+
     QJsonObject actionObj;
     actionObj["action_id"]    = actionId;
     actionObj["action_type"]  = 5;
@@ -773,22 +850,38 @@ void ApiService::setJackControl(int action, double height, int actionId, const C
 
 void ApiService::setRobotFixPath(const QJsonObject &data, const Callback &cb)
 {
-    QJsonObject root;
-    if (data.contains("data")) {
-        root = data;
-    } else {
-        root["data"] = data;
+    QJsonObject root = data.contains("data") ? data : QJsonObject{{"data", data}};
+    QJsonObject d = root.value("data").toObject();
+    if (d.contains("robot_paths")) {
+        QJsonArray paths = d.value("robot_paths").toArray();
+        for (int i = 0; i < paths.size(); ++i) {
+            QJsonObject p = paths[i].toObject();
+            if (p.contains("path_speed")) {
+                p["path_speed"] = MotionConfigManager::instance().clampLinearSpeed(p.value("path_speed").toDouble(0.5));
+                paths[i] = p;
+            }
+        }
+        d["robot_paths"] = paths;
+        root["data"] = d;
     }
     post("/rbrainrobot/set_robot_fix_path", root, cb, kControllerPort, false);
 }
 
 void ApiService::setThirdFixPath(const QJsonObject &data, const Callback &cb)
 {
-    QJsonObject root;
-    if (data.contains("data")) {
-        root = data;
-    } else {
-        root["data"] = data;
+    QJsonObject root = data.contains("data") ? data : QJsonObject{{"data", data}};
+    QJsonObject d = root.value("data").toObject();
+    if (d.contains("robot_paths")) {
+        QJsonArray paths = d.value("robot_paths").toArray();
+        for (int i = 0; i < paths.size(); ++i) {
+            QJsonObject p = paths[i].toObject();
+            if (p.contains("path_speed")) {
+                p["path_speed"] = MotionConfigManager::instance().clampLinearSpeed(p.value("path_speed").toDouble(0.5));
+                paths[i] = p;
+            }
+        }
+        d["robot_paths"] = paths;
+        root["data"] = d;
     }
     post("/rbrainrobot/set_third_fix_path", root, cb, kControllerPort, false);
 }
@@ -799,8 +892,9 @@ void ApiService::navigateToStation(const QString &targetStation, const QString &
         actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
     }
     if (speed <= 0.0) {
-        speed = 0.5;
+        speed = MotionConfigManager::instance().maxSpeed();
     }
+    speed = MotionConfigManager::instance().clampLinearSpeed(speed);
 
     QJsonObject root;
     QJsonObject d;
@@ -840,8 +934,9 @@ void ApiService::navigateToPose(double startX, double startY, double goalX, doub
         actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
     }
     if (speed <= 0.0) {
-        speed = 0.5;
+        speed = MotionConfigManager::instance().maxSpeed();
     }
+    speed = MotionConfigManager::instance().clampLinearSpeed(speed);
 
     QJsonObject root;
     QJsonObject d;
@@ -926,6 +1021,9 @@ void ApiService::setInitPose8061(double x, double y, double angleRad, const Call
 
 void ApiService::setRobotSpeed(double linearSpeed, double angularSpeed, const Callback &cb)
 {
+    linearSpeed  = MotionConfigManager::instance().clampLinearSpeed(linearSpeed);
+    angularSpeed = MotionConfigManager::instance().clampAngularSpeedRad(angularSpeed);
+
     QJsonObject root;
     QJsonObject d;
     d["linear_speed"]      = linearSpeed;
@@ -938,6 +1036,8 @@ void ApiService::setRobotSpeed(double linearSpeed, double angularSpeed, const Ca
 
 void ApiService::modifyPathSpeed(const QString &mapName, double pathSpeed, double speedProportion, const Callback &cb)
 {
+    pathSpeed = MotionConfigManager::instance().clampLinearSpeed(pathSpeed);
+
     QJsonObject root;
     QJsonObject d;
     d["map_name"]         = mapName;

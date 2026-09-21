@@ -17,6 +17,8 @@
 
 #include <QStyledItemDelegate>
 #include <QTimer>
+#include <QSettings>
+#include "core/MotionConfigManager.h"
 
 // ── Toolbar icon helpers：图标在上、文字在下 (Qt::ToolButtonTextUnderIcon)，
 // 与 MapViewWidget/TaskWidget 工具栏按钮风格保持一致 ─────────────────────────
@@ -219,42 +221,90 @@ void EditConfigWidget::setupUI() {
   mainLayout->addWidget(splitter);
 }
 
+static void ensureMotionControlConfig(QJsonArray &configs) {
+  bool found = false;
+  auto &mc = MotionConfigManager::instance();
+  for (int i = 0; i < configs.size(); ++i) {
+    QJsonObject entry = configs[i].toObject();
+    QString name = entry.value("name").toString().toLower();
+    QString path = entry.value("file_path").toString().toLower();
+    if (name == "motion_control" || name.contains("motion_control") ||
+        path.contains("motion_control") || name == "运动控制") {
+      found = true;
+      QJsonObject params = entry.value("params").toObject();
+      if (!params.contains("max_speed")) params["max_speed"] = mc.maxSpeed();
+      if (!params.contains("max_acceleration")) params["max_acceleration"] = mc.maxAcceleration();
+      if (!params.contains("max_deceleration")) params["max_deceleration"] = mc.maxDeceleration();
+      if (!params.contains("max_angular_speed")) params["max_angular_speed"] = mc.maxAngularSpeedDeg();
+      if (!params.contains("arrival_distance_tolerance")) params["arrival_distance_tolerance"] = mc.arrivalDistanceTolerance();
+      if (!params.contains("arrival_angle_tolerance")) params["arrival_angle_tolerance"] = mc.arrivalAngleToleranceDeg();
+      if (!params.contains("route_width")) params["route_width"] = mc.routeWidth();
+      entry["params"] = params;
+      configs[i] = entry;
+      // 同步更新全局运动配置
+      mc.updateFromJsonObject(params);
+      break;
+    }
+  }
+
+  if (!found) {
+    QJsonObject motionEntry;
+    motionEntry["name"] = "motion_control";
+    motionEntry["file_path"] = "/home/ubuntu/xinje_agv/src/robot_bringup/config/motion_control.yaml";
+    motionEntry["status"] = true;
+    motionEntry["params"] = mc.toJsonObject();
+    configs.prepend(motionEntry); // 优先放置在最前面，作为首要控制分组
+  }
+}
+
 void EditConfigWidget::refreshData() { loadAll(); }
 
 void EditConfigWidget::loadAll() {
   ApiService::instance().getAllConfigsPreserve(
       [this](int code, const QByteArray &rawData) {
-        if (code != 200) {
-          QMessageBox::warning(this, "错误", "加载配置失败");
-          return;
-        }
-
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(rawData, &err);
-        if (err.error != QJsonParseError::NoError) {
-          QMessageBox::warning(this, "错误", "解析配置失败");
-          return;
-        }
-
-        QJsonObject root = doc.object();
         QJsonArray list;
-        if (root.contains("data")) {
-          if (root.value("data").isArray())
-            list = root.value("data").toArray();
-          else if (root.value("data").isObject()) {
-            QJsonObject dataObj = root.value("data").toObject();
-            if (dataObj.contains("data") && dataObj.value("data").isArray())
-              list = dataObj.value("data").toArray();
-            else {
-              for (const auto &k : dataObj.keys()) {
-                if (dataObj.value(k).isArray()) {
-                  list = dataObj.value(k).toArray();
-                  break;
+        bool loadedFromNetwork = false;
+
+        if (code == 200) {
+          QJsonParseError err;
+          QJsonDocument doc = QJsonDocument::fromJson(rawData, &err);
+          if (err.error == QJsonParseError::NoError) {
+            QJsonObject root = doc.object();
+            if (root.contains("data")) {
+              if (root.value("data").isArray())
+                list = root.value("data").toArray();
+              else if (root.value("data").isObject()) {
+                QJsonObject dataObj = root.value("data").toObject();
+                if (dataObj.contains("data") && dataObj.value("data").isArray())
+                  list = dataObj.value("data").toArray();
+                else {
+                  for (const auto &k : dataObj.keys()) {
+                    if (dataObj.value(k).isArray()) {
+                      list = dataObj.value(k).toArray();
+                      break;
+                    }
+                  }
                 }
               }
             }
+            loadedFromNetwork = true;
           }
         }
+
+        // 若网络未获取到数据，尝试从本地缓存恢复
+        if (!loadedFromNetwork || list.isEmpty()) {
+          QSettings settings;
+          QByteArray cached = settings.value("editConfig/cachedConfigs").toByteArray();
+          if (!cached.isEmpty()) {
+            QJsonDocument cDoc = QJsonDocument::fromJson(cached);
+            if (cDoc.isArray()) {
+              list = cDoc.array();
+            }
+          }
+        }
+
+        // 确保“运动控制”分组及对应的7项参数完备存在
+        ensureMotionControlConfig(list);
 
         m_configs = list;
         refreshGroups();
@@ -422,6 +472,15 @@ QPair<QString, QString> EditConfigWidget::fieldMetaFor(const QString &key) {
       {"lift_min", {"顶升最小高度", "单位m，可用于软保护"}},
       {"lift_joy_speed", {"遥控顶升速度", "单位rad/s"}},
 
+      // 运动控制配置
+      {"max_speed", {"最大线速度配置值", "单位 m/s"}},
+      {"max_acceleration", {"最大线加速度配置值", "单位 m/s²"}},
+      {"max_deceleration", {"最大线减速度的幅值", "单位 m/s²，使用正数"}},
+      {"max_angular_speed", {"最大角速度配置值", "单位 °/s；此处使用角度制"}},
+      {"arrival_distance_tolerance", {"到达目标允许的距离误差", "单位 m"}},
+      {"arrival_angle_tolerance", {"到达目标允许的角度误差", "单位 °；此处使用角度制"}},
+      {"route_width", {"路线宽度配置值", "单位 m；全宽/半宽及控制用途尚未接入定义"}},
+
   };
   return meta.value(key, {"", ""});
 }
@@ -429,9 +488,27 @@ QPair<QString, QString> EditConfigWidget::fieldMetaFor(const QString &key) {
 void EditConfigWidget::addParamRows(const QJsonObject &params, int configIdx,
                                     const QString &prefix,
                                     const QString &filter) {
-  for (auto it = params.begin(); it != params.end(); ++it) {
-    const QString &key = it.key();
-    const QJsonValue &jv = it.value();
+  QStringList keys = params.keys();
+  static const QStringList kPreferredOrder = {
+      "max_speed",
+      "max_acceleration",
+      "max_deceleration",
+      "max_angular_speed",
+      "arrival_distance_tolerance",
+      "arrival_angle_tolerance",
+      "route_width"
+  };
+  std::sort(keys.begin(), keys.end(), [](const QString &a, const QString &b) {
+    int idxA = kPreferredOrder.indexOf(a);
+    int idxB = kPreferredOrder.indexOf(b);
+    if (idxA != -1 && idxB != -1) return idxA < idxB;
+    if (idxA != -1) return true;
+    if (idxB != -1) return false;
+    return a < b;
+  });
+
+  for (const QString &key : keys) {
+    const QJsonValue &jv = params.value(key);
     const QString fullPath = prefix.isEmpty() ? key : prefix + "." + key;
 
     // Recurse into nested objects (expand them as dotted-path rows)
@@ -524,6 +601,9 @@ QString EditConfigWidget::determineProfile(const QJsonObject &entry) const {
   QString name = entry.value("name").toString().toLower();
   QString path = entry.value("file_path").toString().toLower();
 
+  if (name == "motion_control" || name.contains("motion_control") ||
+      path.contains("motion_control") || name == "运动控制")
+    return "MOTION_CONTROL";
   if (path.contains("dispatch/config/config.yaml"))
     return "DISPATCH";
   if (path.contains("secondary_localization_reflector/config/config.yaml"))
@@ -558,7 +638,8 @@ QString EditConfigWidget::determineProfile(const QJsonObject &entry) const {
 }
 
 QString EditConfigWidget::getProfileName(const QString &key) const {
-  static QMap<QString, QString> names = {{"DISPATCH", "任务调度"},
+  static QMap<QString, QString> names = {{"MOTION_CONTROL", "运动控制"},
+                                         {"DISPATCH", "任务调度"},
                                          {"SECONDARY_LOC", "二次定位"},
                                          {"C200_LIDAR", "激光雷达驱动"},
                                          {"PID", "PID 控制"},
@@ -608,6 +689,12 @@ void EditConfigWidget::onSave() {
   QJsonObject payload;
   for (const auto &item : m_configs) {
     QJsonObject entry = item.toObject();
+    QString name = entry.value("name").toString().toLower();
+    QString path = entry.value("file_path").toString().toLower();
+    if (name == "motion_control" || name.contains("motion_control") ||
+        path.contains("motion_control") || name == "运动控制") {
+      MotionConfigManager::instance().updateFromJsonObject(entry.value("params").toObject());
+    }
     QString key =
         entry.value("file_path").toString(entry.value("name").toString());
     QJsonObject val;
@@ -617,6 +704,10 @@ void EditConfigWidget::onSave() {
     val["file_path"] = entry.value("file_path");
     payload[key] = val;
   }
+
+  // 同步写入本地持久化缓存，保障离线或重启后仍能保持用户配置
+  QSettings settings;
+  settings.setValue("editConfig/cachedConfigs", QJsonDocument(m_configs).toJson(QJsonDocument::Compact));
 
   m_saveBtn->setEnabled(false);
   auto *loading = new LoadingDialog("正在保存配置参数...", this);
@@ -629,7 +720,7 @@ void EditConfigWidget::onSave() {
         if (code == 200) {
           Toast::success(this, "保存成功");
         } else {
-          QMessageBox::warning(this, "错误", "保存失败");
+          QMessageBox::warning(this, "错误", "保存失败 (已在本地缓存最新配置)");
         }
       });
 }

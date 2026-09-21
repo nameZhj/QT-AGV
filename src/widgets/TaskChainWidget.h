@@ -110,6 +110,11 @@ private:
     void createGroupRowWidget(QListWidgetItem *item, int groupIndex, bool checked = false);
     QString openActionDefDialog(const ActionDef &def, const QJsonObject &existingParams);
 
+    // 音频名称下拉 (数据来自 GET /robot/audio/list)
+    QStringList fetchAudioFiles(int timeoutMs = 2500);
+    static QString audioDisplayName(const QString &fullName);
+    QStringList m_audioFiles;
+
     // 动作定义表
     void initActionDefs();
     ActionDef* findActionDef(const QString &name);

@@ -47,7 +47,6 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
-    void showEvent(QShowEvent *event) override;
 
 private slots:
     void onTeleopKeyStateChanged(int key, bool pressed);

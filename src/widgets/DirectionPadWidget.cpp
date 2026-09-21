@@ -1,6 +1,7 @@
 #include "DirectionPadWidget.h"
 #include "ManualControlConfigDialog.h"
 #include "core/TeleopController.h"
+#include "core/Toast.h"
 
 #include <QPainter>
 #include <QMouseEvent>
@@ -31,15 +32,6 @@ DirectionPadWidget::DirectionPadWidget(QWidget *parent)
     if (TeleopController::instance().isKeyPressed(Qt::Key_A)) m_pressedKeys.insert(PadKey::Left);
     if (TeleopController::instance().isKeyPressed(Qt::Key_D)) m_pressedKeys.insert(PadKey::Right);
     if (TeleopController::instance().isKeyPressed(Qt::Key_Space)) m_pressedKeys.insert(PadKey::Center);
-}
-
-void DirectionPadWidget::showEvent(QShowEvent *event)
-{
-    QWidget::showEvent(event);
-    // 当该组件所在的地图界面显示时，确保 TeleopController 处于可用使能状态
-    if (!TeleopController::instance().isActive()) {
-        TeleopController::instance().setActive(true);
-    }
 }
 
 void DirectionPadWidget::updatePaths()
@@ -194,6 +186,16 @@ void DirectionPadWidget::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
         PadKey key = hitTest(event->pos());
+
+        // 中间方块为刹车(安全动作)，任何时候都可直接按下，不需要先抢占控制权；
+        // 方向键属于驱动车辆，必须由用户显式点击"抢占控制权"后才会生效，
+        // 避免误触方向键盘直接驱动车辆
+        if (key != PadKey::Center && !TeleopController::instance().isActive()) {
+            Toast::info(this, QStringLiteral("未抢占控制权，请先点击“抢占控制权”再遥控"));
+            QWidget::mousePressEvent(event);
+            return;
+        }
+
         m_mouseActiveKey = key;
 
         if (key != PadKey::None) {
@@ -233,32 +235,24 @@ void DirectionPadWidget::mouseReleaseEvent(QMouseEvent *event)
             PadKey prevKey = m_mouseActiveKey;
             m_mouseActiveKey = PadKey::None;
 
-            // 恢复虚拟按键状态 (若对应物理按键未按下)
+            // 鼠标抬起必须释放虚拟按键(点一下只按一瞬，按住才持续运动，抬起立即停止)。
+            // 注意: 不能再用 isKeyPressed() 作为判断条件，因为它与虚拟键共用同一状态标志，
+            // 会导致刚按下虚拟键就永远判断为"物理键已按住"而无法释放。
             switch (prevKey) {
             case PadKey::Up:
-                if (!TeleopController::instance().isKeyPressed(Qt::Key_W)) {
-                    TeleopController::instance().setVirtualKey(Qt::Key_W, false);
-                }
+                TeleopController::instance().setVirtualKey(Qt::Key_W, false);
                 break;
             case PadKey::Down:
-                if (!TeleopController::instance().isKeyPressed(Qt::Key_S)) {
-                    TeleopController::instance().setVirtualKey(Qt::Key_S, false);
-                }
+                TeleopController::instance().setVirtualKey(Qt::Key_S, false);
                 break;
             case PadKey::Left:
-                if (!TeleopController::instance().isKeyPressed(Qt::Key_A)) {
-                    TeleopController::instance().setVirtualKey(Qt::Key_A, false);
-                }
+                TeleopController::instance().setVirtualKey(Qt::Key_A, false);
                 break;
             case PadKey::Right:
-                if (!TeleopController::instance().isKeyPressed(Qt::Key_D)) {
-                    TeleopController::instance().setVirtualKey(Qt::Key_D, false);
-                }
+                TeleopController::instance().setVirtualKey(Qt::Key_D, false);
                 break;
             case PadKey::Center:
-                if (!TeleopController::instance().isKeyPressed(Qt::Key_Space)) {
-                    TeleopController::instance().setVirtualKey(Qt::Key_Space, false);
-                }
+                TeleopController::instance().setVirtualKey(Qt::Key_Space, false);
                 break;
             case PadKey::Settings:
                 if (hitTest(event->pos()) == PadKey::Settings) {

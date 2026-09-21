@@ -7,7 +7,9 @@
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
+#include "core/RouteFeatureSelect.h"
 #include "core/ToggleSwitch.h"
+#include "core/MotionConfigManager.h"
 #include <QPointer>
 #include <QPushButton>
 #include <QComboBox>
@@ -513,6 +515,12 @@ void MapEditWidget::setupUI()
     connect(m_robotBtn, &ToggleSwitch::toggled, this, [this](bool on) {
         m_showRobotPosition = on;
         updateRobotMarker();
+        debugLog(QString("[设备位置] 开关=%1 图元=%2 车图标=%3 已收到位姿=%4 车号=%5")
+            .arg(on ? "开" : "关")
+            .arg(m_robotItem ? "已创建" : "未创建")
+            .arg(m_robotPixmap.isNull() ? "加载失败" : "正常")
+            .arg(m_hasCarPose ? "是" : "否")
+            .arg(m_currentCarId));
     });
     tl->addWidget(m_robotBtn);
 
@@ -936,54 +944,102 @@ void MapEditWidget::setupUI()
         mTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
         mcl->addWidget(mTitle);
 
+        const auto &mc = MotionConfigManager::instance();
+
         m_lineMaxSpeedSpin = new QDoubleSpinBox;
-        m_lineMaxSpeedSpin->setRange(0.01, 5.0);
+        m_lineMaxSpeedSpin->setRange(0.01, mc.maxSpeed());
         m_lineMaxSpeedSpin->setSingleStep(0.05);
-        m_lineMaxSpeedSpin->setValue(0.5);
+        m_lineMaxSpeedSpin->setValue(mc.maxSpeed());
         m_lineMaxSpeedSpin->setSuffix(" m/s");
+        m_lineMaxSpeedSpin->setToolTip(QString("受全局最大速度限制 (上限: %1 m/s)").arg(mc.maxSpeed()));
         mcl->addWidget(mkFormRow("最大速度:", m_lineMaxSpeedSpin));
 
         m_lineMaxAccSpin = new QDoubleSpinBox;
-        m_lineMaxAccSpin->setRange(0.01, 3.0);
+        m_lineMaxAccSpin->setRange(0.01, mc.maxAcceleration());
         m_lineMaxAccSpin->setSingleStep(0.05);
-        m_lineMaxAccSpin->setValue(0.3);
+        m_lineMaxAccSpin->setValue(mc.maxAcceleration());
         m_lineMaxAccSpin->setSuffix(" m/s²");
+        m_lineMaxAccSpin->setToolTip(QString("受全局最大加速度限制 (上限: %1 m/s²)").arg(mc.maxAcceleration()));
         mcl->addWidget(mkFormRow("最大加速度:", m_lineMaxAccSpin));
 
         m_lineMaxDecSpin = new QDoubleSpinBox;
-        m_lineMaxDecSpin->setRange(0.01, 3.0);
+        m_lineMaxDecSpin->setRange(0.01, mc.maxDeceleration());
         m_lineMaxDecSpin->setSingleStep(0.05);
-        m_lineMaxDecSpin->setValue(0.3);
+        m_lineMaxDecSpin->setValue(mc.maxDeceleration());
         m_lineMaxDecSpin->setSuffix(" m/s²");
+        m_lineMaxDecSpin->setToolTip(QString("受全局最大减速度限制 (上限: %1 m/s²)").arg(mc.maxDeceleration()));
         mcl->addWidget(mkFormRow("最大减速度:", m_lineMaxDecSpin));
 
         m_lineMaxRotSpin = new QDoubleSpinBox;
-        m_lineMaxRotSpin->setRange(1.0, 360.0);
+        m_lineMaxRotSpin->setRange(1.0, mc.maxAngularSpeedDeg());
         m_lineMaxRotSpin->setSingleStep(5.0);
-        m_lineMaxRotSpin->setValue(60.0);
+        m_lineMaxRotSpin->setValue(mc.maxAngularSpeedDeg());
         m_lineMaxRotSpin->setSuffix(" °/s");
+        m_lineMaxRotSpin->setToolTip(QString("受全局最大角速度限制 (上限: %1 °/s)").arg(mc.maxAngularSpeedDeg()));
         mcl->addWidget(mkFormRow("最大角速度:", m_lineMaxRotSpin));
 
         m_lineReachDistSpin = new QDoubleSpinBox;
-        m_lineReachDistSpin->setRange(0.01, 1.0);
+        m_lineReachDistSpin->setRange(0.01, qMax(1.0, mc.arrivalDistanceTolerance()));
         m_lineReachDistSpin->setSingleStep(0.01);
-        m_lineReachDistSpin->setValue(0.1);
+        m_lineReachDistSpin->setValue(mc.arrivalDistanceTolerance());
         m_lineReachDistSpin->setSuffix(" m");
         mcl->addWidget(mkFormRow("到达距离精度:", m_lineReachDistSpin));
 
         m_lineReachAngleSpin = new QDoubleSpinBox;
-        m_lineReachAngleSpin->setRange(0.1, 45.0);
+        m_lineReachAngleSpin->setRange(0.1, qMax(45.0, mc.arrivalAngleToleranceDeg()));
         m_lineReachAngleSpin->setSingleStep(0.1);
-        m_lineReachAngleSpin->setValue(0.5);
+        m_lineReachAngleSpin->setValue(mc.arrivalAngleToleranceDeg());
         m_lineReachAngleSpin->setSuffix(" °");
         mcl->addWidget(mkFormRow("到达角度精度:", m_lineReachAngleSpin));
 
         m_lineRoadWidthSpin = new QDoubleSpinBox;
-        m_lineRoadWidthSpin->setRange(0.5, 10.0);
+        m_lineRoadWidthSpin->setRange(0.5, qMax(10.0, mc.routeWidth()));
         m_lineRoadWidthSpin->setSingleStep(0.5);
-        m_lineRoadWidthSpin->setValue(4.0);
+        m_lineRoadWidthSpin->setValue(mc.routeWidth());
         m_lineRoadWidthSpin->setSuffix(" m");
         mcl->addWidget(mkFormRow("路线宽度:", m_lineRoadWidthSpin));
+
+        // 监听全局运动控制参数变化，动态调整各输入控件的上限与 ToolTip
+        connect(&MotionConfigManager::instance(), &MotionConfigManager::configChanged, this, [this]() {
+            const auto &cfg = MotionConfigManager::instance();
+            if (m_lineMaxSpeedSpin) {
+                m_lineMaxSpeedSpin->setRange(0.01, cfg.maxSpeed());
+                m_lineMaxSpeedSpin->setToolTip(QString("受全局最大速度限制 (上限: %1 m/s)").arg(cfg.maxSpeed()));
+                if (m_lineMaxSpeedSpin->value() > cfg.maxSpeed()) {
+                    m_lineMaxSpeedSpin->setValue(cfg.maxSpeed());
+                }
+            }
+            if (m_lineMaxAccSpin) {
+                m_lineMaxAccSpin->setRange(0.01, cfg.maxAcceleration());
+                m_lineMaxAccSpin->setToolTip(QString("受全局最大加速度限制 (上限: %1 m/s²)").arg(cfg.maxAcceleration()));
+                if (m_lineMaxAccSpin->value() > cfg.maxAcceleration()) {
+                    m_lineMaxAccSpin->setValue(cfg.maxAcceleration());
+                }
+            }
+            if (m_lineMaxDecSpin) {
+                m_lineMaxDecSpin->setRange(0.01, cfg.maxDeceleration());
+                m_lineMaxDecSpin->setToolTip(QString("受全局最大减速度限制 (上限: %1 m/s²)").arg(cfg.maxDeceleration()));
+                if (m_lineMaxDecSpin->value() > cfg.maxDeceleration()) {
+                    m_lineMaxDecSpin->setValue(cfg.maxDeceleration());
+                }
+            }
+            if (m_lineMaxRotSpin) {
+                m_lineMaxRotSpin->setRange(1.0, cfg.maxAngularSpeedDeg());
+                m_lineMaxRotSpin->setToolTip(QString("受全局最大角速度限制 (上限: %1 °/s)").arg(cfg.maxAngularSpeedDeg()));
+                if (m_lineMaxRotSpin->value() > cfg.maxAngularSpeedDeg()) {
+                    m_lineMaxRotSpin->setValue(cfg.maxAngularSpeedDeg());
+                }
+            }
+            if (m_lineReachDistSpin) {
+                m_lineReachDistSpin->setRange(0.01, qMax(1.0, cfg.arrivalDistanceTolerance()));
+            }
+            if (m_lineReachAngleSpin) {
+                m_lineReachAngleSpin->setRange(0.1, qMax(45.0, cfg.arrivalAngleToleranceDeg()));
+            }
+            if (m_lineRoadWidthSpin) {
+                m_lineRoadWidthSpin->setRange(0.5, qMax(10.0, cfg.routeWidth()));
+            }
+        });
 
         ll->addWidget(motionCard);
         pl->addWidget(m_linePropGroup);
@@ -2234,10 +2290,18 @@ void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
 {
     QPointF wa = sceneToWorld(a.x(), a.y()), wb = sceneToWorld(b.x(), b.y());
     int n = nextIdNum(m_lines, "l_");
+    const auto &mc = MotionConfigManager::instance();
     QJsonObject ln;
     ln["id"] = QString("l_%1").arg(n); ln["name"] = QString("线%1").arg(n);
     ln["x1"] = wa.x(); ln["y1"] = wa.y(); ln["x2"] = wb.x(); ln["y2"] = wb.y();
     ln["direct"] = 10; ln["startid"] = startId; ln["endid"] = endId; // 默认双向 ↔
+    ln["maxspeed"]   = mc.maxSpeed();
+    ln["maxacc"]     = mc.maxAcceleration();
+    ln["maxdec"]     = mc.maxDeceleration();
+    ln["maxrot"]     = mc.maxAngularSpeedDeg();
+    ln["reachdist"]  = mc.arrivalDistanceTolerance();
+    ln["reachangle"] = mc.arrivalAngleToleranceDeg();
+    ln["width"]      = mc.routeWidth();
     m_lines.append(ln);
     m_dirty = true;
     renderMap();
@@ -2252,12 +2316,20 @@ void MapEditWidget::addCurve(const QPointF &a, const QPointF &b,
     QPointF wc   = sceneToWorld(mid.x(), mid.y());
     QPointF wb   = sceneToWorld(b.x(), b.y());
     int n = nextIdNum(m_curves, "b_");
+    const auto &mc = MotionConfigManager::instance();
     QJsonObject cv;
     cv["id"] = QString("b_%1").arg(n); cv["name"] = QString("曲%1").arg(n);
     cv["x1"] = wa.x(); cv["y1"] = wa.y();
     cv["cx"] = wc.x(); cv["cy"] = wc.y();
     cv["x2"] = wb.x(); cv["y2"] = wb.y();
     cv["direct"] = 10; cv["startid"] = startId; cv["endid"] = endId; // 默认双向 ↔
+    cv["maxspeed"]   = mc.maxSpeed();
+    cv["maxacc"]     = mc.maxAcceleration();
+    cv["maxdec"]     = mc.maxDeceleration();
+    cv["maxrot"]     = mc.maxAngularSpeedDeg();
+    cv["reachdist"]  = mc.arrivalDistanceTolerance();
+    cv["reachangle"] = mc.arrivalAngleToleranceDeg();
+    cv["width"]      = mc.routeWidth();
     m_curves.append(cv);
     m_dirty = true;
     renderMap();
@@ -2319,6 +2391,15 @@ void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
     cv["startid"] = snapIds.isEmpty()     ? QString() : snapIds.first();
     cv["endid"]   = (snapIds.size() >= 2) ? snapIds.last() : QString();
 
+    const auto &mc = MotionConfigManager::instance();
+    cv["maxspeed"]   = mc.maxSpeed();
+    cv["maxacc"]     = mc.maxAcceleration();
+    cv["maxdec"]     = mc.maxDeceleration();
+    cv["maxrot"]     = mc.maxAngularSpeedDeg();
+    cv["reachdist"]  = mc.arrivalDistanceTolerance();
+    cv["reachangle"] = mc.arrivalAngleToleranceDeg();
+    cv["width"]      = mc.routeWidth();
+
     // 控制点数组(世界坐标)
     QJsonArray ctrlArr;
     for (const QPointF &sp : scenePts) {
@@ -2372,103 +2453,20 @@ MapEditWidget::SnapResult MapEditWidget::ensureNodeAt(const QPointF &sp)
 
 // ── Feature selection ─────────────────────────────────────────────────────────
 
-namespace {
-const QColor kSelectColor("#00e676");   // 选中态：醒目的亮绿色，与既有配色都不重复
-
-// 记录在 data(2) 里的原始颜色（用 setItemColor 改色前先取出保存，取消选中时还原）
-QColor itemOrigColor(QGraphicsItem *item)
-{
-    if (auto *e = qgraphicsitem_cast<QGraphicsEllipseItem*>(item)) return e->brush().color();
-    if (auto *l = qgraphicsitem_cast<QGraphicsLineItem*>(item))    return l->pen().color();
-    if (auto *p = qgraphicsitem_cast<QGraphicsPathItem*>(item)) {
-        if (item->data(0).toString() == "curve") return p->pen().color();
-        return p->brush().color().isValid() ? p->brush().color() : p->pen().color();
-    }
-    return {};
-}
-
-void setItemColor(QGraphicsItem *item, const QColor &col, bool selected)
-{
-    if (auto *e = qgraphicsitem_cast<QGraphicsEllipseItem*>(item)) {
-        QPen pen = e->pen(); pen.setColor(col.darker(130)); pen.setWidthF(selected ? 2.4 : 1.5);
-        e->setPen(pen);
-        e->setBrush(col);
-    } else if (auto *l = qgraphicsitem_cast<QGraphicsLineItem*>(item)) {
-        QPen pen = l->pen(); pen.setColor(col); pen.setWidthF(selected ? 2.6 : 1.5);
-        pen.setCapStyle(Qt::RoundCap); pen.setJoinStyle(Qt::RoundJoin);
-        l->setPen(pen);
-        for (auto *child : item->childItems()) {
-            if (auto *poly = qgraphicsitem_cast<QGraphicsPolygonItem*>(child)) {
-                poly->setBrush(QBrush(col));
-            }
-        }
-    } else if (auto *p = qgraphicsitem_cast<QGraphicsPathItem*>(item)) {
-        QString type = item->data(0).toString();
-        if (type == "curve") {
-            // 贝塞尔曲线：保持无画刷填充 (NoBrush)，严禁填充闭合区域，仅加粗线条画笔并变色高亮
-            p->setBrush(Qt::NoBrush);
-            QPen pen = p->pen();
-            pen.setColor(col);
-            pen.setWidthF(selected ? 2.6 : 1.5);
-            pen.setCapStyle(Qt::RoundCap); pen.setJoinStyle(Qt::RoundJoin);
-            p->setPen(pen);
-            for (auto *child : item->childItems()) {
-                if (auto *poly = qgraphicsitem_cast<QGraphicsPolygonItem*>(child)) {
-                    poly->setBrush(QBrush(col));
-                }
-            }
-        } else {
-            // 点图元(QGraphicsPathItem): 保持节点原本类型色彩，选中时加深边框并高亮
-            QColor baseCol = item->data(2).isValid() ? item->data(2).value<QColor>() : col;
-            if (selected) {
-                QPen pen(QColor("#2ECC71"), 1.2);
-                p->setPen(pen);
-                QColor fillCol = baseCol.lighter(115);
-                p->setBrush(QBrush(fillCol));
-            } else {
-                QPen pen(baseCol.darker(130), 0.8);
-                p->setPen(pen);
-                p->setBrush(QBrush(baseCol));
-            }
-        }
-    }
-}
-
-// 选中变色：先把当前(原始)颜色缓存到 data(2)，再统一改为高亮绿；取消选中时按
-// data(2) 还原，恢复点/线/曲线各自原本的配色（蓝/橙/红/绿/紫等）。
-void applySelectColor(QGraphicsItem *item)
-{
-    if (!item) return;
-    if (!item->data(2).isValid()) item->setData(2, itemOrigColor(item));
-    setItemColor(item, kSelectColor, true);
-}
-
-void clearSelectColor(QGraphicsItem *item)
-{
-    if (!item) return;
-    QColor orig = item->data(2).value<QColor>();
-    if (orig.isValid()) setItemColor(item, orig, false);
-}
-} // namespace
-
 void MapEditWidget::selectFeatureAt(const QPointF &sp)
 {
-    const double tol = hitTolScene(12.0);
-    for (auto *it : m_scene->items(QRectF(sp.x()-tol, sp.y()-tol, tol*2, tol*2))) {
-        QGraphicsItem *target = it;
-        if (!target->data(0).isValid() && target->parentItem()) {
-            target = target->parentItem();
-        }
-        QString type = target->data(0).toString();
-        QString id   = target->data(1).toString();
-        if (!type.isEmpty()) { showFeatureProperties(type, id); return; }
+    // 命中逻辑与选中效果统一由 RouteFeatureSelect 提供，与"地图预览"共用同一份实现
+    QGraphicsItem *target = RouteFeatureSelect::pickItem(m_scene, sp, hitTolScene(12.0));
+    if (target) {
+        showFeatureProperties(target->data(0).toString(), target->data(1).toString());
+        return;
     }
     clearSelection();
 }
 
 void MapEditWidget::clearSelection()
 {
-    clearSelectColor(m_selItem);
+    RouteFeatureSelect::clearSelectColor(m_selItem);
     m_selType.clear(); m_selId.clear(); m_selItem = nullptr;
     m_propsPanel->setVisible(false);
 }
@@ -2497,9 +2495,9 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
 
     m_selType = realType; m_selId = realId;
     QGraphicsItem *newSel = m_featureItems.value(realType + "_" + realId);
-    if (m_selItem && m_selItem != newSel) clearSelectColor(m_selItem);
+    if (m_selItem && m_selItem != newSel) RouteFeatureSelect::clearSelectColor(m_selItem);
     m_selItem = newSel;
-    applySelectColor(m_selItem);
+    RouteFeatureSelect::applySelectColor(m_selItem);
 
     bool isPointKind = (realType == "point" || realType == "highPrecision" || realType == "charge");
     if (isPointKind) {
@@ -2580,13 +2578,22 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
         int dIdx = (direct == 10) ? 0 : ((direct == 0) ? 1 : 2);
         m_lineDirectCombo->setCurrentIndex(dIdx);
 
-        m_lineMaxSpeedSpin->setValue(obj.value("maxspeed").toDouble(0.5));
-        m_lineMaxAccSpin->setValue(obj.value("maxacc").toDouble(0.3));
-        m_lineMaxDecSpin->setValue(obj.value("maxdec").toDouble(0.3));
-        m_lineMaxRotSpin->setValue(obj.value("maxrot").toDouble(60.0));
-        m_lineReachDistSpin->setValue(obj.value("reachdist").toDouble(0.1));
-        m_lineReachAngleSpin->setValue(obj.value("reachangle").toDouble(0.5));
-        m_lineRoadWidthSpin->setValue(obj.value("width").toDouble(4.0));
+        const auto &mc = MotionConfigManager::instance();
+        m_lineMaxSpeedSpin->setRange(0.01, mc.maxSpeed());
+        m_lineMaxAccSpin->setRange(0.01, mc.maxAcceleration());
+        m_lineMaxDecSpin->setRange(0.01, mc.maxDeceleration());
+        m_lineMaxRotSpin->setRange(1.0, mc.maxAngularSpeedDeg());
+        m_lineReachDistSpin->setRange(0.01, qMax(1.0, mc.arrivalDistanceTolerance()));
+        m_lineReachAngleSpin->setRange(0.1, qMax(45.0, mc.arrivalAngleToleranceDeg()));
+        m_lineRoadWidthSpin->setRange(0.5, qMax(10.0, mc.routeWidth()));
+
+        m_lineMaxSpeedSpin->setValue(mc.clampLinearSpeed(obj.value("maxspeed").toDouble(mc.maxSpeed())));
+        m_lineMaxAccSpin->setValue(qMin(obj.value("maxacc").toDouble(mc.maxAcceleration()), mc.maxAcceleration()));
+        m_lineMaxDecSpin->setValue(qMin(obj.value("maxdec").toDouble(mc.maxDeceleration()), mc.maxDeceleration()));
+        m_lineMaxRotSpin->setValue(qMin(obj.value("maxrot").toDouble(mc.maxAngularSpeedDeg()), mc.maxAngularSpeedDeg()));
+        m_lineReachDistSpin->setValue(obj.value("reachdist").toDouble(mc.arrivalDistanceTolerance()));
+        m_lineReachAngleSpin->setValue(obj.value("reachangle").toDouble(mc.arrivalAngleToleranceDeg()));
+        m_lineRoadWidthSpin->setValue(obj.value("width").toDouble(mc.routeWidth()));
     }
 
     m_propsPanel->setVisible(true);
@@ -2927,10 +2934,11 @@ void MapEditWidget::applyPropsEdit()
         // Line or Curve
         QString newName   = m_lineNameEdit->text().trimmed();
         int newDirect     = m_lineDirectCombo->currentData().toInt();
-        double maxSpeed   = m_lineMaxSpeedSpin->value();
-        double maxAcc     = m_lineMaxAccSpin->value();
-        double maxDec     = m_lineMaxDecSpin->value();
-        double maxRot     = m_lineMaxRotSpin->value();
+        const auto &mc = MotionConfigManager::instance();
+        double maxSpeed   = mc.clampLinearSpeed(m_lineMaxSpeedSpin->value());
+        double maxAcc     = qMin(m_lineMaxAccSpin->value(), mc.maxAcceleration());
+        double maxDec     = qMin(m_lineMaxDecSpin->value(), mc.maxDeceleration());
+        double maxRot     = qMin(m_lineMaxRotSpin->value(), mc.maxAngularSpeedDeg());
         double reachDist  = m_lineReachDistSpin->value();
         double reachAngle = m_lineReachAngleSpin->value();
         double roadWidth  = m_lineRoadWidthSpin->value();
@@ -3268,7 +3276,7 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             QString key = m_draggingNodeType + "_" + m_draggingNodeId;
             if (m_featureItems.contains(key)) {
                 m_selItem = m_featureItems.value(key);
-                applySelectColor(m_selItem);
+                RouteFeatureSelect::applySelectColor(m_selItem);
             }
             return true;
         }
@@ -3613,7 +3621,13 @@ QPointF MapEditWidget::sceneToWorld(double sx, double sy) const
 void MapEditWidget::loadCarList()
 {
     ApiService::instance().listCarAll([this](int code, const QJsonObject &data) {
-        if (code != 200) return;
+        if (code != 200) {
+            // 车列表接口失败时不能静默退出: 否则 m_currentCarId 始终为空、initMqtt() 永不执行，
+            // "设备位置"开关打开后也收不到任何位姿。此处退化为用全局配置的设备号订阅。
+            debugLog(QString("[loadCarList] 请求失败 code=%1 -> 退化为使用全局设备号订阅").arg(code));
+            initMqtt();
+            return;
+        }
         m_carList = data.value("rows").toArray();
 
         // blockSignals: addItem() 会在第一条item加入时立即触发 currentIndexChanged，
@@ -3634,7 +3648,10 @@ void MapEditWidget::loadCarList()
         m_carCombo->setCurrentIndex(idx >= 0 ? idx : (m_carCombo->count() > 0 ? 0 : -1));
         m_carCombo->blockSignals(false);
 
-        if (m_carCombo->count() > 0) { m_currentCarId = m_carCombo->currentData().toString(); initMqtt(); }
+        // 无论列表是否为空都要订阅位姿: initMqtt() 内部会退化为全局配置/默认设备号，
+        // 否则列表为空时"设备位置"开关永远收不到位姿
+        if (m_carCombo->count() > 0) m_currentCarId = m_carCombo->currentData().toString();
+        initMqtt();
     });
     connect(m_carCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         disconnectMqtt();
@@ -3740,6 +3757,12 @@ void MapEditWidget::updateRobotMarker()
 {
     if (!m_robotItem) return;
     if (!m_showRobotPosition || !m_hasCarPose) {
+        // 开关已开但仍无位姿时记录一次，便于排查订阅/上报问题 (限频避免刷屏)
+        static int s_warnCount = 0;
+        if (m_showRobotPosition && !m_hasCarPose && s_warnCount < 3) {
+            ++s_warnCount;
+            debugLog(QString("[设备位置] 开关已打开但未收到设备位姿 (车号=%1)").arg(m_currentCarId));
+        }
         m_robotItem->setVisible(false);
         return;
     }

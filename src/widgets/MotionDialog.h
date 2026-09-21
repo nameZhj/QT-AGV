@@ -31,6 +31,10 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+
+public slots:
+    void refreshSpeedLimits();
 
 private slots:
     void onSendClicked();
@@ -46,7 +50,6 @@ private:
     void setRunningState(bool running, bool paused = false);
     void setCompletedState();
     void setCanceledState();
-    QString currentCarId() const;
 
     // 窗口拖拽
     bool   m_dragging = false;

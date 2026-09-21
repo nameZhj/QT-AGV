@@ -321,11 +321,6 @@ void CreateMapWidget::showEvent(QShowEvent *event)
         m_directionPad->move(16, qMax(16, m_mapCanvas->height() - m_directionPad->height() - 16));
         m_directionPad->raise();
     }
-
-    // 页面显示时保证遥控状态就绪
-    if (!TeleopController::instance().isActive()) {
-        TeleopController::instance().setActive(true);
-    }
 }
 
 bool CreateMapWidget::eventFilter(QObject *watched, QEvent *event)

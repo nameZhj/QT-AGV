@@ -1,6 +1,7 @@
 #include "ManualControlConfigDialog.h"
 #include "core/TeleopController.h"
 #include "core/ApiService.h"
+#include "core/MotionConfigManager.h"
 #include <QDebug>
 
 #include <QVBoxLayout>
@@ -25,16 +26,19 @@ ManualControlConfigDialog::ManualControlConfigDialog(QWidget *parent)
 
     setupUI();
 
-    // 读取当前速度配置
+    // 读取当前速度配置并严格限制在全局最大速度之内
     double curLinear = TeleopController::instance().baseLinearSpeed();
     double curAngularRad = TeleopController::instance().baseAngularSpeed();
     double curAngularDeg = curAngularRad * 180.0 / M_PI;
 
+    const double globalMaxLinear = MotionConfigManager::instance().maxSpeed();
+    const double globalMaxAngular = MotionConfigManager::instance().maxAngularSpeedDeg();
+
     if (m_linearSpin) {
-        m_linearSpin->setValue(qBound(0.05, curLinear, kGlobalMaxLinearSpeed));
+        m_linearSpin->setValue(qBound(0.01, curLinear, globalMaxLinear));
     }
     if (m_angularSpin) {
-        m_angularSpin->setValue(qBound(1.00, curAngularDeg, kGlobalMaxAngularSpeed));
+        m_angularSpin->setValue(qBound(1.00, curAngularDeg, globalMaxAngular));
     }
 }
 
@@ -106,8 +110,11 @@ void ManualControlConfigDialog::setupUI()
     linearGrid->setHorizontalSpacing(10);
     linearGrid->setVerticalSpacing(10);
 
+    const double curGlobalLinear = MotionConfigManager::instance().maxSpeed();
+    const double curGlobalAngular = MotionConfigManager::instance().maxAngularSpeedDeg();
+
     auto *globalLinearTitle = new QLabel("全局最大速度:");
-    auto *globalLinearVal   = new QLabel(QString::asprintf("%.3f", kGlobalMaxLinearSpeed));
+    auto *globalLinearVal   = new QLabel(QString::asprintf("%.3f", curGlobalLinear));
     globalLinearVal->setStyleSheet("color: #ffffff; font-weight: bold; font-family: Consolas;");
     auto *globalLinearUnit  = new QLabel("m/s");
     globalLinearUnit->setStyleSheet("color: #8898a8;");
@@ -119,9 +126,9 @@ void ManualControlConfigDialog::setupUI()
     auto *manualLinearTitle = new QLabel("最大速度:");
     m_linearSpin = new QDoubleSpinBox(this);
     m_linearSpin->setDecimals(2);
-    m_linearSpin->setRange(0.05, kGlobalMaxLinearSpeed);
+    m_linearSpin->setRange(0.01, curGlobalLinear);
     m_linearSpin->setSingleStep(0.05);
-    m_linearSpin->setValue(0.50);
+    m_linearSpin->setValue(qMin(0.50, curGlobalLinear));
 
     auto *manualLinearUnit  = new QLabel("m/s");
     manualLinearUnit->setStyleSheet("color: #8898a8;");
@@ -145,7 +152,7 @@ void ManualControlConfigDialog::setupUI()
     angularGrid->setVerticalSpacing(10);
 
     auto *globalAngularTitle = new QLabel("全局最大转速度:");
-    auto *globalAngularVal   = new QLabel(QString::asprintf("%.3f", kGlobalMaxAngularSpeed));
+    auto *globalAngularVal   = new QLabel(QString::asprintf("%.3f", curGlobalAngular));
     globalAngularVal->setStyleSheet("color: #ffffff; font-weight: bold; font-family: Consolas;");
     auto *globalAngularUnit  = new QLabel("°/s");
     globalAngularUnit->setStyleSheet("color: #8898a8;");
@@ -157,9 +164,9 @@ void ManualControlConfigDialog::setupUI()
     auto *manualAngularTitle = new QLabel("最大转速度:");
     m_angularSpin = new QDoubleSpinBox(this);
     m_angularSpin->setDecimals(2);
-    m_angularSpin->setRange(1.00, kGlobalMaxAngularSpeed);
+    m_angularSpin->setRange(1.00, curGlobalAngular);
     m_angularSpin->setSingleStep(5.00);
-    m_angularSpin->setValue(45.00);
+    m_angularSpin->setValue(qMin(45.00, curGlobalAngular));
 
     auto *manualAngularUnit  = new QLabel("°/s");
     manualAngularUnit->setStyleSheet("color: #8898a8;");
@@ -201,15 +208,19 @@ void ManualControlConfigDialog::setupUI()
     mainLayout->addLayout(btnLayout);
 
     // ── 底部安全提示文字 (粉红色) ──
-    auto *noteLabel = new QLabel("注: 安全起见，实际速度将取手动控制最大速度及全局最大速度的较小值。", this);
+    auto *noteLabel = new QLabel("注: 安全起见，实际速度受全局最大速度限制，不可超速。", this);
     noteLabel->setStyleSheet("color: #d63384; font-size: 11px; padding-top: 2px;");
     mainLayout->addWidget(noteLabel);
 }
 
 void ManualControlConfigDialog::onConfirm()
 {
-    const double linear = m_linearSpin ? m_linearSpin->value() : 0.50;
-    const double angularDeg = m_angularSpin ? m_angularSpin->value() : 45.00;
+    const double rawLinear = m_linearSpin ? m_linearSpin->value() : 0.50;
+    const double rawAngularDeg = m_angularSpin ? m_angularSpin->value() : 45.00;
+
+    // 严格限制不可超速
+    const double linear = MotionConfigManager::instance().clampLinearSpeed(rawLinear);
+    const double angularDeg = MotionConfigManager::instance().clampSignedAngularSpeedDeg(rawAngularDeg);
     const double angularRad = angularDeg * M_PI / 180.0;
 
     // 1. 立即保存并对运动生效 (MQTT与本地遥控)

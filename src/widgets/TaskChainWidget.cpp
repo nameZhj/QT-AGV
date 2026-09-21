@@ -2,7 +2,7 @@
 #include "core/Toast.h"
 #include "core/AppConfig.h"
 #include "core/ApiService.h"
-#include "core/MqttService.h"
+#include "core/MotionConfigManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -19,6 +19,43 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QStyle>
+#include <QEventLoop>
+#include <QTimer>
+
+// ── 音频名称下拉支持 ────────────────────────────────────────────────────────
+
+QString TaskChainWidget::audioDisplayName(const QString &fullName)
+{
+    // 去掉扩展名后按最后一个 '-' 截断:
+    // sample-3s-20260921164924149.wav -> sample-3s
+    const QString base = QFileInfo(fullName).completeBaseName();
+    const int idx = base.lastIndexOf('-');
+    return idx > 0 ? base.left(idx) : base;
+}
+
+QStringList TaskChainWidget::fetchAudioFiles(int timeoutMs)
+{
+    QStringList files;
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+    ApiService::instance().listAudio([&](int code, const QJsonObject &resp) {
+        if (code == 200) {
+            const QJsonArray rows = resp.value("data").toArray();
+            for (const QJsonValue &v : rows) {
+                const QString name = QFileInfo(v.toString().trimmed()).fileName();
+                if (!name.isEmpty()) files << name;
+            }
+        }
+        loop.quit();
+    });
+
+    timer.start(timeoutMs);
+    loop.exec();
+    return files;
+}
 
 // 参考 RoboTaskChain 插件 — 四块面板布局
 // 面板1(左): 任务列表 — 新建/加载/保存
@@ -569,11 +606,22 @@ void TaskChainWidget::createChainRowWidget(QListWidgetItem *item, int chainIndex
                 QStringLiteral("确定删除 [%1] 任务链吗？").arg(m_chains[chainIndex].name)) !=
                 QMessageBox::Yes)
             return;
+
+        QString chainName = m_chains[chainIndex].name;
         m_chains.removeAt(chainIndex);
         // 重建列表 (index 需要重新排列)
         refreshChainList();
         refreshTaskList();
         refreshGroupList();
+
+        // 同步删除服务端任务链文件 (DELETE /task/chain/{fileName})
+        QString fileName = chainName;
+        if (!fileName.endsWith(".json", Qt::CaseInsensitive)) fileName += ".json";
+        ApiService::instance().deleteTaskChain(fileName, [this, fileName](int code, const QJsonObject &) {
+            if (code == 200) {
+                updateStatus(QStringLiteral("已删除服务端任务链文件: %1").arg(fileName));
+            }
+        });
     });
 
     item->setSizeHint(QSize(0, 36));
@@ -992,7 +1040,7 @@ void TaskChainWidget::initActionDefs()
     // 4. 播放音频
     def = {"播放音频", "audio"};
     def.params = {
-        {"audioName", "音频名称:", "text", {}, "(无需加后缀)", 0},
+        {"audioName", "音频名称:", "audio_combo", {}, "选择音频文件", 0},
         {"loop", "循环播放:", "combo", {"否", "是"}, "", 0},
     };
     m_actionDefs.append(def);
@@ -1007,7 +1055,9 @@ void TaskChainWidget::initActionDefs()
 
     // 6. 停止播放音频
     def = {"停止播放音频", "audio"};
-    def.params = {};
+    def.params = {
+        {"audioName", "音频名称:", "audio_combo", {}, "选择音频文件", 0},
+    };
     m_actionDefs.append(def);
 }
 
@@ -1049,9 +1099,22 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
             input = edit;
         } else if (param.type == "double") {
             auto *spin = new QDoubleSpinBox;
-            spin->setRange(-99999, 99999);
+            const auto &mc = MotionConfigManager::instance();
+            if (param.key == "speed" || param.unit == "m/s") {
+                spin->setRange(0.01, mc.maxSpeed());
+                spin->setSingleStep(0.05);
+                spin->setValue(mc.clampLinearSpeed(existingVal.toDouble(param.defaultValue)));
+                spin->setToolTip(QStringLiteral("受全局最大速度限制 (上限: %1 m/s)").arg(mc.maxSpeed()));
+            } else if (param.unit == "rad/s" || (param.key == "speed" && def.name.contains("转"))) {
+                spin->setRange(0.01, mc.maxAngularSpeedRad());
+                spin->setSingleStep(0.05);
+                spin->setValue(mc.clampAngularSpeedRad(existingVal.toDouble(param.defaultValue)));
+                spin->setToolTip(QStringLiteral("受全局最大角速度限制 (上限: %1 rad/s)").arg(mc.maxAngularSpeedRad(), 0, 'f', 3));
+            } else {
+                spin->setRange(-99999, 99999);
+                spin->setValue(existingVal.toDouble(param.defaultValue));
+            }
             spin->setDecimals(3);
-            spin->setValue(existingVal.toDouble(param.defaultValue));
             if (!param.unit.isEmpty()) spin->setSuffix(" " + param.unit);
             spin->setStyleSheet("QDoubleSpinBox{background:#22272d;border:1px solid #2a3038;border-radius:3px;padding:5px;color:#c0c8d0;font-size:12px;}");
             input = spin;
@@ -1067,6 +1130,33 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
             combo->addItems(param.options);
             int idx = combo->findText(existingVal.toString());
             if (idx >= 0) combo->setCurrentIndex(idx);
+            combo->setStyleSheet("QComboBox{background:#22272d;border:1px solid #2a3038;border-radius:3px;padding:5px;color:#c0c8d0;font-size:12px;}");
+            input = combo;
+        } else if (param.type == "audio_combo") {
+            // 音频名称: 数据来自服务端音频列表, 显示截断名, 实际保存完整文件名
+            auto *combo = new QComboBox;
+            const QStringList files = fetchAudioFiles();
+            if (!files.isEmpty()) m_audioFiles = files;
+
+            for (const QString &full : m_audioFiles) {
+                combo->addItem(audioDisplayName(full), full);
+                combo->setItemData(combo->count() - 1, full, Qt::ToolTipRole);
+            }
+
+            const QString cur = existingVal.toString();
+            int idx = -1;
+            for (int i = 0; i < combo->count(); ++i) {
+                if (combo->itemData(i).toString() == cur) { idx = i; break; }
+            }
+            if (idx < 0 && !cur.isEmpty()) {
+                // 列表中找不到 (如服务端已删除) 时保留原完整文件名
+                combo->addItem(audioDisplayName(cur), cur);
+                combo->setItemData(combo->count() - 1, cur, Qt::ToolTipRole);
+                idx = combo->count() - 1;
+            }
+            if (idx < 0 && combo->count() > 0) idx = 0;
+            if (idx >= 0) combo->setCurrentIndex(idx);
+            combo->setEditable(combo->count() == 0);   // 列表为空时允许手动输入
             combo->setStyleSheet("QComboBox{background:#22272d;border:1px solid #2a3038;border-radius:3px;padding:5px;color:#c0c8d0;font-size:12px;}");
             input = combo;
         } else if (param.type == "station_combo") {
@@ -1128,13 +1218,26 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
             resultParams[param.key] = edit->text();
         } else if (param.type == "double") {
             auto *spin = qobject_cast<QDoubleSpinBox*>(w);
-            resultParams[param.key] = spin->value();
+            double val = spin->value();
+            const auto &mc = MotionConfigManager::instance();
+            if (param.key == "speed" || param.unit == "m/s") {
+                val = mc.clampLinearSpeed(val);
+            } else if (param.unit == "rad/s" || (param.key == "speed" && def.name.contains("转"))) {
+                val = mc.clampAngularSpeedRad(val);
+            }
+            resultParams[param.key] = val;
         } else if (param.type == "int") {
             auto *spin = qobject_cast<QSpinBox*>(w);
             resultParams[param.key] = spin->value();
         } else if (param.type == "combo") {
             auto *combo = qobject_cast<QComboBox*>(w);
             resultParams[param.key] = combo->currentText();
+        } else if (param.type == "audio_combo") {
+            auto *combo = qobject_cast<QComboBox*>(w);
+            // 保存的是完整文件名 (itemData), 列表为空手输时退化为输入内容
+            QString full = combo->currentData().toString();
+            if (full.isEmpty()) full = combo->currentText().trimmed();
+            resultParams[param.key] = full;
         } else if (param.type == "station_combo") {
             auto *combo = qobject_cast<QComboBox*>(w);
             QString stationName = combo->currentText();
@@ -1219,18 +1322,17 @@ void TaskChainWidget::updateStatus(const QString &text)
 
 void TaskChainWidget::onChainNew()
 {
-    // 基于规范格式自动生成: task_yyyyMMdd00001 (如 task_2026080400001)
-    QString dateStr = QDateTime::currentDateTime().toString("yyyyMMdd");
+    // 任务链名称即服务端文件名, 必须全局唯一: task_<时间戳>_<序号>
+    const QString base = QString("task_%1").arg(QDateTime::currentMSecsSinceEpoch());
     int seq = 1;
     for (const auto &c : m_chains) {
-        if (c.name.startsWith("task_" + dateStr)) {
-            QString numPart = c.name.mid(5 + dateStr.length());
+        if (c.name.startsWith(base + "_")) {
             bool ok = false;
-            int n = numPart.toInt(&ok);
+            int n = c.name.mid(base.length() + 1).toInt(&ok);
             if (ok && n >= seq) seq = n + 1;
         }
     }
-    QString name = QString("task_%1%2").arg(dateStr).arg(seq, 5, 10, QChar('0'));
+    QString name = QString("%1_%2").arg(base).arg(seq);
 
     ChainData data;
     data.name = name;
@@ -1309,35 +1411,48 @@ void TaskChainWidget::onChainLoad()
     refreshChainList();
     selectChain(m_chains.size() - 1);
     updateStatus(QStringLiteral("已成功加载任务链: %1").arg(loadedChain.name));
-    Toast::success(this, QStringLiteral("已成功载入任务链数据"));
+
+    // 同步上传至服务端任务链目录 (POST /task/chain/save, multipart 字段 taskFile)
+    ApiService::instance().saveTaskChain(filePath, [this](int code, const QJsonObject &resp) {
+        if (code == 200) {
+            updateStatus(QStringLiteral("任务链已加载并同步上传至服务器"));
+            Toast::success(this, QStringLiteral("任务链已载入并上传至服务器"));
+        } else {
+            Toast::error(this, QStringLiteral("任务链上传失败(%1): %2")
+                .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+        }
+    });
 }
 
 void TaskChainWidget::onChainSave()
 {
-    int idx = currentChainIndex();
-    if (idx < 0) {
+    if (m_chains.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("提示"),
-            QStringLiteral("未选择需要保存的任务链"));
+            QStringLiteral("任务链列表为空, 无可保存数据"));
         return;
     }
-    QString defaultName = m_chains[idx].name;
-    if (!defaultName.endsWith(".json")) defaultName += ".json";
 
-    QString filePath = QFileDialog::getSaveFileName(this, QStringLiteral("保存任务链 JSON"), defaultName, "JSON Files (*.json *.task)");
-    if (filePath.isEmpty()) return;
-
-    QJsonObject json = exportChainToJson(m_chains[idx]);
-    QJsonDocument doc(json);
-
-    QFile file(filePath);
-    if (file.open(QIODevice::WriteOnly)) {
-        file.write(doc.toJson(QJsonDocument::Indented));
-        file.close();
-        updateStatus(QStringLiteral("已保存任务链: %1").arg(QFileInfo(filePath).fileName()));
-        Toast::success(this, QStringLiteral("任务链已保存为 JSON 文件"));
-    } else {
-        QMessageBox::warning(this, QStringLiteral("错误"), QStringLiteral("保存文件失败"));
+    // 一次性保存列表中所有任务链: POST /task/chain/batchSave
+    // Body: [{"fileName": 任务链名称, "fileContent": 该任务链全部数据}]
+    QJsonArray chains;
+    for (const auto &chain : m_chains) {
+        QJsonObject item;
+        item["fileName"]    = chain.name;
+        item["fileContent"] = exportChainToJson(chain);
+        chains.append(item);
     }
+
+    updateStatus(QStringLiteral("正在保存任务链列表 (%1 条)...").arg(chains.size()));
+    ApiService::instance().batchSaveTaskChain(chains,
+        [this, count = chains.size()](int code, const QJsonObject &resp) {
+            if (code == 200) {
+                updateStatus(QStringLiteral("已保存任务链列表: %1 条").arg(count));
+                Toast::success(this, QStringLiteral("已保存 %1 条任务链到服务器").arg(count));
+            } else {
+                Toast::error(this, QStringLiteral("任务链保存失败(%1): %2")
+                    .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+            }
+        });
 }
 
 void TaskChainWidget::onChainItemChanged(QListWidgetItem *current)
@@ -1570,38 +1685,21 @@ void TaskChainWidget::onGroupSendSelected()
         return;
     }
 
-    QString carId = AppConfig::instance().currentDevice().carId;
-    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
-    if (carId.isEmpty()) carId = "1";
-
-    QByteArray payload = QJsonDocument(chainJson).toJson(QJsonDocument::Compact);
-
-    // 1. MQTT 发布至小车任务链主题
-    MqttService::instance().publish(QString("/rob/%1/task_chain").arg(carId), payload);
-    MqttService::instance().publish(QString("/rob/%1/task").arg(carId), payload);
-
-    // 2. HTTP 接口同步下发任务
-    ApiService::instance().loadTask(chainJson, [this](int, const QJsonObject &) {});
-
-    // 3. 同时触发首个动作向 8061 控制器执行
-    for (const auto &subVal : subTasks) {
-        QJsonObject subObj = subVal.toObject();
-        QJsonArray groups = subObj.value("group_info").toArray();
-        for (const auto &gVal : groups) {
-            QJsonObject gObj = gVal.toObject();
-            QJsonArray acts = gObj.value("actions").toArray();
-            if (!acts.isEmpty()) {
-                executeSingleAction(acts[0].toObject());
-                break;
-            }
-        }
-        break;
-    }
+    // 序列化为标准任务链字符串并下发 (POST /task/chain/sendTask)
+    QString chainString = QString::fromUtf8(QJsonDocument(chainJson).toJson(QJsonDocument::Compact));
 
     m_execStatus = Running;
     updateBottomBar();
-    updateStatus(QStringLiteral("已按规范下发任务链数据并联动控制器: %1 (包含 %2 个子任务)").arg(m_chains[idx].name).arg(subTasks.size()));
-    Toast::success(this, QStringLiteral("任务链数据已成功下发至设备"));
+    updateStatus(QStringLiteral("正在下发任务链 (勾选子任务): %1").arg(m_chains[idx].name));
+
+    ApiService::instance().sendTaskChain(chainString, true, [this](int code, const QJsonObject &resp) {
+        if (code == 200) {
+            Toast::success(this, QStringLiteral("任务链数据已成功下发至设备"));
+        } else {
+            Toast::error(this, QStringLiteral("任务链下发失败(%1): %2")
+                .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+        }
+    });
 }
 
 void TaskChainWidget::onGroupSendAll()
@@ -1620,38 +1718,21 @@ void TaskChainWidget::onGroupSendAll()
         return;
     }
 
-    QString carId = AppConfig::instance().currentDevice().carId;
-    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
-    if (carId.isEmpty()) carId = "1";
-
-    QByteArray payload = QJsonDocument(chainJson).toJson(QJsonDocument::Compact);
-
-    // 1. MQTT 发布至小车任务链主题
-    MqttService::instance().publish(QString("/rob/%1/task_chain").arg(carId), payload);
-    MqttService::instance().publish(QString("/rob/%1/task").arg(carId), payload);
-
-    // 2. HTTP 接口同步下发任务
-    ApiService::instance().loadTask(chainJson, [this](int, const QJsonObject &) {});
-
-    // 3. 同时触发首个动作向 8061 控制器执行
-    for (const auto &subVal : subTasks) {
-        QJsonObject subObj = subVal.toObject();
-        QJsonArray groups = subObj.value("group_info").toArray();
-        for (const auto &gVal : groups) {
-            QJsonObject gObj = gVal.toObject();
-            QJsonArray acts = gObj.value("actions").toArray();
-            if (!acts.isEmpty()) {
-                executeSingleAction(acts[0].toObject());
-                break;
-            }
-        }
-        break;
-    }
+    // 序列化为标准任务链字符串并下发全部 (POST /task/chain/sendTask)
+    QString chainString = QString::fromUtf8(QJsonDocument(chainJson).toJson(QJsonDocument::Compact));
 
     m_execStatus = Running;
     updateBottomBar();
-    updateStatus(QStringLiteral("已按规范下发全部任务链数据并联动控制器: %1 (包含 %2 个子任务)").arg(m_chains[idx].name).arg(subTasks.size()));
-    Toast::success(this, QStringLiteral("全部任务链数据已成功下发至设备"));
+    updateStatus(QStringLiteral("正在下发任务链 (全部子任务): %1").arg(m_chains[idx].name));
+
+    ApiService::instance().sendTaskChain(chainString, true, [this](int code, const QJsonObject &resp) {
+        if (code == 200) {
+            Toast::success(this, QStringLiteral("全部任务链数据已成功下发至设备"));
+        } else {
+            Toast::error(this, QStringLiteral("任务链下发失败(%1): %2")
+                .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+        }
+    });
 }
 
 // ── 面板4: 可拖拽标签 ──
@@ -1975,6 +2056,11 @@ QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool only
                     action["height"]    = params.contains("height") ? params.value("height").toDouble() : rawAction.value("height").toDouble(0.05);
                 } else if (actionType == "5") {
                     // 停止播放音频
+                    QString audioName = params.value("audioName").toString();
+                    if (audioName.isEmpty()) audioName = params.value("audio_name").toString();
+                    if (audioName.isEmpty()) audioName = rawAction.value("audio_name").toString();
+                    if (audioName.isEmpty()) audioName = rawAction.value("audioName").toString();
+                    action["audio_name"] = audioName;
                 } else {
                     for (auto it = params.begin(); it != params.end(); ++it) {
                         if (it.key() != "checked" && it.key() != "target" && it.key() != "id") {
@@ -2113,7 +2199,8 @@ void TaskChainWidget::executeSingleAction(const QJsonObject &action)
             p["goal_node"] = targetStation;
         }
         p["index"]      = 1;
-        p["path_speed"] = 0.5;
+        double navSpd   = action.value("speed").toDouble(0.5);
+        p["path_speed"] = MotionConfigManager::instance().clampLinearSpeed(navSpd <= 0.01 ? MotionConfigManager::instance().maxSpeed() : navSpd);
         paths.append(p);
         d["robot_paths"] = paths;
         fixPath["data"] = d;
@@ -2126,7 +2213,7 @@ void TaskChainWidget::executeSingleAction(const QJsonObject &action)
         // 平动: 按照文档规范调用控制器 set_action_control (action_type: 6)
         QString dir = action.value("direction").toString("前进");
         double dist = action.value("distance").toDouble(1.0);
-        double spd  = action.value("speed").toDouble(0.2);
+        double spd  = MotionConfigManager::instance().clampLinearSpeed(action.value("speed").toDouble(0.2));
 
         double vx = 0.0, vy = 0.0, sendDist = dist;
         if (dir == "前进") {
@@ -2147,7 +2234,7 @@ void TaskChainWidget::executeSingleAction(const QJsonObject &action)
         // 转动: 按照文档规范调用控制器 set_action_control (action_type: 5)
         QString dir = action.value("direction").toString("顺时针(右转)");
         double deg  = action.value("angle").toDouble(90.0);
-        double spd  = action.value("speed").toDouble(0.5);
+        double spd  = MotionConfigManager::instance().clampAngularSpeedRad(action.value("speed").toDouble(0.5));
 
         double angleRad = deg * M_PI / 180.0;
         if (dir.contains("顺时针") || dir.contains("右转")) {
@@ -2175,21 +2262,27 @@ void TaskChainWidget::executeSingleAction(const QJsonObject &action)
 
 void TaskChainWidget::onSuspendResume()
 {
-    QString carId = AppConfig::instance().currentDevice().carId;
-    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
-    if (carId.isEmpty()) carId = "1";
-
     if (m_execStatus == Running) {
         m_execStatus = Suspended;
-        ApiService::instance().suspendRobot([](int, const QJsonObject &) {});
-        MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
-        updateStatus(QStringLiteral("任务链已向控制器发送暂停指令"));
+        // PUT /task/chain/control?command=pause navigation
+        ApiService::instance().controlTaskChain(QStringLiteral("pause navigation"), [this](int code, const QJsonObject &resp) {
+            if (code != 200) {
+                Toast::error(this, QStringLiteral("暂停失败(%1): %2")
+                    .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+            }
+        });
+        updateStatus(QStringLiteral("任务链已向服务端发送暂停指令"));
         Toast::info(this, QStringLiteral("任务链已暂停"));
     } else if (m_execStatus == Suspended) {
         m_execStatus = Running;
-        ApiService::instance().continueRobot([](int, const QJsonObject &) {});
-        MqttService::instance().publish(QString("/rob/%1/navigationContinue").arg(carId), "1");
-        updateStatus(QStringLiteral("任务链已向控制器发送继续指令"));
+        // PUT /task/chain/control?command=continue navigation
+        ApiService::instance().controlTaskChain(QStringLiteral("continue navigation"), [this](int code, const QJsonObject &resp) {
+            if (code != 200) {
+                Toast::error(this, QStringLiteral("继续失败(%1): %2")
+                    .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+            }
+        });
+        updateStatus(QStringLiteral("任务链已向服务端发送继续指令"));
         Toast::success(this, QStringLiteral("任务链已继续"));
     }
     updateBottomBar();
@@ -2197,14 +2290,15 @@ void TaskChainWidget::onSuspendResume()
 
 void TaskChainWidget::onCancelChain()
 {
-    QString carId = AppConfig::instance().currentDevice().carId;
-    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
-    if (carId.isEmpty()) carId = "1";
-
     m_execStatus = NotStarted;
-    ApiService::instance().stopRobotTask(false, [](int, const QJsonObject &) {});
-    MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
-    updateStatus(QStringLiteral("任务链已向控制器发送取消任务指令"));
+    // PUT /task/chain/control?command=stop navigation
+    ApiService::instance().controlTaskChain(QStringLiteral("stop navigation"), [this](int code, const QJsonObject &resp) {
+        if (code != 200) {
+            Toast::error(this, QStringLiteral("结束失败(%1): %2")
+                .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+        }
+    });
+    updateStatus(QStringLiteral("任务链已向服务端发送结束指令"));
     Toast::info(this, QStringLiteral("任务链已取消"));
     updateBottomBar();
 }

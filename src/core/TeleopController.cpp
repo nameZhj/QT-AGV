@@ -1,6 +1,7 @@
 #include "TeleopController.h"
 #include "core/AppConfig.h"
 #include "core/MqttService.h"
+#include "core/MotionConfigManager.h"
 
 #include <QApplication>
 #include <QTimer>
@@ -28,10 +29,14 @@ TeleopController::TeleopController(QObject *parent)
     m_timer->setInterval(kDefaultTickIntervalMs);
     connect(m_timer, &QTimer::timeout, this, &TeleopController::onTick);
 
-    // 读取持久化速度设置 (默认线速度 0.50 m/s，默认角速度 45.0 °/s 对应约 0.785 rad/s)
+    // 读取持久化速度设置，并受全局最大速度约束
     QSettings s;
-    m_baseLinearSpeed  = s.value(QStringLiteral("teleop/baseLinearSpeed"), kDefaultBaseLinear).toDouble();
-    m_baseAngularSpeed = s.value(QStringLiteral("teleop/baseAngularSpeed"), 45.0 * 3.14159265358979323846 / 180.0).toDouble();
+    double maxLin = MotionConfigManager::instance().maxSpeed();
+    double maxAng = MotionConfigManager::instance().maxAngularSpeedRad();
+    double savedLin = s.value(QStringLiteral("teleop/baseLinearSpeed"), kDefaultBaseLinear).toDouble();
+    double savedAng = s.value(QStringLiteral("teleop/baseAngularSpeed"), 45.0 * 3.14159265358979323846 / 180.0).toDouble();
+    m_baseLinearSpeed  = qBound(0.01, savedLin, maxLin);
+    m_baseAngularSpeed = qBound(0.01, savedAng, maxAng);
 }
 
 TeleopController::~TeleopController()
@@ -43,8 +48,10 @@ TeleopController::~TeleopController()
 
 void TeleopController::setBaseSpeeds(double linear, double angular)
 {
-    m_baseLinearSpeed  = qMax(0.01, linear);
-    m_baseAngularSpeed = qMax(0.01, angular);
+    double maxLin = MotionConfigManager::instance().maxSpeed();
+    double maxAng = MotionConfigManager::instance().maxAngularSpeedRad();
+    m_baseLinearSpeed  = qBound(0.01, linear, maxLin);
+    m_baseAngularSpeed = qBound(0.01, angular, maxAng);
 
     QSettings s;
     s.setValue(QStringLiteral("teleop/baseLinearSpeed"), m_baseLinearSpeed);
@@ -260,9 +267,10 @@ bool TeleopController::handleKeyEvent(QKeyEvent *event, bool pressed)
 
 void TeleopController::setVirtualKey(int key, bool pressed)
 {
-    if (!m_active && pressed) {
-        setActive(true);
-    }
+    // 未抢占控制权时忽略方向/转向虚拟键: 控制权必须由用户显式抢占 (点击"抢占控制权"/
+    // "启用遥控")，禁止任何按键操作被动接管车辆控制权。
+    // 例外: 刹车(空格 / 方向键盘中心方块)是安全动作，任何时候都可用，无需抢占控制权
+    if (!m_active && key != Qt::Key_Space) return;
 
     switch (key) {
     case Qt::Key_W:
@@ -294,6 +302,13 @@ void TeleopController::setVirtualKey(int key, bool pressed)
             m_keyBrake = pressed;
             emit keyStateChanged(Qt::Key_Space, pressed);
             emit brakeChanged(m_keyBrake);
+
+            // 未抢占控制权时主定时器未运行，按住刹车期间临时启动它，
+            // 使其与"空格刹车"一致: 按住期间持续下发零速，松开即恢复
+            if (!m_active) {
+                if (pressed) m_timer->start();
+                else         m_timer->stop();
+            }
         }
         break;
     default:
@@ -362,15 +377,17 @@ void TeleopController::updateMotion()
         return;
     }
 
-    // 计算加速倍率与当前目标速度
+    // 计算加速倍率与当前目标速度 (严格受全局最大速度限制不可超速)
     const double mult = 1.0 + (static_cast<double>(m_ctrlHeldTicks) / kBoostMaxTicks) * (m_maxBoostMultiplier - 1.0);
+    const double maxLin = MotionConfigManager::instance().maxSpeed();
+    const double maxAng = MotionConfigManager::instance().maxAngularSpeedRad();
 
     double linear  = 0.0;
     double angular = 0.0;
-    if (m_keyForward)  linear  =  m_baseLinearSpeed * mult;
-    if (m_keyBack)     linear  = -m_baseLinearSpeed * mult;
-    if (m_keyLeft)     angular =  m_baseAngularSpeed * mult;
-    if (m_keyRight)    angular = -m_baseAngularSpeed * mult;
+    if (m_keyForward)  linear  =  qMin(m_baseLinearSpeed * mult, maxLin);
+    if (m_keyBack)     linear  = -qMin(m_baseLinearSpeed * mult, maxLin);
+    if (m_keyLeft)     angular =  qMin(m_baseAngularSpeed * mult, maxAng);
+    if (m_keyRight)    angular = -qMin(m_baseAngularSpeed * mult, maxAng);
 
     const double linRounded = qRound(linear * 1000.0) / 1000.0;
     const double angRounded = qRound(angular * 1000.0) / 1000.0;

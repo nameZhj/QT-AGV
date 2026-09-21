@@ -1,8 +1,7 @@
 #include "MotionDialog.h"
-#include "core/AppConfig.h"
-#include "core/MqttService.h"
 #include "core/ApiService.h"
 #include "core/RobotInfoManager.h"
+#include "core/MotionConfigManager.h"
 #include "core/Toast.h"
 
 #include <QVBoxLayout>
@@ -17,7 +16,6 @@
 #include <QFrame>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <cmath>
 
@@ -36,10 +34,13 @@ MotionDialog::MotionDialog(QWidget *parent)
 
     connect(&RobotInfoManager::instance(), &RobotInfoManager::currentRobotInfoUpdated,
             this, &MotionDialog::onCurrentRobotInfoUpdated);
+    connect(&MotionConfigManager::instance(), &MotionConfigManager::configChanged,
+            this, &MotionDialog::refreshSpeedLimits);
 
     m_motionWatchdog.setSingleShot(true);
     connect(&m_motionWatchdog, &QTimer::timeout, this, &MotionDialog::onMotionTimeout);
 
+    refreshSpeedLimits();
     setCanceledState();
 }
 
@@ -73,6 +74,34 @@ void MotionDialog::mouseReleaseEvent(QMouseEvent *event)
 {
     m_dragging = false;
     QDialog::mouseReleaseEvent(event);
+}
+
+void MotionDialog::showEvent(QShowEvent *event)
+{
+    QDialog::showEvent(event);
+    refreshSpeedLimits();
+}
+
+void MotionDialog::refreshSpeedLimits()
+{
+    const double maxSpd = MotionConfigManager::instance().maxSpeed();
+    if (m_transVxSpin) {
+        m_transVxSpin->setRange(-maxSpd, maxSpd);
+        if (m_transVxSpin->value() > maxSpd) m_transVxSpin->setValue(maxSpd);
+        if (m_transVxSpin->value() < -maxSpd) m_transVxSpin->setValue(-maxSpd);
+    }
+    if (m_transVySpin) {
+        m_transVySpin->setRange(-maxSpd, maxSpd);
+        if (m_transVySpin->value() > maxSpd) m_transVySpin->setValue(maxSpd);
+        if (m_transVySpin->value() < -maxSpd) m_transVySpin->setValue(-maxSpd);
+    }
+
+    const double maxAngular = MotionConfigManager::instance().maxAngularSpeedDeg();
+    if (m_rotSpeedSpin) {
+        m_rotSpeedSpin->setRange(-maxAngular, maxAngular);
+        if (m_rotSpeedSpin->value() > maxAngular) m_rotSpeedSpin->setValue(maxAngular);
+        if (m_rotSpeedSpin->value() < -maxAngular) m_rotSpeedSpin->setValue(-maxAngular);
+    }
 }
 
 void MotionDialog::setupUi()
@@ -301,8 +330,9 @@ QWidget* MotionDialog::createTranslationTab()
     // 2. 设置 vx 速度
     auto *vxLbl = new QLabel("设置 vx 速度：", panel);
     vxLbl->setStyleSheet("border: none; color: #c5cbd5;");
+    const double maxLinear = MotionConfigManager::instance().maxSpeed();
     m_transVxSpin = new QDoubleSpinBox(panel);
-    m_transVxSpin->setRange(-5.0, 5.0);
+    m_transVxSpin->setRange(-maxLinear, maxLinear);
     m_transVxSpin->setDecimals(3);
     m_transVxSpin->setSingleStep(0.05);
     m_transVxSpin->setValue(0.000);
@@ -314,7 +344,7 @@ QWidget* MotionDialog::createTranslationTab()
     auto *vyLbl = new QLabel("设置 vy 速度：", panel);
     vyLbl->setStyleSheet("border: none; color: #c5cbd5;");
     m_transVySpin = new QDoubleSpinBox(panel);
-    m_transVySpin->setRange(-5.0, 5.0);
+    m_transVySpin->setRange(-maxLinear, maxLinear);
     m_transVySpin->setDecimals(3);
     m_transVySpin->setSingleStep(0.05);
     m_transVySpin->setValue(0.000);
@@ -389,8 +419,9 @@ QWidget* MotionDialog::createRotationTab()
     // 2. 设置角速度
     auto *speedLbl = new QLabel("设置角速度：", panel);
     speedLbl->setStyleSheet("border: none; color: #c5cbd5;");
+    const double maxAngular = MotionConfigManager::instance().maxAngularSpeedDeg();
     m_rotSpeedSpin = new QDoubleSpinBox(panel);
-    m_rotSpeedSpin->setRange(-180.0, 180.0);
+    m_rotSpeedSpin->setRange(-maxAngular, maxAngular);
     m_rotSpeedSpin->setDecimals(3);
     m_rotSpeedSpin->setSingleStep(2.0);
     m_rotSpeedSpin->setValue(0.000);
@@ -403,14 +434,6 @@ QWidget* MotionDialog::createRotationTab()
     layout->addWidget(panel);
 
     return tab;
-}
-
-QString MotionDialog::currentCarId() const
-{
-    QString carId = AppConfig::instance().currentDevice().carId;
-    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
-    if (carId.isEmpty()) carId = "1";
-    return carId;
 }
 
 void MotionDialog::setRunningState(bool running, bool paused)
@@ -469,7 +492,6 @@ void MotionDialog::setCanceledState()
 
 void MotionDialog::onSendClicked()
 {
-    QString carId = currentCarId();
     const RobotInfo &info = RobotInfoManager::instance().currentInfo();
     m_startX = info.car_x;
     m_startY = info.car_y;
@@ -477,33 +499,25 @@ void MotionDialog::onSendClicked()
     m_hasStartPose = info.hasPose;
 
     int currentTab = m_tabWidget->currentIndex();
-    QJsonObject mqttPayload;
     double durationSec = 3.0;
 
     if (currentTab == 0) {
         // 平动: 按照规范调用控制器 set_action_control 接口 (action_type: 6)
         m_motionType = 1;
         double dist = m_transDistSpin->value();
-        double vx   = m_transVxSpin->value();
-        double vy   = m_transVySpin->value();
-        QString modeStr = m_odomModeRadio->isChecked() ? "odom" : "location";
+        double rawVx = m_transVxSpin->value();
+        double rawVy = m_transVySpin->value();
+        double vx   = MotionConfigManager::instance().clampSignedLinearSpeed(rawVx);
+        double vy   = MotionConfigManager::instance().clampSignedLinearSpeed(rawVy);
 
         m_targetDistance = std::abs(dist);
 
         // 调用 8061 控制器平动动作控制接口 (action_type: 6)
+        // 仅此一路下发, 不再额外走 MQTT, 避免同一指令被执行两次
         int actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
         ApiService::instance().setLinearMotion(vx, vy, dist, actionId, [this](int code, const QJsonObject &resp) {
-            qDebug() << "[MotionDialog] set_action_control (linear) code:" << code << resp;
+            qDebug() << "[MotionDialog] 平动指令回执 code:" << code << resp;
         });
-
-        mqttPayload["command"]     = "motion";
-        mqttPayload["action_type"] = "1";
-        mqttPayload["action_desc"] = "平动";
-        mqttPayload["type"]        = "translate";
-        mqttPayload["mode"]        = modeStr;
-        mqttPayload["distance"]    = dist;
-        mqttPayload["vx"]          = vx;
-        mqttPayload["vy"]          = vy;
 
         double maxV = std::max(std::abs(vx), std::abs(vy));
         if (maxV > 1e-3) {
@@ -515,24 +529,18 @@ void MotionDialog::onSendClicked()
         // 转动: 按照规范调用控制器 set_action_control 接口 (action_type: 5)
         m_motionType = 2;
         double angle = m_rotAngleSpin->value();
-        double speed = m_rotSpeedSpin->value();
+        double rawSpeed = m_rotSpeedSpin->value();
+        double speed = MotionConfigManager::instance().clampSignedAngularSpeedDeg(rawSpeed);
 
         m_targetAngle = std::abs(angle);
 
         // 旋转角度转弧度 (rad)
         double angleRad = angle * M_PI / 180.0;
         int actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
+        // 仅此一路下发, 不再额外走 MQTT, 避免同一指令被执行两次
         ApiService::instance().setRotateMotion(angleRad, speed, actionId, [this](int code, const QJsonObject &resp) {
-            qDebug() << "[MotionDialog] set_action_control (rotate) code:" << code << resp;
+            qDebug() << "[MotionDialog] 转动指令回执 code:" << code << resp;
         });
-
-        mqttPayload["command"]       = "motion";
-        mqttPayload["action_type"]   = "2";
-        mqttPayload["action_desc"]   = "转动";
-        mqttPayload["type"]          = "rotate";
-        mqttPayload["angle"]         = angle;
-        mqttPayload["speed"]         = speed;
-        mqttPayload["angular_speed"] = speed;
 
         if (std::abs(speed) > 1e-3) {
             durationSec = (std::abs(angle) / std::abs(speed)) + 1.5;
@@ -541,15 +549,10 @@ void MotionDialog::onSendClicked()
         }
     }
 
-    // 1. 发布 MQTT 指令至 /rob/{carId}/motion 与 /rob/{carId}/navigation
-    QByteArray payloadBytes = QJsonDocument(mqttPayload).toJson(QJsonDocument::Compact);
-    MqttService::instance().publish(QString("/rob/%1/motion").arg(carId), payloadBytes);
-    MqttService::instance().publish(QString("/rob/%1/navigation").arg(carId), payloadBytes);
-
-    // 2. 切换至运行中状态
+    // 切换至运行中状态
     setRunningState(true, false);
 
-    // 3. 启动看门狗超时定时器
+    // 启动看门狗超时定时器
     int watchdogMs = static_cast<int>(std::clamp(durationSec, 2.0, 120.0) * 1000.0);
     m_motionWatchdog.start(watchdogMs);
 
@@ -558,8 +561,6 @@ void MotionDialog::onSendClicked()
 
 void MotionDialog::onCancelNavClicked()
 {
-    QString carId = currentCarId();
-    MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
     ApiService::instance().suspendWork([](int, const QJsonObject &) {});
     ApiService::instance().stopRobotTask(false, [](int, const QJsonObject &) {});
 
@@ -569,18 +570,14 @@ void MotionDialog::onCancelNavClicked()
 
 void MotionDialog::onPauseNavClicked()
 {
-    QString carId = currentCarId();
-
     if (m_isPaused) {
-        // 继续导航 (同时下发 MQTT、8061 控制器通道)
-        MqttService::instance().publish(QString("/rob/%1/navigationContinue").arg(carId), "1");
+        // 继续导航 (仅走 HTTP 通道, 避免同一指令重复下发)
         ApiService::instance().continueWork([](int, const QJsonObject &) {});
         ApiService::instance().continueRobot([](int, const QJsonObject &) {});
         setRunningState(true, false);
         Toast::success(this, "已继续导航");
     } else {
-        // 暂停导航 (同时下发 MQTT、8061 控制器通道)
-        MqttService::instance().publish(QString("/rob/%1/cancel").arg(carId), "1");
+        // 暂停导航 (仅走 HTTP 通道, 避免同一指令重复下发)
         ApiService::instance().suspendWork([](int, const QJsonObject &) {});
         ApiService::instance().suspendRobot([](int, const QJsonObject &) {});
         setRunningState(true, true);

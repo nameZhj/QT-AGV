@@ -86,6 +86,8 @@ private slots:
     void onSceneReleased(const QPointF &scenePos, Qt::MouseButton btn);
     void onResetView();
     void onShowRobotStatus();
+    void onShowMoreMenu();
+    void onShowAudioManager();
     void onToggleNavMode();
     void onToggleMoveMode();
     void onCancelNavigation();
@@ -116,6 +118,10 @@ private:
     void initMqtt();
     void disconnectMqtt();
 
+    void clearScene();
+    void clearRouteItems();
+    void clearGridItems();
+
     void renderAll();
     void renderAxesAndGrid();
     void renderRoute();
@@ -133,15 +139,18 @@ private:
     QString m_mapId, m_mapName, m_tilemapPath;
     // World extent (metres): bottom-left = (m_worldL, m_worldB), top-right = (m_worldR, m_worldT)
     double m_worldL = 0, m_worldB = 0, m_worldR = 0, m_worldT = 0;
-    // Thumbnail pixel size (set after image loads)
-    double m_imgW   = 0, m_imgH   = 0;
+    double m_imgW = 0, m_imgH = 0;
     bool   m_mapReady = false;
+    bool   m_routeLoaded = false;
 
-    // Route data
-    QJsonArray m_points, m_lines, m_curves, m_charges, m_highPrecisionPoints;
-    bool m_routeLoaded = false;
+    // JSON route objects (parsed from route.json)
+    QJsonArray m_points;
+    QJsonArray m_lines;
+    QJsonArray m_curves;
+    QJsonArray m_charges;
+    QJsonArray m_highPrecisionPoints;
 
-    // Robot / car state
+    // Robot state
     struct RobotState {
         QString carId = "1", carName;
         double wx = 0, wy = 0, yawRad = 0;
@@ -161,6 +170,10 @@ private:
     QGraphicsItem *m_routeLayer= nullptr;
     QGraphicsItem *m_robotItem = nullptr;
 
+    // Track top-level graphics items to prevent double-free crashes during cleanup
+    QList<QGraphicsItem *> m_routeTopLevelItems;
+    QList<QGraphicsItem *> m_gridItems;
+
     // Grid visibility
     bool m_showGrid = false;
 
@@ -178,6 +191,8 @@ private:
     QToolButton *m_switchMapBtn   = nullptr; // 11. 地图管理 (原 切换地图)
     QToolButton *m_teleopBtn      = nullptr; // 12. 抢占控制权
     QToolButton *m_statusBtn      = nullptr; // 13. 状态
+    QToolButton *m_moreBtn        = nullptr; // 14. 其它 (弹出工具列表)
+    class QMenu *m_moreMenu       = nullptr;
     QToolButton *m_resetViewBtn   = nullptr;
     QToolButton *m_refreshBtn     = nullptr;
     QPushButton *m_gridBtn        = nullptr;
@@ -236,7 +251,32 @@ private:
     QWidget              *m_stationEpcGroup      = nullptr;
     QLabel               *m_stationEpcPosVal     = nullptr;
     QLabel               *m_stationEpcYawVal     = nullptr;
-    QGraphicsEllipseItem *m_selectedPointRing    = nullptr;
+    // Route info (对齐"启用编辑"线路属性面板)
+    void showRouteDetails(const QJsonObject &obj, const QString &type);
+    void clearRouteDetails();
+
+    // 命中容差: 把屏幕像素换算为场景单位 (与"启用编辑"一致)
+    double hitTolScene(double screenPx) const;
+
+    QGroupBox            *m_routeGroup         = nullptr;
+    QLabel               *m_routeBadge         = nullptr;
+    QLabel               *m_routeEmptyHint     = nullptr;
+    QWidget              *m_routeContentWidget = nullptr;
+    QLabel               *m_routeTypeVal       = nullptr;
+    QLabel               *m_routeIdVal         = nullptr;
+    QLabel               *m_routeNameVal       = nullptr;
+    QLabel               *m_routeStartVal      = nullptr;
+    QLabel               *m_routeEndVal        = nullptr;
+    QLabel               *m_routeDirectVal     = nullptr;
+    QLabel               *m_routeMaxSpeedVal   = nullptr;
+    QLabel               *m_routeMaxAccVal     = nullptr;
+    QLabel               *m_routeMaxDecVal     = nullptr;
+    QLabel               *m_routeMaxRotVal     = nullptr;
+    QLabel               *m_routeReachDistVal  = nullptr;
+    QLabel               *m_routeReachAngleVal = nullptr;
+    QLabel               *m_routeWidthVal      = nullptr;
+
+    QGraphicsItem        *m_selItem            = nullptr;
     QString               m_selectedStationId;
 
     // 请求去重与防抖节流
