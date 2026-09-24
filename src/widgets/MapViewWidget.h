@@ -387,6 +387,12 @@ private:
     qint64  m_lastRefreshMs = 0;
 
     bool         m_mapLoadFailed        = false;
+    bool         m_devicePointPending   = false;
+
+    void showRobotContextMenu(const QPoint &globalPos);
+    void onMarkStation();
+    void onMarkDevicePoint(const QString &type);
+    void saveRouteToServer(std::function<void(bool ok)> onDone = nullptr);
 
 signals:
     void mapStatusChanged();

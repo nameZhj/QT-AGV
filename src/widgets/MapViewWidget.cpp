@@ -27,6 +27,8 @@
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QDialog>
+#include <QProgressDialog>
+#include <QPointer>
 #include <QMenu>
 #include <QLabel>
 #include <QPainter>
@@ -3030,6 +3032,25 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
         .arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2));
     m_coordLabel->adjustSize();
 
+    if (btn == Qt::RightButton) {
+        bool onRobot = false;
+        if (m_robotItem && m_robotItem->isVisible() && m_scene) {
+            for (QGraphicsItem *it : m_scene->items(scenePos)) {
+                if (it == m_robotItem || it->parentItem() == m_robotItem) { onRobot = true; break; }
+            }
+            if (!onRobot) {
+                const double tol = hitTolScene(16.0);
+                for (QGraphicsItem *it : m_scene->items(QRectF(scenePos.x() - tol, scenePos.y() - tol, tol * 2.0, tol * 2.0))) {
+                    if (it == m_robotItem || it->parentItem() == m_robotItem) { onRobot = true; break; }
+                }
+            }
+        }
+        if (onRobot) {
+            showRobotContextMenu(QCursor::pos());
+        }
+        return;
+    }
+
     if (btn != Qt::LeftButton) return;
 
     // 只有"属性"页响应地图点击; 图元/图层页点击地图不做任何反应
@@ -4153,4 +4174,336 @@ void MapViewWidget::disconnectMqtt()
     QString carId = AppConfig::instance().agvId();
     if (carId.isEmpty()) carId = "1";
     MqttService::instance().unsubscribeTopic(QString("/rob/%1/info").arg(carId));
+}
+
+// ── 设备右键标记与路网保存 ───────────────────────────────────────────────────
+
+static int nextIdNum(const QJsonArray &arr, const QString &prefix)
+{
+    int maxN = 0;
+    for (const auto &v : arr) {
+        QString id = v.toObject().value("id").toString();
+        if (id.startsWith(prefix)) {
+            bool ok = false;
+            int n = id.mid(prefix.length()).toInt(&ok);
+            if (ok && n > maxN) maxN = n;
+        }
+    }
+    return maxN + 1;
+}
+
+void MapViewWidget::showRobotContextMenu(const QPoint &globalPos)
+{
+    QMenu menu(this);
+    menu.setStyleSheet(
+        "QMenu { background-color: #22262e; border: 1px solid #3a3f4a; padding: 4px; border-radius: 4px; }"
+        "QMenu::item { color: #c8d0d8; padding: 6px 20px; font-size: 12px; border-radius: 3px; }"
+        "QMenu::item:selected { background-color: #1e4080; color: #ffffff; }"
+    );
+
+    QAction *actStation = menu.addAction("标记站点");
+    QAction *actWorkStation = menu.addAction("标记工作站");
+    QAction *actSpecialWorkStation = menu.addAction("标记特殊工作站");
+
+    QAction *sel = menu.exec(globalPos);
+    if (sel == actStation) {
+        onMarkStation();
+    } else if (sel == actWorkStation) {
+        onMarkDevicePoint("highPrecision");
+    } else if (sel == actSpecialWorkStation) {
+        onMarkDevicePoint("charge");
+    }
+}
+
+void MapViewWidget::saveRouteToServer(std::function<void(bool ok)> onDone)
+{
+    if (m_mapId.isEmpty()) {
+        Toast::info(this, "当前未加载地图，无法保存站点");
+        if (onDone) onDone(false);
+        return;
+    }
+
+    auto makePointFeat = [](const QJsonObject &pt) -> QJsonObject {
+        QJsonArray coords;
+        coords.append(pt.value("x").toDouble());
+        coords.append(pt.value("y").toDouble());
+        QJsonObject geom;
+        geom["type"] = "Point";
+        geom["coordinates"] = coords;
+        QJsonObject props = pt;
+        props.remove("x");
+        props.remove("y");
+        QJsonObject f;
+        f["type"] = "Feature";
+        f["geometry"] = geom;
+        f["properties"] = props;
+        return f;
+    };
+
+    QJsonArray features;
+    for (const auto &v : m_points)              features.append(makePointFeat(v.toObject()));
+    for (const auto &v : m_charges)             features.append(makePointFeat(v.toObject()));
+    for (const auto &v : m_highPrecisionPoints) features.append(makePointFeat(v.toObject()));
+
+    for (const auto &v : m_lines) {
+        QJsonObject ln = v.toObject();
+        QJsonArray ca, cb;
+        ca.append(ln.value("x1").toDouble()); ca.append(ln.value("y1").toDouble());
+        cb.append(ln.value("x2").toDouble()); cb.append(ln.value("y2").toDouble());
+        QJsonArray coords; coords.append(ca); coords.append(cb);
+        QJsonObject geom; geom["type"] = "LineString"; geom["coordinates"] = coords;
+        QJsonObject props = ln;
+        props.remove("x1"); props.remove("y1"); props.remove("x2"); props.remove("y2");
+        QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
+        features.append(f);
+    }
+
+    for (const auto &v : m_curves) {
+        QJsonObject cv = v.toObject();
+        QJsonArray coords;
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        if (!ctrlArr.isEmpty()) {
+            for (const auto &pv : ctrlArr) {
+                QJsonObject pt = pv.toObject();
+                QJsonArray c;
+                c.append(pt.value("x").toDouble());
+                c.append(pt.value("y").toDouble());
+                coords.append(c);
+            }
+        } else {
+            QJsonArray c0, c1, c2;
+            c0.append(cv.value("x1").toDouble()); c0.append(cv.value("y1").toDouble());
+            c1.append(cv.value("cx").toDouble()); c1.append(cv.value("cy").toDouble());
+            c2.append(cv.value("x2").toDouble()); c2.append(cv.value("y2").toDouble());
+            coords.append(c0); coords.append(c1); coords.append(c2);
+        }
+
+        QJsonObject geom; geom["type"] = "MultiPoint"; geom["coordinates"] = coords;
+        QJsonObject props = cv;
+        props.remove("x1"); props.remove("y1"); props.remove("cx"); props.remove("cy");
+        props.remove("x2"); props.remove("y2"); props.remove("controlPoints");
+        QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
+        features.append(f);
+    }
+
+    QJsonObject geojson;
+    geojson["type"]     = "FeatureCollection";
+    geojson["features"] = features;
+    geojson["mapId"]    = m_mapId;
+    geojson["mapName"]  = m_mapName;
+
+    QPointer<MapViewWidget> self = this;
+    ApiService::instance().saveEditedMap(geojson, [self, geojson, onDone](int code, const QJsonObject &resp) {
+        if (!self) return;
+        if (code == 200) {
+            QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + self->m_mapName + "_" + self->m_mapId;
+            QDir().mkpath(localDir);
+            QFile rf(localDir + "/route.json");
+            if (rf.open(QIODevice::WriteOnly)) {
+                rf.write(QJsonDocument(geojson).toJson());
+                rf.close();
+            }
+            self->renderRoute();
+            self->refreshElementList();
+            if (onDone) onDone(true);
+        } else {
+            QString err = resp.value("msg").toString();
+            if (err.isEmpty()) err = resp.value("message").toString();
+            if (err.isEmpty()) err = QString("HTTP %1").arg(code);
+            Toast::error(self, QString("保存路网失败: %1").arg(err));
+            if (onDone) onDone(false);
+        }
+    });
+}
+
+void MapViewWidget::onMarkStation()
+{
+    if (m_mapId.isEmpty()) {
+        Toast::info(this, "当前未加载地图，无法打点");
+        return;
+    }
+    if (!m_robot.posValid) {
+        Toast::info(this, "未收到设备位置信息，无法打点");
+        return;
+    }
+
+    double carTheta = m_robot.yawRad * 180.0 / M_PI;
+    int n = nextIdNum(m_points, "p_");
+    QJsonObject pt;
+    pt["id"] = QString("p_%1").arg(n);
+    pt["name"] = QString("LM%1").arg(n);
+    pt["typeName"] = "LandMark";
+    pt["x"] = m_robot.wx;
+    pt["y"] = m_robot.wy;
+    pt["yaw"] = m_robot.yawRad;
+    pt["theta"] = carTheta;
+    pt["robotYaw"] = 0.0;
+    pt["roll"] = 0.0;
+    pt["pitch"] = 0.0;
+    pt["offset"] = 0.0;
+    pt["isyawfix"] = false;
+    pt["rdsDockable"] = true;
+    pt["allowRotate"] = true;
+    pt["useDownPGV"] = false;
+    m_points.append(pt);
+
+    QPointer<MapViewWidget> self = this;
+    saveRouteToServer([self, pt, carTheta](bool ok) {
+        if (!self) return;
+        if (ok) {
+            Toast::success(self, QString("已在设备位置(%1, %2)添加普通站点 %3\n朝向角: %4° 并已保存路网")
+                .arg(pt.value("x").toDouble(), 0, 'f', 2).arg(pt.value("y").toDouble(), 0, 'f', 2)
+                .arg(pt.value("name").toString()).arg(carTheta, 0, 'f', 1));
+        }
+    });
+}
+
+void MapViewWidget::onMarkDevicePoint(const QString &type)
+{
+    if (m_mapId.isEmpty()) {
+        Toast::info(this, "当前未加载地图，无法打点");
+        return;
+    }
+    if (m_devicePointPending) {
+        Toast::info(this, "上一次设备打点尚未完成，请稍候");
+        return;
+    }
+    if (!m_robot.posValid) {
+        Toast::info(this, "未收到设备位置信息，无法打点");
+        return;
+    }
+    QString carId = m_robot.carId;
+    if (carId.isEmpty()) {
+        Toast::info(this, "未选择设备，无法打点");
+        return;
+    }
+
+    m_devicePointPending = true;
+
+    // 1. 发布 /rob/{id}/pointType 命令让设备记录当前相对位置
+    QJsonObject data;
+    data["point_type"] = (type == "charge") ? "charge" : "highPrecision";
+    data["sender"] = "Web";
+    MqttService::instance().publish(
+        QString("/rob/%1/pointType").arg(carId),
+        QJsonDocument(data).toJson(QJsonDocument::Compact));
+
+    // 2. 阻塞式进度条：等待 3s 让设备更新 epc 坐标
+    const int kWaitMs = 3000;
+    const int kStepMs = 100;
+    auto *prog = new QProgressDialog(
+        QString("正在获取设备相对定位 (epc)...\n剩余 %1 秒").arg(kWaitMs / 1000),
+        QString(), 0, kWaitMs / kStepMs, this);
+    prog->setWindowTitle("设备打点");
+    prog->setWindowModality(Qt::WindowModal);
+    prog->setMinimumDuration(0);
+    prog->setAutoClose(false);
+    prog->setAutoReset(false);
+    prog->setValue(0);
+    prog->setCancelButton(nullptr);
+
+    auto *tick = new QTimer(prog);
+    tick->setInterval(kStepMs);
+    int elapsed = 0;
+    QObject::connect(tick, &QTimer::timeout, this, [prog, tick, kStepMs, kWaitMs, &elapsed, type, this]() {
+        elapsed += kStepMs;
+        int remainSec = (kWaitMs - elapsed + 999) / 1000;
+        prog->setLabelText(QString("正在获取设备相对定位 (epc)...\n剩余 %1 秒").arg(remainSec));
+        prog->setValue(elapsed / kStepMs);
+
+        if (elapsed >= kWaitMs) {
+            tick->stop();
+            prog->accept();
+
+            m_devicePointPending = false;
+            if (!m_robot.posValid) {
+                Toast::error(this, "设备位置信息丢失，打点失败");
+                return;
+            }
+
+            const RobotInfo &info = RobotInfoManager::instance().currentInfo();
+            double epcX = info.hasEpc ? info.epc_x : 0.0;
+            double epcY = info.hasEpc ? info.epc_y : 0.0;
+            double epcTheta = info.hasEpc ? info.epc_theta : 0.0;
+            double carYaw = m_robot.yawRad;
+            double carTheta = m_robot.yawRad * 180.0 / M_PI;
+
+            if (type == "charge") {
+                int n = nextIdNum(m_charges, "c_");
+                QJsonObject ch;
+                ch["id"] = QString("c_%1").arg(n);
+                ch["name"] = QString("CP_%1").arg(n);
+                ch["typeName"] = "ChargePoint";
+                ch["x"] = m_robot.wx;
+                ch["y"] = m_robot.wy;
+                ch["epc_x"] = epcX;
+                ch["epc_y"] = epcY;
+                ch["epc_theta"] = epcTheta;
+                ch["epcX"] = epcX;
+                ch["epcY"] = epcY;
+                ch["epcTheta"] = epcTheta;
+                ch["epc_Yaw"] = epcTheta;
+                ch["epc_yaw"] = epcTheta;
+                ch["yaw"] = carYaw;
+                ch["theta"] = carTheta;
+                ch["roll"] = 0.0;
+                ch["pitch"] = 0.0;
+                ch["offset"] = 0.0;
+                ch["isyawfix"] = false;
+                ch["robotYaw"] = 0.0;
+                ch["rdsDockable"] = true;
+                ch["allowRotate"] = true;
+                ch["useDownPGV"] = false;
+                m_charges.append(ch);
+
+                saveRouteToServer([this, epcX, epcY, ch](bool ok) {
+                    if (ok) {
+                        Toast::success(this, QString("已在设备位置(%1, %2)添加特殊工作站 %3\nepc(%4, %5) 并已保存路网")
+                            .arg(m_robot.wx, 0, 'f', 2).arg(m_robot.wy, 0, 'f', 2)
+                            .arg(ch.value("name").toString())
+                            .arg(epcX, 0, 'f', 2).arg(epcY, 0, 'f', 2));
+                    }
+                });
+            } else if (type == "highPrecision") {
+                int n = nextIdNum(m_highPrecisionPoints, "hp_");
+                QJsonObject hp;
+                hp["id"] = QString("hp_%1").arg(n);
+                hp["name"] = QString("AP%1").arg(n);
+                hp["typeName"] = "ActionPoint";
+                hp["x"] = m_robot.wx;
+                hp["y"] = m_robot.wy;
+                hp["epc_x"] = epcX;
+                hp["epc_y"] = epcY;
+                hp["epc_theta"] = epcTheta;
+                hp["epcX"] = epcX;
+                hp["epcY"] = epcY;
+                hp["epcTheta"] = epcTheta;
+                hp["epc_Yaw"] = epcTheta;
+                hp["epc_yaw"] = epcTheta;
+                hp["yaw"] = carYaw;
+                hp["theta"] = carTheta;
+                hp["roll"] = 0.0;
+                hp["pitch"] = 0.0;
+                hp["offset"] = 0.0;
+                hp["isyawfix"] = false;
+                hp["robotYaw"] = 0.0;
+                hp["rdsDockable"] = true;
+                hp["allowRotate"] = true;
+                hp["useDownPGV"] = false;
+                m_highPrecisionPoints.append(hp);
+
+                saveRouteToServer([this, epcX, epcY, hp](bool ok) {
+                    if (ok) {
+                        Toast::success(this, QString("已在设备位置(%1, %2)添加工作站 %3\nepc(%4, %5) 并已保存路网")
+                            .arg(m_robot.wx, 0, 'f', 2).arg(m_robot.wy, 0, 'f', 2)
+                            .arg(hp.value("name").toString())
+                            .arg(epcX, 0, 'f', 2).arg(epcY, 0, 'f', 2));
+                    }
+                });
+            }
+        }
+    });
+    tick->start();
+    prog->exec();
+    prog->deleteLater();
 }

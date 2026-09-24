@@ -22,6 +22,7 @@
 #include <QStyle>
 #include <QEventLoop>
 #include <QTimer>
+#include <QPainter>
 #include <QDateTime>
 #include <QCoreApplication>
 
@@ -185,7 +186,7 @@ protected:
     }
 };
 
-// 可接收拖拽的组列表
+// 可接收拖拽动作标签以及任务/组重新排序的通用列表控件
 class DropTargetListWidget : public QListWidget
 {
 public:
@@ -193,15 +194,19 @@ public:
     {
         setAcceptDrops(true);
         setDragDropMode(QAbstractItemView::DropOnly);
-        setDefaultDropAction(Qt::CopyAction);
+        setDefaultDropAction(Qt::MoveAction);
     }
 
     std::function<void(const QString &actionName, int row)> onActionDropped;
+    std::function<void(int fromRow, int toRow)> onGroupReordered;
+    std::function<void(int fromRow, int toRow)> onTaskReordered;
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override
     {
-        if (event->mimeData()->hasFormat("application/x-taskchain-action"))
+        if (event->mimeData()->hasFormat("application/x-taskchain-action") ||
+            event->mimeData()->hasFormat("application/x-taskchain-group-reorder") ||
+            event->mimeData()->hasFormat("application/x-taskchain-task-reorder"))
             event->acceptProposedAction();
         else
             event->ignore();
@@ -209,7 +214,9 @@ protected:
 
     void dragMoveEvent(QDragMoveEvent *event) override
     {
-        if (event->mimeData()->hasFormat("application/x-taskchain-action"))
+        if (event->mimeData()->hasFormat("application/x-taskchain-action") ||
+            event->mimeData()->hasFormat("application/x-taskchain-group-reorder") ||
+            event->mimeData()->hasFormat("application/x-taskchain-task-reorder"))
             event->acceptProposedAction();
         else
             event->ignore();
@@ -217,9 +224,20 @@ protected:
 
     void dropEvent(QDropEvent *event) override
     {
-        if (event->mimeData()->hasFormat("application/x-taskchain-action")) {
+        if (event->mimeData()->hasFormat("application/x-taskchain-group-reorder")) {
+            int fromRow = QString::fromUtf8(event->mimeData()->data("application/x-taskchain-group-reorder")).toInt();
+            auto *dropItem = itemAt(event->position().toPoint());
+            int toRow = dropItem ? row(dropItem) : count() - 1;
+            if (onGroupReordered) onGroupReordered(fromRow, toRow);
+            event->acceptProposedAction();
+        } else if (event->mimeData()->hasFormat("application/x-taskchain-task-reorder")) {
+            int fromRow = QString::fromUtf8(event->mimeData()->data("application/x-taskchain-task-reorder")).toInt();
+            auto *dropItem = itemAt(event->position().toPoint());
+            int toRow = dropItem ? row(dropItem) : count() - 1;
+            if (onTaskReordered) onTaskReordered(fromRow, toRow);
+            event->acceptProposedAction();
+        } else if (event->mimeData()->hasFormat("application/x-taskchain-action")) {
             QString actionName = QString::fromUtf8(event->mimeData()->data("application/x-taskchain-action"));
-            // 根据鼠标位置确定拖到哪一行
             auto *dropItem = itemAt(event->position().toPoint());
             int dropRow = dropItem ? row(dropItem) : -1;
             if (onActionDropped) onActionDropped(actionName, dropRow);
@@ -228,6 +246,108 @@ protected:
             event->ignore();
         }
     }
+};
+
+// 通用卡片长按与拖拽重排序事件过滤器 (适用于任务卡片和组卡片)
+class CardLongPressDragFilter : public QObject
+{
+public:
+    CardLongPressDragFilter(const QString &mimeType, int index, QWidget *container)
+        : QObject(container), m_mimeType(mimeType), m_index(index), m_container(container)
+    {
+        m_timer = new QTimer(this);
+        m_timer->setSingleShot(true);
+        connect(m_timer, &QTimer::timeout, this, &CardLongPressDragFilter::onLongPressTimeout);
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                // 点击在可交互控件上时，正常响应交互，不触发长按拖拽
+                QWidget *child = m_container->childAt(me->pos());
+                if (child && (qobject_cast<QAbstractButton*>(child) || qobject_cast<QTextEdit*>(child))) {
+                    return QObject::eventFilter(watched, event);
+                }
+                m_pressPos = me->pos();
+                m_longPressed = false;
+                m_dragStarted = false;
+                m_timer->start(300); // 300ms 判定为长按
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            auto *me = static_cast<QMouseEvent*>(event);
+            if (me->buttons() & Qt::LeftButton) {
+                int dist = (me->pos() - m_pressPos).manhattanLength();
+                if (dist > 8 && m_timer->isActive()) {
+                    m_timer->stop();
+                }
+                if (m_longPressed && !m_dragStarted && dist > 3) {
+                    m_dragStarted = true;
+                    startDrag();
+                    return true;
+                }
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            m_timer->stop();
+            if (m_longPressed && m_container) {
+                m_container->setStyleSheet(m_origStyle);
+                m_container->unsetCursor();
+            }
+            m_longPressed = false;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    void onLongPressTimeout()
+    {
+        m_longPressed = true;
+        if (m_container) {
+            m_origStyle = m_container->styleSheet();
+            m_container->setStyleSheet(
+                "background: rgba(0, 188, 212, 0.16); border: 2px dashed #00bcd4; border-radius: 4px;");
+            m_container->setCursor(Qt::ClosedHandCursor);
+        }
+    }
+
+    void startDrag()
+    {
+        if (!m_container) return;
+        auto *drag = new QDrag(m_container);
+        auto *mime = new QMimeData;
+        mime->setData(m_mimeType, QByteArray::number(m_index));
+        drag->setMimeData(mime);
+
+        QPixmap pix = m_container->grab();
+        QPixmap transparentPix(pix.size());
+        transparentPix.fill(Qt::transparent);
+        QPainter p(&transparentPix);
+        p.setOpacity(0.75);
+        p.drawPixmap(0, 0, pix);
+        p.end();
+
+        drag->setPixmap(transparentPix);
+        drag->setHotSpot(m_pressPos);
+        drag->exec(Qt::MoveAction);
+
+        if (m_container) {
+            m_container->setStyleSheet(m_origStyle);
+            m_container->unsetCursor();
+        }
+        m_longPressed = false;
+        m_dragStarted = false;
+    }
+
+    QString m_mimeType;
+    int m_index = 0;
+    QWidget *m_container = nullptr;
+    QTimer *m_timer = nullptr;
+    QPoint m_pressPos;
+    bool m_dragStarted = false;
+    bool m_longPressed = false;
+    QString m_origStyle;
 };
 
 // 覆盖在四面板编辑区上的半透明遮罩 (执行中锁定，拦截一切点击与拖拽操作)
@@ -440,17 +560,13 @@ void TaskChainWidget::setupPanel2Task(QVBoxLayout *layout)
     btnRow1->addStretch();
     layout->addLayout(btnRow1);
 
-    auto *btnRow2 = new QHBoxLayout;
-    btnRow2->setSpacing(6);
-    btnRow2->addStretch();
-    layout->addLayout(btnRow2);
-
-    // 任务列表 (带勾选 + 拖拽排序)
-    m_taskList = new QListWidget;
-    m_taskList->setStyleSheet(S_LIST_STYLE);
-    m_taskList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_taskList->setDragDropMode(QAbstractItemView::InternalMove);
-    m_taskList->setDefaultDropAction(Qt::MoveAction);
+    // 任务列表 (可长按卡片直接拖动排序)
+    auto *taskDropList = new DropTargetListWidget;
+    taskDropList->setStyleSheet(S_LIST_STYLE);
+    m_taskList = taskDropList;
+    taskDropList->onTaskReordered = [this](int fromRow, int toRow) {
+        reorderTask(fromRow, toRow);
+    };
     layout->addWidget(m_taskList, 1);
 
     m_taskCountLabel = new QLabel(QStringLiteral("共 [0] 项"));
@@ -464,21 +580,7 @@ void TaskChainWidget::setupPanel2Task(QVBoxLayout *layout)
     // 连接
     connect(m_taskNewBtn,       &QPushButton::clicked, this, &TaskChainWidget::onTaskNew);
     connect(m_taskDeleteBtn,     &QPushButton::clicked, this, &TaskChainWidget::onTaskDelete);
-   connect(m_taskSelectAllBtn, &QPushButton::clicked, this, &TaskChainWidget::onTaskSelectAll);
-    // 拖拽排序后重新编号
-    connect(m_taskList->model(), &QAbstractItemModel::rowsMoved,
-            this, [this]() {
-        int idx = currentChainIndex();
-        if (idx < 0) return;
-        QJsonArray reordered;
-        for (int i = 0; i < m_taskList->count(); ++i) {
-            int origIdx = m_taskList->item(i)->data(Qt::UserRole).toInt();
-            if (origIdx >= 0 && origIdx < m_chains[idx].tasks.size())
-                reordered.append(m_chains[idx].tasks[origIdx]);
-        }
-        m_chains[idx].tasks = reordered;
-        refreshTaskList();
-    });
+    connect(m_taskSelectAllBtn, &QPushButton::clicked, this, &TaskChainWidget::onTaskSelectAll);
     // 选择变化时更新底部状态栏 + 刷新组列表
     connect(m_taskList, &QListWidget::currentItemChanged,
             this, [this](QListWidgetItem *current, QListWidgetItem*) {
@@ -598,6 +700,9 @@ void TaskChainWidget::setupPanel3Group(QVBoxLayout *layout)
         refreshGroupList();
         updateStatus(QStringLiteral("已添加动作: %1").arg(actionName));
     };
+    dropList->onGroupReordered = [this](int fromRow, int toRow) {
+        reorderGroup(fromRow, toRow);
+    };
     layout->addWidget(m_groupList, 1);
 
     // 发送按钮
@@ -613,7 +718,7 @@ void TaskChainWidget::setupPanel3Group(QVBoxLayout *layout)
     btnRow2->addWidget(m_groupSendAllBtn);
     layout->addLayout(btnRow2);
 
-    m_groupHintLabel = new QLabel(QStringLiteral("拖拽标签到组中, 每组只能添加一种标签"));
+    m_groupHintLabel = new QLabel(QStringLiteral("拖拽标签到组中添加动作；长按组卡片可直接拖动重新排序"));
     m_groupHintLabel->setStyleSheet("color:#666; font-size:11px; padding:2px;");
     layout->addWidget(m_groupHintLabel);
 
@@ -823,6 +928,8 @@ void TaskChainWidget::refreshTaskList()
             item->setData(Qt::UserRole, i);
 
             auto *row = new QWidget;
+            row->setAcceptDrops(true);
+            row->installEventFilter(new CardLongPressDragFilter("application/x-taskchain-task-reorder", i, row));
             auto *vbox = new QVBoxLayout(row);
             vbox->setContentsMargins(4, 4, 4, 4);
             vbox->setSpacing(2);
@@ -835,6 +942,7 @@ void TaskChainWidget::refreshTaskList()
             topRow->addWidget(checkBox);
 
             auto *nameLabel = new QLabel(subTaskName);
+            nameLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
             nameLabel->setStyleSheet("color:#00bcd4; font-size:13px; font-weight:bold; background:transparent;");
             topRow->addWidget(nameLabel);
             topRow->addStretch();
@@ -929,6 +1037,7 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
 
     auto *container = new QWidget;
     container->setAcceptDrops(true);
+    container->installEventFilter(new CardLongPressDragFilter("application/x-taskchain-group-reorder", groupIndex, container));
     auto *vbox = new QVBoxLayout(container);
     vbox->setContentsMargins(4, 4, 4, 4);
     vbox->setSpacing(3);
@@ -942,11 +1051,13 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
     headerRow->addWidget(checkBox);
 
     auto *nameLbl = new QLabel(groupName);
+    nameLbl->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     nameLbl->setStyleSheet("color:#00bcd4; font-size:12px; font-weight:bold; background:transparent;");
     headerRow->addWidget(nameLbl);
 
     if (!actionType.isEmpty()) {
         auto *typeLbl = new QLabel(QStringLiteral("  [%1]").arg(actionType));
+        typeLbl->setAttribute(Qt::WA_TransparentForMouseEvents, true);
         typeLbl->setStyleSheet("color:#888; font-size:11px; background:transparent;");
         headerRow->addWidget(typeLbl);
     }
@@ -978,6 +1089,7 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
     // 如果没有标签, 显示占位提示
     if (actionType.isEmpty()) {
         auto *hint = new QLabel(QStringLiteral("  拖拽标签到此组..."));
+        hint->setAttribute(Qt::WA_TransparentForMouseEvents, true);
         hint->setStyleSheet("color:#555; font-size:11px; background:transparent; padding:8px 4px;");
         hint->setMinimumHeight(60);
         vbox->addWidget(hint);
@@ -1005,6 +1117,7 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
             actRow->setSpacing(4);
 
             auto *actLabel = new QLabel(QStringLiteral("%1. %2").arg(a + 1).arg(displayName));
+            actLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
             actLabel->setStyleSheet("color:#c0c8d0; font-size:11px; background:transparent; padding:2px 8px;");
             actLabel->setMinimumHeight(24);
             actRow->addWidget(actLabel, 1);
@@ -2126,7 +2239,7 @@ void TaskChainWidget::onGroupSendSelected()
         return;
     }
 
-    QJsonObject chainJson = exportChainToJson(m_chains[idx], true);
+    QJsonObject chainJson = exportChainToJson(m_chains[idx], true, true);
     QJsonArray subTasks = chainJson.value("sub_task_info").toArray();
     if (subTasks.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("提示"),
@@ -2167,7 +2280,7 @@ void TaskChainWidget::onGroupSendAll()
         return;
     }
 
-    QJsonObject chainJson = exportChainToJson(m_chains[idx], false);
+    QJsonObject chainJson = exportChainToJson(m_chains[idx], false, true);
     QJsonArray subTasks = chainJson.value("sub_task_info").toArray();
     if (subTasks.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("提示"),
@@ -2322,7 +2435,7 @@ void TaskChainWidget::updateGroupSelectBtn()
         ? QStringLiteral("取消选中") : QStringLiteral("全选组"));
 }
 
-QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool onlyChecked) const
+QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool onlyChecked, bool forExecution) const
 {
     QJsonObject root;
     root["task_name"] = chain.name;
@@ -2341,7 +2454,8 @@ QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool only
         if (subTaskName.isEmpty()) subTaskName = QString("sub_task_%1").arg(i + 1);
 
         subTask["sub_task_name"] = subTaskName;
-        subTask["enable"]        = enable;
+        // 下发执行时强制为 true，确保后台控制器无条件执行；本地保存/写缓存时保留界面真实勾选状态
+        subTask["enable"]        = forExecution ? true : enable;
 
         QJsonArray groupInfo;
         // 以界面正在编辑的 groups 为准, group_info 仅作为兼容旧数据的兜底
@@ -2362,7 +2476,8 @@ QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool only
             if (groupName.isEmpty()) groupName = QString("group_%1").arg(g + 1);
 
             group["group_name"] = groupName;
-            group["enable"]     = groupEnable;
+            // 下发执行时强制为 true，确保后台控制器无条件执行；本地保存/写缓存时保留界面真实勾选状态
+            group["enable"]     = forExecution ? true : groupEnable;
 
             QJsonArray actionsOut;
             QJsonArray rawActions = rawGroup.value("actions").toArray();
@@ -2441,6 +2556,11 @@ QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool only
 
             group["actions"] = actionsOut;
             groupInfo.append(group);
+        }
+
+        // 若是勾选下发执行模式, 且该子任务内没有勾选任何有效组, 则跳过该空子任务
+        if (forExecution && onlyChecked && groupInfo.isEmpty()) {
+            continue;
         }
 
         subTask["group_info"] = groupInfo;
@@ -2730,4 +2850,45 @@ void TaskChainWidget::onExecuteNext()
         }
         updateBottomBar();
     });
+}
+
+// ── 任务与组长按拖拽重新排序 ─────────────────────────────────────────────────
+
+void TaskChainWidget::reorderGroup(int fromIdx, int toIdx)
+{
+    QJsonArray groups = currentTaskGroups();
+    int count = groups.size();
+    if (fromIdx < 0 || fromIdx >= count) return;
+    if (toIdx < 0 || toIdx >= count) return;
+    if (fromIdx == toIdx) return;
+
+    QJsonValue item = groups.takeAt(fromIdx);
+    groups.insert(toIdx, item);
+
+    setCurrentTaskGroups(groups);
+    refreshGroupList();
+    if (toIdx >= 0 && toIdx < m_groupList->count()) {
+        m_groupList->setCurrentRow(toIdx);
+    }
+    updateStatus(QStringLiteral("组已重新排序: 第 %1 组 -> 第 %2 组").arg(fromIdx + 1).arg(toIdx + 1));
+}
+
+void TaskChainWidget::reorderTask(int fromIdx, int toIdx)
+{
+    int cIdx = currentChainIndex();
+    if (cIdx < 0 || cIdx >= m_chains.size()) return;
+    auto &tasks = m_chains[cIdx].tasks;
+    int count = tasks.size();
+    if (fromIdx < 0 || fromIdx >= count) return;
+    if (toIdx < 0 || toIdx >= count) return;
+    if (fromIdx == toIdx) return;
+
+    QJsonValue item = tasks.takeAt(fromIdx);
+    tasks.insert(toIdx, item);
+
+    refreshTaskList();
+    if (toIdx >= 0 && toIdx < m_taskList->count()) {
+        m_taskList->setCurrentRow(toIdx);
+    }
+    updateStatus(QStringLiteral("任务已重新排序: 第 %1 项 -> 第 %2 项").arg(fromIdx + 1).arg(toIdx + 1));
 }

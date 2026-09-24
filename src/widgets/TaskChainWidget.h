@@ -41,6 +41,9 @@ public:
     explicit TaskChainWidget(QWidget *parent = nullptr);
     ~TaskChainWidget() override;
 
+    void reorderGroup(int fromIdx, int toIdx);
+    void reorderTask(int fromIdx, int toIdx);
+
 signals:
     void goBack();
 
@@ -216,7 +219,8 @@ protected:
     void setCurrentTaskGroups(const QJsonArray &groups);
 
     // 标准 JSON 数据结构转换 (包含 task_name / sub_task_info / group_info / enable / actions)
-    QJsonObject exportChainToJson(const ChainData &chain, bool onlyChecked = false) const;
+    // forExecution: true=用于向后台下发执行(enable强制置为true, 过滤空组任务), false=用于本地保存(保留原本勾选状态)
+    QJsonObject exportChainToJson(const ChainData &chain, bool onlyChecked = false, bool forExecution = false) const;
     ChainData   importChainFromJson(const QJsonObject &json) const;
 };
 
