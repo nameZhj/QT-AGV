@@ -3,6 +3,7 @@
 #include "core/AppConfig.h"
 #include "core/ApiService.h"
 #include "core/MotionConfigManager.h"
+#include "core/MqttService.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -21,6 +22,8 @@
 #include <QStyle>
 #include <QEventLoop>
 #include <QTimer>
+#include <QDateTime>
+#include <QCoreApplication>
 
 // ── 音频名称下拉支持 ────────────────────────────────────────────────────────
 
@@ -67,6 +70,11 @@ static const char *S_PANEL_TITLE =
     "color:#b0b8c0; font-size:13px; font-weight:bold; padding:4px 6px; "
     "background:#222831; border-radius:4px;";
 
+// 顶升线速度上限 (m/s)
+static constexpr double kMaxLiftLinearSpeed = 0.1;
+// 顶升高度上限 (m)
+static constexpr double kMaxLiftHeight = 0.15;
+
 static const char *S_LIST_STYLE =
     "QListWidget { background:#181d23; border:1px solid #2a3038; border-radius:4px; }"
     "QListWidget::item { color:#c0c8d0; padding:6px 10px; border-bottom:1px solid #22272d; }"
@@ -87,23 +95,69 @@ static QPushButton *makeBtn(const QString &text) {
 }
 
 static QString actionTypeFromName(const QString &name) {
-    if (name == "路径导航") return "0";
-    if (name == "平动") return "1";
-    if (name == "转动") return "2";
-    if (name == "播放音频") return "3";
-    if (name == "顶升") return "4";
-    if (name == "停止播放音频") return "5";
-    return "0";
+    if (name == "路径导航") return "99";
+    if (name == "顶升") return "3";          // 顶升上升或下降
+    if (name == "转动") return "5";
+    if (name == "平动") return "6";
+    if (name == "播放音频") return "10";
+    if (name == "停止播放音频") return "11";
+    return "-1";
 }
 
 static QString actionDescFromType(const QString &type) {
-    if (type == "0") return "路径导航";
-    if (type == "1") return "平动";
-    if (type == "2") return "转动";
-    if (type == "3") return "播放音频";
-    if (type == "4") return "顶升";
-    if (type == "5") return "停止播放音频";
+    if (type == "99") return "路径导航";
+    if (type == "3" ) return "顶升";     
+    if (type == "5" ) return "转动";     
+    if (type == "6" ) return "平动";  
+    if (type == "10") return "播放音频";
+    if (type == "11") return "停止播放音频";
     return "路径导航";
+}
+
+// 旧版本动作编号归一化为当前编号, 导出与导入共用
+// 当前: 99 路径导航 / 3 顶升 / 5 转动 / 6 平动 / 10 播放音频 / 11 停止播放音频
+// 旧数据: 0 路径导航 / 1 平动 / 2 转动 / 4 顶升; 旧 3/5 为音频动作, 需按动作名称区分
+static QString normalizeActionType(const QString &type, const QString &name) {
+    if (type == "0") return "99";
+    if (type == "1") return "6";
+    if (type == "2") return "5";
+    if (type == "4") return "3";
+    if (type == "3" && name != "顶升") return "10";
+    if (type == "5" && name == "停止播放音频") return "11";
+    return type;
+}
+
+// 列表内所有项的自定义勾选框是否都被勾选 (空列表返回 false)
+static bool allCheckBoxesChecked(QListWidget *list) {
+    if (!list || list->count() == 0) return false;
+    for (int i = 0; i < list->count(); ++i) {
+        auto *widget = list->itemWidget(list->item(i));
+        auto *cb = widget ? widget->findChild<QCheckBox*>() : nullptr;
+        if (!cb || !cb->isChecked()) return false;
+    }
+    return true;
+}
+
+// 统一勾选/取消列表内所有项的自定义勾选框
+static void setAllCheckBoxesChecked(QListWidget *list, bool checked) {
+    if (!list) return;
+    for (int i = 0; i < list->count(); ++i) {
+        auto *widget = list->itemWidget(list->item(i));
+        auto *cb = widget ? widget->findChild<QCheckBox*>() : nullptr;
+        if (cb) cb->setChecked(checked);
+    }
+}
+
+// 本地缓存文件: 与 exe 同级的 taskChainCache.json
+static QString cacheFilePath() {
+    return QCoreApplication::applicationDirPath() + "/taskChainCache.json";
+}
+
+// 本地任务链保存目录: 与 exe 同级的 task_chains 文件夹
+static QString taskChainLocalDir() {
+    QString dir = QCoreApplication::applicationDirPath() + "/task_chains";
+    QDir().mkpath(dir);
+    return dir;
 }
 
 // 可拖拽的列表项 — 支持拖出动作标签
@@ -176,11 +230,64 @@ protected:
     }
 };
 
+// 覆盖在四面板编辑区上的半透明遮罩 (执行中锁定，拦截一切点击与拖拽操作)
+class TaskChainLockOverlay : public QWidget
+{
+public:
+    explicit TaskChainLockOverlay(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setAttribute(Qt::WA_Hover, true);
+        setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::ForbiddenCursor);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *e) override { e->accept(); }
+    void mouseReleaseEvent(QMouseEvent *e) override { e->accept(); }
+    void mouseDoubleClickEvent(QMouseEvent *e) override { e->accept(); }
+    void mouseMoveEvent(QMouseEvent *e) override { e->accept(); }
+    void wheelEvent(QWheelEvent *e) override { e->accept(); }
+    void contextMenuEvent(QContextMenuEvent *e) override { e->accept(); }
+    void dragEnterEvent(QDragEnterEvent *e) override { e->acceptProposedAction(); }
+    void dragMoveEvent(QDragMoveEvent *e) override { e->acceptProposedAction(); }
+    void dropEvent(QDropEvent *e) override { e->acceptProposedAction(); }
+};
+
 TaskChainWidget::TaskChainWidget(QWidget *parent)
     : QWidget(parent)
 {
     initActionDefs();
     setupUI();
+
+    // 数据变更后延迟写本地缓存, 避免连续编辑时频繁落盘
+    m_cacheTimer = new QTimer(this);
+    m_cacheTimer->setSingleShot(true);
+    m_cacheTimer->setInterval(800);
+    connect(m_cacheTimer, &QTimer::timeout, this, &TaskChainWidget::writeCache);
+}
+
+TaskChainWidget::~TaskChainWidget()
+{
+    // 释放 MQTT 订阅, 避免回调持有已销毁对象
+    if (m_statusSubscribed) {
+        MqttService::instance().unsubscribeTopic("/taskchain/status");
+        m_statusSubscribed = false;
+    }
+    if (m_currentSubscribed) {
+        MqttService::instance().unsubscribeTopic("/taskchain/currentTask");
+        m_currentSubscribed = false;
+    }
+
+    // 本次运行点击过“保存”则保留缓存, 否则随程序退出清理
+    if (m_didSave) {
+        if (m_cacheTimer && m_cacheTimer->isActive()) {
+            m_cacheTimer->stop();
+            writeCache();
+        }
+    } else {
+        QFile::remove(cacheFilePath());
+    }
 }
 
 void TaskChainWidget::setupUI()
@@ -189,9 +296,15 @@ void TaskChainWidget::setupUI()
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
+    // ── 编辑区容器 (包含四面板分割器及半透明锁定遮罩) ──
+    m_panelsContainer = new QWidget(this);
+    auto *containerLayout = new QVBoxLayout(m_panelsContainer);
+    containerLayout->setContentsMargins(0, 0, 0, 0);
+    containerLayout->setSpacing(0);
+
     // 四面板分割器
-    auto *splitter = new QSplitter(Qt::Horizontal, this);
-    root->addWidget(splitter, 1);
+    auto *splitter = new QSplitter(Qt::Horizontal, m_panelsContainer);
+    containerLayout->addWidget(splitter, 1);
 
     // ── 面板1: 任务链列表 ──
     auto *panel1 = new QWidget;
@@ -225,26 +338,48 @@ void TaskChainWidget::setupUI()
     setupPanel4DragDrop(p4Layout);
     splitter->addWidget(panel4);
 
-    // 任务面板缩窄50%, 空间均分给组和标签
-    // 之前: {220, 320, 320, 200}  total=1060  task=320
-    // 现在: task=160, 释放160均分给group和tag  => {220, 160, 400, 280}
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 1);   // 缩窄
     splitter->setStretchFactor(2, 3);   // 加宽
     splitter->setStretchFactor(3, 2);   // 加宽
     splitter->setSizes({200, 160, 400, 280});
 
+    // ── 创建覆盖在整个四面板编辑区之上的半透明锁定遮罩 ──
+    auto *overlay = new TaskChainLockOverlay(m_panelsContainer);
+    overlay->setObjectName("taskChainLockOverlay");
+    overlay->setStyleSheet(
+        "#taskChainLockOverlay {"
+        "  background-color: rgba(10, 14, 20, 0.65);"
+        "}"
+    );
+
+    auto *overlayLayout = new QVBoxLayout(overlay);
+    overlayLayout->setAlignment(Qt::AlignCenter);
+    overlayLayout->setContentsMargins(0, 0, 0, 0);
+
+    m_overlayTextLabel = new QLabel(QStringLiteral("任务执行中"), overlay);
+    m_overlayTextLabel->setStyleSheet(
+        "color: #58a6ff; "
+        "font-size: 20px; "
+        "font-weight: bold; "
+        "letter-spacing: 2px; "
+        "background: transparent;"
+    );
+    m_overlayTextLabel->setAlignment(Qt::AlignCenter);
+    overlayLayout->addWidget(m_overlayTextLabel);
+
+    overlay->setVisible(false);
+    m_lockOverlay = overlay;
+
+    root->addWidget(m_panelsContainer, 1);
+
     // 初始化可拖拽动作标签
     refreshActionTags();
 
-    // 底部公共状态栏
+    // 底部公共状态栏 (独立于编辑区容器之外，完全不被遮罩覆盖)
     setupBottomBar(root);
 
     updateBottomBar();
-
-    if (m_chains.isEmpty()) {
-        onChainNew();
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -430,24 +565,29 @@ void TaskChainWidget::setupPanel3Group(QVBoxLayout *layout)
 
         QJsonObject params;
         if (actionName == "路径导航") {
-            QString stName = !m_stations.isEmpty() ? m_stations[0].name : "LM3";
-            action["target_station"] = stName;
-            params["target_station"] = stName;
+            // 目标站点默认取路网第一个点; 路网未加载时留空, 由用户在参数中指定
+            QString stId;
+            QString stName;
+            if (!m_stations.isEmpty()) {
+                stId   = m_stations[0].id;
+                stName = m_stations[0].name;
+            }
+            action["target_station"] = stId;
+            params["target_station"] = stId;
             params["target"]         = stName;
         } else if (actionName == "平动") {
-            action["direction"] = "前进";
             action["distance"]  = 1.0;
-            action["speed"]     = 0.2;
-            params["direction"] = "前进";
+            action["vx"]        = 0.2;
+            action["vy"]        = 0.0;
             params["distance"]  = 1.0;
-            params["speed"]     = 0.2;
+            params["vx"]        = 0.2;
+            params["vy"]        = 0.0;
         } else if (actionName == "转动") {
-            action["direction"] = "顺时针(右转)";
-            action["angle"]     = 90.0;
-            action["speed"]     = 0.5;
-            params["direction"] = "顺时针(右转)";
-            params["angle"]     = 90.0;
-            params["speed"]     = 0.5;
+            // 旋转方向由旋转角度正负决定
+            action["rotate_angle"] = -90.0;
+            action["rotate_speed"] = 30.0;
+            params["angle"]        = -90.0;
+            params["speed"]        = 30.0;
         }
         action["params"] = params;
         actions.append(action);
@@ -460,15 +600,15 @@ void TaskChainWidget::setupPanel3Group(QVBoxLayout *layout)
     };
     layout->addWidget(m_groupList, 1);
 
-    // 循环 + 发送按钮
+    // 发送按钮
     auto *btnRow2 = new QHBoxLayout;
     btnRow2->setSpacing(6);
-    m_groupLoopCheck = new QCheckBox(QStringLiteral("循环"));
-    m_groupLoopCheck->setStyleSheet("color:#c0c8d0; font-size:12px;");
-    btnRow2->addWidget(m_groupLoopCheck);
     btnRow2->addStretch();
+    m_loopCheck = new QCheckBox(QStringLiteral("循环"));
+    m_loopCheck->setToolTip(QStringLiteral("勾选后将以循环模式执行下发任务"));
     m_groupSendSelBtn = makeBtn(QStringLiteral("发送勾选的任务"));
     m_groupSendAllBtn = makeBtn(QStringLiteral("发送全部任务"));
+    btnRow2->addWidget(m_loopCheck);
     btnRow2->addWidget(m_groupSendSelBtn);
     btnRow2->addWidget(m_groupSendAllBtn);
     layout->addLayout(btnRow2);
@@ -482,7 +622,6 @@ void TaskChainWidget::setupPanel3Group(QVBoxLayout *layout)
     connect(m_groupInsertBtn,    &QPushButton::clicked, this, &TaskChainWidget::onGroupInsert);
     connect(m_groupDeleteBtn,     &QPushButton::clicked, this, &TaskChainWidget::onGroupDelete);
     connect(m_groupSelectAllBtn, &QPushButton::clicked, this, &TaskChainWidget::onGroupSelectAll);
-    connect(m_groupLoopCheck,  &QCheckBox::toggled, this, &TaskChainWidget::onGroupLoopToggled);
     connect(m_groupSendSelBtn, &QPushButton::clicked, this, &TaskChainWidget::onGroupSendSelected);
     connect(m_groupSendAllBtn,  &QPushButton::clicked, this, &TaskChainWidget::onGroupSendAll);
     // 选择变化时更新底部状态栏
@@ -514,19 +653,6 @@ void TaskChainWidget::setupPanel4DragDrop(QVBoxLayout *layout)
 // 数据操作
 // ══════════════════════════════════════════════════════════════════════════════
 
-void TaskChainWidget::addChainItem(const QString &name)
-{
-    ChainData data;
-    data.name = name;
-    m_chains.append(data);
-
-    int chainIndex = m_chains.size() - 1;
-    auto *item = new QListWidgetItem(m_chainList);
-    item->setData(Qt::UserRole, chainIndex);
-    createChainRowWidget(item, chainIndex);
-    m_chainList->setCurrentItem(item);
-}
-
 void TaskChainWidget::refreshChainList()
 {
     m_chainList->blockSignals(true);
@@ -537,6 +663,7 @@ void TaskChainWidget::refreshChainList()
         createChainRowWidget(item, i);
     }
     m_chainList->blockSignals(false);
+    scheduleCacheWrite();
 }
 
 void TaskChainWidget::createChainRowWidget(QListWidgetItem *item, int chainIndex)
@@ -633,6 +760,14 @@ void TaskChainWidget::selectChain(int index)
     if (index < 0 || index >= m_chains.size()) return;
     m_currentChainIndex = index;
     m_currentTaskIndex = -1;   // 重置任务选择
+
+    // 同步列表当前项: 任务/组面板通过 currentChainIndex() 读取选中项
+    if (m_chainList->currentRow() != index) {
+        m_chainList->blockSignals(true);
+        m_chainList->setCurrentRow(index);
+        m_chainList->blockSignals(false);
+    }
+
     refreshTaskList();
     refreshGroupList();
     updateBottomBar();
@@ -662,6 +797,8 @@ void TaskChainWidget::setCurrentTaskGroups(const QJsonArray &groups)
     if (m_currentTaskIndex < 0 || m_currentTaskIndex >= m_chains[chainIdx].tasks.size()) return;
     QJsonObject task = m_chains[chainIdx].tasks[m_currentTaskIndex].toObject();
     task["groups"] = groups;
+    // 两个键保持同步, 避免下发时读到创建时的旧快照
+    task["group_info"] = groups;
     m_chains[chainIdx].tasks[m_currentTaskIndex] = task;
 }
 
@@ -721,6 +858,7 @@ void TaskChainWidget::refreshTaskList()
                     task["checked"] = state;
                     m_chains[idx].tasks[i] = task;
                     updateTaskSelectBtn();
+                    scheduleCacheWrite();
                 });
 
             // 备注修改时保存到数据 + 动态调整高度
@@ -731,6 +869,7 @@ void TaskChainWidget::refreshTaskList()
                     QJsonObject task = m_chains[idx].tasks[i].toObject();
                     task["note"] = noteEdit->toPlainText();
                     m_chains[idx].tasks[i] = task;
+                    scheduleCacheWrite();
 
                     // 动态调整高度: 基于文档行数
                     int lineCount = noteEdit->document()->size().height() / noteEdit->fontMetrics().lineSpacing();
@@ -751,6 +890,7 @@ void TaskChainWidget::refreshTaskList()
     m_taskCountLabel->setText(QStringLiteral("共 [%1] 项").arg(m_taskList->count()));
     m_taskList->blockSignals(false);
     updateTaskSelectBtn();
+    scheduleCacheWrite();
 }
 
 void TaskChainWidget::refreshGroupList()
@@ -771,6 +911,7 @@ void TaskChainWidget::refreshGroupList()
     m_groupList->blockSignals(false);
     updateGroupSelectBtn();
     updateBottomBar();
+    scheduleCacheWrite();
 }
 
 void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex, bool checked)
@@ -831,6 +972,7 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
             groups[groupIndex] = group;
             setCurrentTaskGroups(groups);
             updateGroupSelectBtn();
+            scheduleCacheWrite();
         });
 
     // 如果没有标签, 显示占位提示
@@ -840,35 +982,25 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
         hint->setMinimumHeight(60);
         vbox->addWidget(hint);
     } else {
-        // 显示每个动作标签 + 删除按钮 + 属性按钮 + 参数区域
+        // 显示每个动作标签 + 参数区域 + 删除按钮
         for (int a = 0; a < actions.size(); ++a) {
             QJsonObject action = actions[a].toObject();
             QString actionName = action.value("name").toString();
             if (actionName.isEmpty()) actionName = action.value("action_desc").toString();
             QJsonObject params = action.value("params").toObject();
 
-            // 为“路径导航”解析站点显示名称
-            QString displayTarget = "未知";
+            // 为“路径导航”解析站点显示名称 (target_station 存的是路网点 id)
             QString targetId = params.value("target_station").toString();
             if (targetId.isEmpty()) targetId = params.value("target").toString();
             if (targetId.isEmpty()) targetId = action.value("target_station").toString();
-
-            if (!targetId.isEmpty()) {
-                displayTarget = targetId;
-                for (const auto &st : m_stations) {
-                    if (st.id == targetId || st.name == targetId) {
-                        displayTarget = st.name;
-                        break;
-                    }
-                }
-            }
+            const QString displayTarget = targetId.isEmpty() ? QStringLiteral("未知") : stationName(targetId);
 
             QString displayName = actionName;
             if (actionName == "路径导航" || action.value("action_desc").toString() == "路径导航") {
                 displayName = QStringLiteral("路径导航 -> %1").arg(displayTarget);
             }
 
-            // 动作行: 序号 + 名称 + 属性按钮 + 删除标签按钮
+            // 动作行: 序号 + 名称 + 删除标签按钮
             auto *actRow = new QHBoxLayout;
             actRow->setSpacing(4);
 
@@ -876,15 +1008,6 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
             actLabel->setStyleSheet("color:#c0c8d0; font-size:11px; background:transparent; padding:2px 8px;");
             actLabel->setMinimumHeight(24);
             actRow->addWidget(actLabel, 1);
-
-            // 属性按钮
-            auto *attrBtn = new QToolButton;
-            attrBtn->setText("⚙");
-            attrBtn->setToolTip(QStringLiteral("属性"));
-            attrBtn->setAutoRaise(true);
-            attrBtn->setFixedSize(22, 22);
-            attrBtn->setStyleSheet("QToolButton{background:transparent;border:none;color:#8899aa;font-size:14px;}QToolButton:hover{color:#f0a060;}");
-            actRow->addWidget(attrBtn);
 
             // 删除标签按钮
             auto *delTagBtn = new QToolButton;
@@ -897,57 +1020,91 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
 
             vbox->addLayout(actRow);
 
-            // 参数摘要区域 (击弹出定义对话框)
+            // 参数摘要区域 (点击弹出定义对话框)
+            // 站点字段显示路网点名称; 内部/重复字段不展示
             QString paramSummary;
-            if (params.isEmpty()) {
-                paramSummary = QStringLiteral("未设置 — 点击编辑");
-            } else {
+            {
                 QStringList parts;
-                for (auto it = params.begin(); it != params.end(); ++it)
-                    parts << QStringLiteral("%1: %2").arg(it.key(), it.value().toVariant().toString());
-                paramSummary = parts.join(", ");
+                bool audioShown = false;
+                if (actionName == QStringLiteral("停止播放音频") || (findActionDef(actionName) && findActionDef(actionName)->params.isEmpty())) {
+                    paramSummary = QStringLiteral("无需设置参数");
+                } else {
+                    for (auto it = params.begin(); it != params.end(); ++it) {
+                        const QString key = it.key();
+                        if (key == "target" || key == "checked" || key == "id")
+                            continue;
+                        if (key == "audioName" || key == "audio_name") {
+                            // 音频名称: 显示已选音频 (两种字段名只显示一次)
+                            if (audioShown) continue;
+                            const QString audio = it.value().toString();
+                            if (audio.isEmpty()) continue;
+                            audioShown = true;
+                            parts << QStringLiteral("音频名称: %1").arg(audioDisplayName(audio));
+                            continue;
+                        }
+                        QString value = it.value().toVariant().toString();
+                        if (key == "loop") {
+                            // 循环播放: 数据为 yes / no, 界面显示 是 / 否
+                            parts << QStringLiteral("循环播放: %1")
+                                         .arg(value.compare("yes", Qt::CaseInsensitive) == 0 ? "是" : "否");
+                            continue;
+                        }
+                        if (key == "target_station") {
+                            parts << QStringLiteral("目标站点: %1").arg(stationName(value));
+                            continue;
+                        }
+                        parts << QStringLiteral("%1: %2").arg(key, value);
+                    }
+                    paramSummary = parts.isEmpty() ? QStringLiteral("未设置 — 点击编辑") : parts.join(", ");
+                }
             }
 
             auto *paramBtn = new QPushButton(paramSummary);
-            paramBtn->setStyleSheet(
-                "QPushButton{text-align:left; background:#22272d; border:1px solid #2a3038; "
-                "border-radius:3px; padding:6px 10px; color:#999; font-size:11px; margin-left:8px;}"
-                "QPushButton:hover{border-color:#00bcd4; color:#c0c8d0;}");
-            paramBtn->setToolTip(QStringLiteral("点击编辑参数"));
+            bool isNoParam = (actionName == QStringLiteral("停止播放音频") || (findActionDef(actionName) && findActionDef(actionName)->params.isEmpty()));
+            if (isNoParam) {
+                paramBtn->setStyleSheet(
+                    "QPushButton{text-align:left; background:#1e2329; border:1px solid #252b33; "
+                    "border-radius:3px; padding:6px 10px; color:#66707a; font-size:11px; margin-left:8px;}");
+                paramBtn->setToolTip(QStringLiteral("此动作直接下发 action_type，无需额外设置参数"));
+                paramBtn->setEnabled(false);
+            } else {
+                paramBtn->setStyleSheet(
+                    "QPushButton{text-align:left; background:#22272d; border:1px solid #2a3038; "
+                    "border-radius:3px; padding:6px 10px; color:#999; font-size:11px; margin-left:8px;}"
+                    "QPushButton:hover{border-color:#00bcd4; color:#c0c8d0;}");
+                paramBtn->setToolTip(QStringLiteral("点击编辑参数"));
+            }
             paramBtn->setMinimumHeight(32);
 
-            // 属性按钮 → 打开 ActionAttributesForm 对话框 (占位)
-            connect(attrBtn, &QToolButton::clicked, this, [this, actionName]() {
-                updateStatus(QStringLiteral("属性设置: %1 (占位)").arg(actionName));
-            });
-
             // 参数按钮 → 打开参数定义对话框
-            connect(paramBtn, &QPushButton::clicked, this,
-                [this, groupIndex, a, actionName]() {
-                    ActionDef *def = findActionDef(actionName);
-                    if (!def) return;
+            if (!isNoParam) {
+                connect(paramBtn, &QPushButton::clicked, this,
+                    [this, groupIndex, a, actionName]() {
+                        ActionDef *def = findActionDef(actionName);
+                        if (!def) return;
 
-                    QJsonArray groups = currentTaskGroups();
-                    if (groupIndex < 0 || groupIndex >= groups.size()) return;
-                    QJsonObject group = groups[groupIndex].toObject();
-                    QJsonArray acts = group.value("actions").toArray();
-                    if (a < 0 || a >= acts.size()) return;
-                    QJsonObject action = acts[a].toObject();
-                    QJsonObject existingParams = action.value("params").toObject();
+                        QJsonArray groups = currentTaskGroups();
+                        if (groupIndex < 0 || groupIndex >= groups.size()) return;
+                        QJsonObject group = groups[groupIndex].toObject();
+                        QJsonArray acts = group.value("actions").toArray();
+                        if (a < 0 || a >= acts.size()) return;
+                        QJsonObject action = acts[a].toObject();
+                        QJsonObject existingParams = action.value("params").toObject();
 
-                    QString result = openActionDefDialog(*def, existingParams);
-                    if (result.isEmpty()) return;
+                        QString result = openActionDefDialog(*def, existingParams);
+                        if (result.isEmpty()) return;
 
-                    QJsonDocument doc = QJsonDocument::fromJson(result.toUtf8());
-                    if (doc.isObject()) {
-                        action["params"] = doc.object();
-                        acts[a] = action;
-                        group["actions"] = acts;
-                        groups[groupIndex] = group;
-                        setCurrentTaskGroups(groups);
-                        refreshGroupList();
-                    }
-                });
+                        QJsonDocument doc = QJsonDocument::fromJson(result.toUtf8());
+                        if (doc.isObject()) {
+                            action["params"] = doc.object();
+                            acts[a] = action;
+                            group["actions"] = acts;
+                            groups[groupIndex] = group;
+                            setCurrentTaskGroups(groups);
+                            refreshGroupList();
+                        }
+                    });
+            }
 
             vbox->addWidget(paramBtn);
 
@@ -1019,21 +1176,20 @@ void TaskChainWidget::initActionDefs()
     };
     m_actionDefs.append(def);
 
-    // 2. 平动
+    // 2. 平动 (参数与“地图与控制-移动-平动”一致: 距离 / vx / vy)
     def = {"平动", "motion"};
     def.params = {
-        {"direction", "平动方向:", "combo", {"前进", "后退", "左移", "右移"}, "", 0},
-        {"distance", "移动距离(m):", "double", {}, "m", 1.0},
-        {"speed", "平动速度(m/s):", "double", {}, "m/s", 0.2},
+        {"distance", "设置距离：", "double", {}, "m", 1.0},
+        {"vx", "设置 vx 速度：", "double", {}, "m/s", 0.2},
+        {"vy", "设置 vy 速度：", "double", {}, "m/s", 0.0},
     };
     m_actionDefs.append(def);
 
-    // 3. 转动
+    // 3. 转动 (旋转方向由旋转角度的正负决定, 不单独设置方向)
     def = {"转动", "motion"};
     def.params = {
-        {"direction", "旋转方向:", "combo", {"顺时针(右转)", "逆时针(左转)"}, "", 0},
-        {"angle", "旋转角度(°):", "double", {}, "°", 90.0},
-        {"speed", "角速度(rad/s):", "double", {}, "rad/s", 0.5},
+        {"angle", "设置旋转角度：", "double", {}, "°", -90.0},
+        {"speed", "设置角速度：", "double", {}, "°/s", 30.0},
     };
     m_actionDefs.append(def);
 
@@ -1045,19 +1201,17 @@ void TaskChainWidget::initActionDefs()
     };
     m_actionDefs.append(def);
 
-    // 5. 顶升
+    // 5. 顶升 (传目标高度 lift_height 与升降线速度 lift_linear, 高度 0-0.15 m, 速度上限 0.1 m/s)
     def = {"顶升", "jack"};
     def.params = {
-        {"operation", "动作:", "combo", {"顶起", "放下"}, "", 0},
-        {"height", "高度(m):", "double", {}, "m", 0.05},
+        {"lift_height", "目标顶升高度:", "double", {}, "m", 0.05},
+        {"lift_linear", "顶升线速度:", "double", {}, "m/s", 0.05},
     };
     m_actionDefs.append(def);
 
-    // 6. 停止播放音频
+    // 6. 停止播放音频 (无需选择音频，直接传 action_type)
     def = {"停止播放音频", "audio"};
-    def.params = {
-        {"audioName", "音频名称:", "audio_combo", {}, "选择音频文件", 0},
-    };
+    def.params = {};
     m_actionDefs.append(def);
 }
 
@@ -1100,36 +1254,62 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
         } else if (param.type == "double") {
             auto *spin = new QDoubleSpinBox;
             const auto &mc = MotionConfigManager::instance();
-            if (param.key == "speed" || param.unit == "m/s") {
-                spin->setRange(0.01, mc.maxSpeed());
+            if (param.key == "lift_height") {
+                // 顶升高度范围 0 - 0.15 m
+                spin->setRange(0.0, kMaxLiftHeight);
+                spin->setSingleStep(0.01);
+                spin->setValue(qBound(0.0, existingVal.toDouble(param.defaultValue), kMaxLiftHeight));
+                spin->setToolTip(QStringLiteral("顶升高度上限: %1 m").arg(kMaxLiftHeight));
+            } else if (param.key == "lift_linear") {
+                // 顶升线速度非负, 上限 0.1 m/s
+                spin->setRange(0.0, kMaxLiftLinearSpeed);
                 spin->setSingleStep(0.05);
-                spin->setValue(mc.clampLinearSpeed(existingVal.toDouble(param.defaultValue)));
+                spin->setValue(qBound(0.0, existingVal.toDouble(param.defaultValue), kMaxLiftLinearSpeed));
+                spin->setToolTip(QStringLiteral("顶升线速度上限: %1 m/s").arg(kMaxLiftLinearSpeed));
+            } else if (param.unit == "°/s") {
+                spin->setRange(-mc.maxAngularSpeedDeg(), mc.maxAngularSpeedDeg());
+                spin->setSingleStep(2.0);
+                spin->setValue(mc.clampSignedAngularSpeedDeg(existingVal.toDouble(param.defaultValue)));
+                spin->setToolTip(QStringLiteral("受全局最大角速度限制 (上限: %1 °/s)").arg(mc.maxAngularSpeedDeg()));
+            } else if (param.unit == "m/s") {
+                spin->setRange(-mc.maxSpeed(), mc.maxSpeed());
+                spin->setSingleStep(0.05);
+                spin->setValue(mc.clampSignedLinearSpeed(existingVal.toDouble(param.defaultValue)));
                 spin->setToolTip(QStringLiteral("受全局最大速度限制 (上限: %1 m/s)").arg(mc.maxSpeed()));
-            } else if (param.unit == "rad/s" || (param.key == "speed" && def.name.contains("转"))) {
-                spin->setRange(0.01, mc.maxAngularSpeedRad());
-                spin->setSingleStep(0.05);
-                spin->setValue(mc.clampAngularSpeedRad(existingVal.toDouble(param.defaultValue)));
-                spin->setToolTip(QStringLiteral("受全局最大角速度限制 (上限: %1 rad/s)").arg(mc.maxAngularSpeedRad(), 0, 'f', 3));
+            } else if (param.key == "distance") {
+                // 距离只能为非负值, 方向由 vx / vy 的正负决定
+                spin->setRange(0.0, 100.0);
+                spin->setSingleStep(0.1);
+                spin->setValue(std::max(0.0, existingVal.toDouble(param.defaultValue)));
             } else {
                 spin->setRange(-99999, 99999);
                 spin->setValue(existingVal.toDouble(param.defaultValue));
             }
             spin->setDecimals(3);
-            if (!param.unit.isEmpty()) spin->setSuffix(" " + param.unit);
             spin->setStyleSheet("QDoubleSpinBox{background:#22272d;border:1px solid #2a3038;border-radius:3px;padding:5px;color:#c0c8d0;font-size:12px;}");
             input = spin;
         } else if (param.type == "int") {
             auto *spin = new QSpinBox;
             spin->setRange(-99999, 99999);
             spin->setValue(existingVal.toInt(param.defaultValue));
-            if (!param.unit.isEmpty()) spin->setSuffix(" " + param.unit);
             spin->setStyleSheet("QSpinBox{background:#22272d;border:1px solid #2a3038;border-radius:3px;padding:5px;color:#c0c8d0;font-size:12px;}");
             input = spin;
         } else if (param.type == "combo") {
             auto *combo = new QComboBox;
-            combo->addItems(param.options);
-            int idx = combo->findText(existingVal.toString());
-            if (idx >= 0) combo->setCurrentIndex(idx);
+            if (param.key == "loop") {
+                // 循环播放: 界面显示"否/是", 实际存 "no"/"yes"
+                combo->addItem("否", "no");
+                combo->addItem("是", "yes");
+                QString cur = existingVal.toString();
+                if (cur == "是") cur = "yes";
+                else if (cur == "否") cur = "no";
+                int idx = combo->findData(cur);
+                combo->setCurrentIndex(idx >= 0 ? idx : 0);
+            } else {
+                combo->addItems(param.options);
+                int idx = combo->findText(existingVal.toString());
+                if (idx >= 0) combo->setCurrentIndex(idx);
+            }
             combo->setStyleSheet("QComboBox{background:#22272d;border:1px solid #2a3038;border-radius:3px;padding:5px;color:#c0c8d0;font-size:12px;}");
             input = combo;
         } else if (param.type == "audio_combo") {
@@ -1179,7 +1359,19 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
         }
 
         if (input) {
-            vbox->addWidget(input);
+            if (!param.unit.isEmpty() && (param.type == "double" || param.type == "int")) {
+                auto *rowWidget = new QWidget(&dlg);
+                auto *rowLayout = new QHBoxLayout(rowWidget);
+                rowLayout->setContentsMargins(0, 0, 0, 0);
+                rowLayout->setSpacing(8);
+                rowLayout->addWidget(input, 1);
+                auto *unitLbl = new QLabel(param.unit, rowWidget);
+                unitLbl->setStyleSheet("color: #a6b0be; font-size: 12px;");
+                rowLayout->addWidget(unitLbl);
+                vbox->addWidget(rowWidget);
+            } else {
+                vbox->addWidget(input);
+            }
             inputWidgets[param.key] = input;
         }
     }
@@ -1220,10 +1412,16 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
             auto *spin = qobject_cast<QDoubleSpinBox*>(w);
             double val = spin->value();
             const auto &mc = MotionConfigManager::instance();
-            if (param.key == "speed" || param.unit == "m/s") {
-                val = mc.clampLinearSpeed(val);
-            } else if (param.unit == "rad/s" || (param.key == "speed" && def.name.contains("转"))) {
-                val = mc.clampAngularSpeedRad(val);
+            if (param.key == "lift_height") {
+                val = qBound(0.0, val, kMaxLiftHeight);
+            } else if (param.key == "lift_linear") {
+                val = qBound(0.0, val, kMaxLiftLinearSpeed);
+            } else if (param.unit == "m/s") {
+                val = mc.clampSignedLinearSpeed(val);
+            } else if (param.unit == "°/s") {
+                val = mc.clampSignedAngularSpeedDeg(val);
+            } else if (param.key == "distance") {
+                val = std::max(0.0, val);
             }
             resultParams[param.key] = val;
         } else if (param.type == "int") {
@@ -1231,7 +1429,13 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
             resultParams[param.key] = spin->value();
         } else if (param.type == "combo") {
             auto *combo = qobject_cast<QComboBox*>(w);
-            resultParams[param.key] = combo->currentText();
+            if (param.key == "loop") {
+                // 传参使用 yes / no
+                QString v = combo->currentData().toString();
+                resultParams[param.key] = v.isEmpty() ? combo->currentText() : v;
+            } else {
+                resultParams[param.key] = combo->currentText();
+            }
         } else if (param.type == "audio_combo") {
             auto *combo = qobject_cast<QComboBox*>(w);
             // 保存的是完整文件名 (itemData), 列表为空手输时退化为输入内容
@@ -1240,14 +1444,8 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
             resultParams[param.key] = full;
         } else if (param.type == "station_combo") {
             auto *combo = qobject_cast<QComboBox*>(w);
-            QString stationName = combo->currentText();
-            if (stationName.isEmpty() || stationName == QStringLiteral("未知")) {
-                stationName = combo->currentData().toString();
-            }
-            if (stationName.isEmpty() || stationName == QStringLiteral("未知")) {
-                stationName = "LM3";
-            }
-            resultParams["target_station"] = stationName;
+            // 下拉框显示名称, itemData 存路网点 id, 保存 id; 未选择时为空
+            resultParams["target_station"] = combo->currentData().toString();
         }
     }
 
@@ -1259,6 +1457,324 @@ void TaskChainWidget::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
     loadMapStations();
+    loadChainsFromCacheAndServer();
+    subscribeChainStatus();
+    subscribeChainCurrentTask();
+}
+
+// 订阅任务链运行状态: {"robotWorking":true,"robotPause":false}
+void TaskChainWidget::subscribeChainStatus()
+{
+    if (m_statusSubscribed) return;
+    m_statusSubscribed = true;
+    MqttService::instance().subscribeTopic("/taskchain/status", 0,
+        [this](const QString &, const QByteArray &payload) { onChainStatusMessage(payload); });
+}
+
+void TaskChainWidget::onChainStatusMessage(const QByteArray &payload)
+{
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+
+    const QJsonObject data = doc.object();
+    m_chainWorking = data.value("robotWorking").toBool(false);
+    m_chainPaused  = data.value("robotPause").toBool(false);
+
+    // 本地执行状态跟随车辆实际状态
+    if (!m_chainWorking)     m_execStatus = NotStarted;
+    else if (m_chainPaused)  m_execStatus = Suspended;
+    else                     m_execStatus = Running;
+
+    // 任务链执行状态与锁定遮罩联动
+    if (m_chainWorking && !m_listLocked) {
+        setListsLocked(true);
+    } else if (!m_chainWorking && m_listLocked) {
+        setListsLocked(false);
+        updateStatus(QStringLiteral("任务链已结束, 编辑区域已解锁"));
+    }
+
+    // 动态更新半透明遮罩上的提示文字
+    if (m_overlayTextLabel) {
+        m_overlayTextLabel->setText(m_chainPaused ? QStringLiteral("任务链已暂停")
+                                                  : QStringLiteral("任务执行中"));
+    }
+
+    updateBottomBar();
+}
+
+// 订阅任务链执行进度: {"currentTask":"sub_task_1","currentGroup":"group_2"}
+void TaskChainWidget::subscribeChainCurrentTask()
+{
+    if (m_currentSubscribed) return;
+    m_currentSubscribed = true;
+    MqttService::instance().subscribeTopic("/taskchain/currentTask", 0,
+        [this](const QString &, const QByteArray &payload) { onChainCurrentTaskMessage(payload); });
+}
+
+void TaskChainWidget::onChainCurrentTaskMessage(const QByteArray &payload)
+{
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+
+    const QJsonObject data = doc.object();
+    m_currentTaskName  = data.value("currentTask").toString();
+    m_currentGroupName = data.value("currentGroup").toString();
+
+    // 锁定期间按上报的任务/组显示选中状态
+    applyRuntimeSelection();
+    updateBottomBar();
+}
+
+void TaskChainWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    if (m_lockOverlay && m_panelsContainer) {
+        m_lockOverlay->setGeometry(m_panelsContainer->rect());
+        if (m_lockOverlay->isVisible()) {
+            m_lockOverlay->raise();
+        }
+    }
+}
+
+// 锁定/解锁 编辑区域 (四面板列表与全部操作按钮):
+// 执行期间弹出半透明遮罩覆盖四面板，彻底阻止一切交互，同时保留底部控制栏可用
+void TaskChainWidget::setListsLocked(bool locked)
+{
+    m_listLocked = locked;
+
+    if (m_lockOverlay && m_panelsContainer) {
+        if (locked) {
+            if (m_overlayTextLabel) {
+                m_overlayTextLabel->setText(m_chainPaused ? QStringLiteral("任务链已暂停")
+                                                          : QStringLiteral("任务执行中"));
+            }
+            m_lockOverlay->setGeometry(m_panelsContainer->rect());
+            m_lockOverlay->show();
+            m_lockOverlay->raise();
+        } else {
+            m_lockOverlay->hide();
+        }
+    }
+
+    installLockFilter(m_chainList, locked);
+    installLockFilter(m_taskList, locked);
+    installLockFilter(m_groupList, locked);
+
+    // 锁定期间禁止键盘焦点切换, 避免方向键改变选中项
+    if (m_chainList) m_chainList->setFocusPolicy(locked ? Qt::NoFocus : Qt::StrongFocus);
+    if (m_taskList)  m_taskList->setFocusPolicy(locked ? Qt::NoFocus : Qt::StrongFocus);
+    if (m_groupList) m_groupList->setFocusPolicy(locked ? Qt::NoFocus : Qt::StrongFocus);
+
+    if (locked) {
+        if (m_groupHintLabel)
+            m_groupHintLabel->setText(QStringLiteral("任务链执行中, 编辑区域已锁定遮罩 (任务链结束后自动解锁)"));
+    } else {
+        m_currentTaskName.clear();
+        m_currentGroupName.clear();
+        if (m_groupHintLabel)
+            m_groupHintLabel->setText(QStringLiteral("拖拽标签到组中, 每组只能添加一种标签"));
+    }
+}
+
+// 递归安装/移除锁定事件过滤器 (含列表项内部的复选框/编辑框等子控件)
+void TaskChainWidget::installLockFilter(QWidget *w, bool install)
+{
+    if (!w) return;
+    if (install) w->installEventFilter(this);
+    else         w->removeEventFilter(this);
+
+    const QList<QWidget*> kids = w->findChildren<QWidget*>();
+    for (QWidget *c : kids) {
+        if (install) c->installEventFilter(this);
+        else         c->removeEventFilter(this);
+    }
+}
+
+bool TaskChainWidget::eventFilter(QObject *obj, QEvent *event)
+{
+    if (m_listLocked) {
+        switch (event->type()) {
+        case QEvent::MouseButtonPress:
+        case QEvent::MouseButtonRelease:
+        case QEvent::MouseButtonDblClick:
+        case QEvent::MouseMove:
+        case QEvent::Wheel:
+        case QEvent::KeyPress:
+        case QEvent::KeyRelease:
+        case QEvent::DragEnter:
+        case QEvent::DragMove:
+        case QEvent::DragLeave:
+        case QEvent::Drop:
+        case QEvent::ContextMenu:
+            return true;   // 锁定期间吞掉用户输入, 不可操作
+        default:
+            break;
+        }
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
+// 按 MQTT 上报的当前任务/组, 在列表中显示对应的选中状态
+void TaskChainWidget::applyRuntimeSelection()
+{
+    if (!m_currentTaskName.isEmpty() && m_taskList) {
+        for (int i = 0; i < m_taskList->count(); ++i) {
+            QListWidgetItem *item = m_taskList->item(i);
+            if (item && subTaskNameAt(item->data(Qt::UserRole).toInt()) == m_currentTaskName) {
+                m_taskList->setCurrentItem(item);
+                m_taskList->scrollToItem(item);
+                break;
+            }
+        }
+    }
+    if (!m_currentGroupName.isEmpty() && m_groupList) {
+        for (int i = 0; i < m_groupList->count(); ++i) {
+            QListWidgetItem *item = m_groupList->item(i);
+            if (item && groupNameAt(item->data(Qt::UserRole).toInt()) == m_currentGroupName) {
+                m_groupList->setCurrentItem(item);
+                m_groupList->scrollToItem(item);
+                break;
+            }
+        }
+    }
+}
+
+QString TaskChainWidget::subTaskNameAt(int taskIdx) const
+{
+    const int idx = currentChainIndex();
+    if (idx < 0 || idx >= m_chains.size()) return QString();
+    if (taskIdx < 0 || taskIdx >= m_chains[idx].tasks.size()) return QString();
+
+    const QJsonObject task = m_chains[idx].tasks[taskIdx].toObject();
+    QString name = task.value("sub_task_name").toString();
+    if (name.isEmpty()) name = task.value("name").toString();
+    if (name.isEmpty()) name = QString("sub_task_%1").arg(taskIdx + 1);
+    return name;
+}
+
+QString TaskChainWidget::groupNameAt(int groupIdx) const
+{
+    const QJsonArray groups = currentTaskGroups();
+    if (groupIdx < 0 || groupIdx >= groups.size()) return QString();
+
+    const QJsonObject group = groups[groupIdx].toObject();
+    QString name = group.value("group_name").toString();
+    if (name.isEmpty()) name = group.value("name").toString();
+    if (name.isEmpty()) name = QString("group_%1").arg(groupIdx + 1);
+    return name;
+}
+
+QString TaskChainWidget::stationName(const QString &idOrName) const
+{
+    if (idOrName.isEmpty()) return QString();
+    for (const auto &st : m_stations) {
+        if (st.id == idOrName || st.name == idOrName) return st.name;
+    }
+    return idOrName;
+}
+
+// 载入本地缓存 + 服务器任务链列表; 同名时以本地缓存为准
+void TaskChainWidget::loadChainsFromCacheAndServer()
+{
+    if (m_cacheLoaded) return;
+    m_cacheLoaded = true;
+
+    m_chains.clear();
+
+    // 1) 本地缓存: 上次运行未落盘/正在编辑的数据
+    QFile cache(cacheFilePath());
+    if (cache.open(QIODevice::ReadOnly)) {
+        const QJsonDocument doc = QJsonDocument::fromJson(cache.readAll());
+        cache.close();
+        if (doc.isArray()) {
+            for (const QJsonValue &v : doc.array()) {
+                if (!v.isObject()) continue;
+                ChainData chain = importChainFromJson(v.toObject());
+                if (!chain.name.isEmpty()) m_chains.append(chain);
+            }
+        }
+    }
+
+    const int localCount = m_chains.size();
+    refreshChainList();
+    if (!m_chains.isEmpty()) selectChain(0);
+
+    // 2) 服务器列表: 解析并合并服务器任务链 (后台返回字段支持 content 与 fileContent)
+    ApiService::instance().listTaskChain([this, localCount](int code, const QJsonObject &resp) {
+        if (code != 200) return;
+
+        int added = 0;
+        int updated = 0;
+        for (const QJsonValue &row : resp.value("data").toArray()) {
+            const QJsonObject obj = row.toObject();
+            QString fileName = obj.value("fileName").toString();
+            if (fileName.isEmpty()) continue;
+            if (fileName.endsWith(".json", Qt::CaseInsensitive)) fileName.chop(5);
+
+            // 解析 content 或 fileContent (支持 JSON 字符串及直接对象)
+            QJsonObject chainJsonObj;
+            if (obj.value("content").isObject()) {
+                chainJsonObj = obj.value("content").toObject();
+            } else if (obj.value("fileContent").isObject()) {
+                chainJsonObj = obj.value("fileContent").toObject();
+            } else {
+                QString rawStr = obj.value("content").toString();
+                if (rawStr.isEmpty()) rawStr = obj.value("fileContent").toString();
+                if (!rawStr.isEmpty()) {
+                    QJsonDocument doc = QJsonDocument::fromJson(rawStr.toUtf8());
+                    if (doc.isObject()) chainJsonObj = doc.object();
+                }
+            }
+            if (chainJsonObj.isEmpty()) continue;
+
+            ChainData chain = importChainFromJson(chainJsonObj);
+            if (chain.name.isEmpty()) chain.name = fileName;
+
+            int existIdx = -1;
+            for (int i = 0; i < m_chains.size(); ++i) {
+                if (m_chains[i].name == chain.name || m_chains[i].name == fileName) {
+                    existIdx = i;
+                    break;
+                }
+            }
+
+            if (existIdx >= 0) {
+                // 如果本地已有同名任务链，用服务器获取到的最新数据更新
+                m_chains[existIdx] = chain;
+                ++updated;
+            } else {
+                m_chains.append(chain);
+                ++added;
+            }
+        }
+
+        if (added > 0 || updated > 0) {
+            refreshChainList();
+            if (m_currentChainIndex < 0 && !m_chains.isEmpty()) selectChain(0);
+            else if (m_currentChainIndex >= 0 && m_currentChainIndex < m_chains.size()) selectChain(m_currentChainIndex);
+        }
+        m_cacheLoaded = true;
+        updateStatus(QStringLiteral("已载入任务链: 本地 %1 条, 服务器获取 %2 条 (新增 %3, 同步 %4)")
+            .arg(localCount).arg(added + updated).arg(added).arg(updated));
+    });
+}
+
+void TaskChainWidget::scheduleCacheWrite()
+{
+    if (m_cacheTimer) m_cacheTimer->start();
+}
+
+void TaskChainWidget::writeCache()
+{
+    QJsonArray arr;
+    for (const auto &chain : m_chains) arr.append(exportChainToJson(chain));
+
+    QFile file(cacheFilePath());
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+    file.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+    file.close();
 }
 
 void TaskChainWidget::loadMapStations()
@@ -1337,53 +1853,16 @@ void TaskChainWidget::onChainNew()
     ChainData data;
     data.name = name;
 
-    // 创建默认的标准子任务与组结构
-    QJsonObject defaultTask;
-    defaultTask["sub_task_name"] = "sub_task_1";
-    defaultTask["name"]          = "sub_task_1";
-    defaultTask["enable"]        = true;
-    defaultTask["checked"]       = true;
-    defaultTask["note"]          = "";
-
-    QJsonObject defaultGroup;
-    defaultGroup["group_name"] = "group_1";
-    defaultGroup["name"]       = "group_1";
-    defaultGroup["enable"]     = true;
-    defaultGroup["checked"]    = true;
-    defaultGroup["actionType"] = "路径导航";
-
-    QJsonObject defaultAction;
-    defaultAction["name"]           = "路径导航";
-    defaultAction["action_desc"]    = "路径导航";
-    defaultAction["action_type"]    = "0";
-    QString stName = !m_stations.isEmpty() ? m_stations[0].name : "LM3";
-    defaultAction["target_station"] = stName;
-
-    QJsonObject params;
-    params["target_station"] = stName;
-    params["target"]         = stName;
-    defaultAction["params"]  = params;
-
-    QJsonArray actions;
-    actions.append(defaultAction);
-    defaultGroup["actions"] = actions;
-
-    QJsonArray groups;
-    groups.append(defaultGroup);
-    defaultTask["group_info"] = groups;
-    defaultTask["groups"]     = groups;
-
-    data.tasks.append(defaultTask);
-
     m_chains.append(data);
     refreshChainList();
     selectChain(m_chains.size() - 1);
-    updateStatus(QStringLiteral("已新建标准任务链: %1").arg(name));
+    updateStatus(QStringLiteral("已新建空任务链: %1, 请继续新建任务").arg(name));
 }
 
 void TaskChainWidget::onChainLoad()
 {
-    QString filePath = QFileDialog::getOpenFileName(this, QStringLiteral("加载任务链 JSON"), "", "JSON Files (*.json *.task)");
+    QString localDir = taskChainLocalDir();
+    QString filePath = QFileDialog::getOpenFileName(this, QStringLiteral("加载任务链 JSON"), localDir, "JSON Files (*.json *.task)");
     if (filePath.isEmpty()) return;
 
     QFile file(filePath);
@@ -1432,7 +1911,25 @@ void TaskChainWidget::onChainSave()
         return;
     }
 
-    // 一次性保存列表中所有任务链: POST /task/chain/batchSave
+    // 1. 同步保存到本地 task_chains 文件夹
+    QString localDir = taskChainLocalDir();
+    int localSavedCount = 0;
+    for (const auto &chain : m_chains) {
+        QString fileName = chain.name.trimmed();
+        if (fileName.isEmpty()) continue;
+        if (!fileName.endsWith(".json", Qt::CaseInsensitive)) {
+            fileName += ".json";
+        }
+        QFile localFile(localDir + "/" + fileName);
+        if (localFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            QJsonDocument doc(exportChainToJson(chain));
+            localFile.write(doc.toJson(QJsonDocument::Indented));
+            localFile.close();
+            localSavedCount++;
+        }
+    }
+
+    // 2. 一次性保存列表中所有任务链至服务器端: POST /task/chain/batchSave
     // Body: [{"fileName": 任务链名称, "fileContent": 该任务链全部数据}]
     QJsonArray chains;
     for (const auto &chain : m_chains) {
@@ -1444,13 +1941,16 @@ void TaskChainWidget::onChainSave()
 
     updateStatus(QStringLiteral("正在保存任务链列表 (%1 条)...").arg(chains.size()));
     ApiService::instance().batchSaveTaskChain(chains,
-        [this, count = chains.size()](int code, const QJsonObject &resp) {
+        [this, count = chains.size(), localSavedCount](int code, const QJsonObject &resp) {
             if (code == 200) {
-                updateStatus(QStringLiteral("已保存任务链列表: %1 条").arg(count));
-                Toast::success(this, QStringLiteral("已保存 %1 条任务链到服务器").arg(count));
+                // 已落盘到服务器, 保留本地缓存供下次启动合并
+                m_didSave = true;
+                writeCache();
+                updateStatus(QStringLiteral("已保存任务链: 本地 %1 条, 服务器 %2 条").arg(localSavedCount).arg(count));
+                Toast::success(this, QStringLiteral("已成功保存 %1 条任务链到本地与服务器").arg(count));
             } else {
-                Toast::error(this, QStringLiteral("任务链保存失败(%1): %2")
-                    .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+                Toast::error(this, QStringLiteral("本地已保存(%1条), 但服务器保存失败(%2): %3")
+                    .arg(localSavedCount).arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
             }
         });
 }
@@ -1479,8 +1979,8 @@ void TaskChainWidget::onTaskNew()
     task["sub_task_name"] = subName;
     task["name"]          = subName;
     task["note"]          = "";
-    task["enable"]        = true;
-    task["checked"]       = true;
+    task["enable"]        = false; // 默认不勾选
+    task["checked"]       = false; // 默认不勾选
     task["group_info"]    = QJsonArray();
     task["groups"]        = QJsonArray();
     m_chains[idx].tasks.append(task);
@@ -1519,38 +2019,8 @@ void TaskChainWidget::onTaskDelete()
 void TaskChainWidget::onTaskSelectAll()
 {
     // 互斥: 全部已选中 → 取消选中; 否则 → 全选
-    // 通过遍历 itemWidget 找到 QCheckBox
-    bool allChecked = true;
-    QList<QCheckBox*> checkBoxes;
-    for (int i = 0; i < m_taskList->count(); ++i) {
-        auto *item = m_taskList->item(i);
-        auto *widget = m_taskList->itemWidget(item);
-        if (widget) {
-            auto *cb = widget->findChild<QCheckBox*>();
-            if (cb) {
-                checkBoxes << cb;
-                if (!cb->isChecked()) allChecked = false;
-            }
-        }
-    }
-
-    bool targetState = !allChecked;
-    for (auto *cb : checkBoxes)
-        cb->setChecked(targetState);
+    setAllCheckBoxesChecked(m_taskList, !allCheckBoxesChecked(m_taskList));
     // 勾选框 toggled 信号会自动同步到数据
-    updateTaskSelectBtn();
-}
-
-void TaskChainWidget::onTaskItemChanged(QListWidgetItem *item)
-{
-    int idx = currentChainIndex();
-    if (idx < 0 || !item) return;
-    int row = m_taskList->row(item);
-    if (row >= 0 && row < m_chains[idx].tasks.size()) {
-        QJsonObject task = m_chains[idx].tasks[row].toObject();
-        task["checked"] = (item->checkState() == Qt::Checked);
-        m_chains[idx].tasks[row] = task;
-    }
     updateTaskSelectBtn();
 }
 
@@ -1575,8 +2045,8 @@ void TaskChainWidget::onGroupAdd()
     QString gName = QString("group_%1").arg(groups.size() + 1);
     group["group_name"] = gName;
     group["name"]       = gName;
-    group["enable"]     = true;
-    group["checked"]    = true;
+    group["enable"]     = false; // 默认不勾选
+    group["checked"]    = false; // 默认不勾选
     group["actions"]    = QJsonArray();
     groups.append(group);
     setCurrentTaskGroups(groups);
@@ -1600,8 +2070,8 @@ void TaskChainWidget::onGroupInsert()
     QString gName = QString("group_%1").arg(groups.size() + 1);
     group["group_name"] = gName;
     group["name"]       = gName;
-    group["enable"]     = true;
-    group["checked"]    = true;
+    group["enable"]     = false; // 默认不勾选
+    group["checked"]    = false; // 默认不勾选
     group["actions"]    = QJsonArray();
 
     if (row >= 0) {
@@ -1642,31 +2112,10 @@ void TaskChainWidget::onGroupDelete()
 
 void TaskChainWidget::onGroupSelectAll()
 {
-    // 互斥: 通过遍历 itemWidget 找到 QCheckBox
-    bool allChecked = true;
-    QList<QCheckBox*> checkBoxes;
-    for (int i = 0; i < m_groupList->count(); ++i) {
-        auto *widget = m_groupList->itemWidget(m_groupList->item(i));
-        if (widget) {
-            auto *cb = widget->findChild<QCheckBox*>();
-            if (cb) {
-                checkBoxes << cb;
-                if (!cb->isChecked()) allChecked = false;
-            }
-        }
-    }
-
-    bool targetState = !allChecked;
-    for (auto *cb : checkBoxes)
-        cb->setChecked(targetState);
+    // 互斥: 全部已选中 → 取消选中; 否则 → 全选
+    setAllCheckBoxesChecked(m_groupList, !allCheckBoxesChecked(m_groupList));
     // 勾选框 toggled 信号会自动同步到数据
     updateGroupSelectBtn();
-}
-
-void TaskChainWidget::onGroupLoopToggled(bool checked)
-{
-    Q_UNUSED(checked);
-    // 占位: 设置循环执行模式
 }
 
 void TaskChainWidget::onGroupSendSelected()
@@ -1687,17 +2136,25 @@ void TaskChainWidget::onGroupSendSelected()
 
     // 序列化为标准任务链字符串并下发 (POST /task/chain/sendTask)
     QString chainString = QString::fromUtf8(QJsonDocument(chainJson).toJson(QJsonDocument::Compact));
+    bool looped = (m_loopCheck && m_loopCheck->isChecked());
 
     m_execStatus = Running;
+    setListsLocked(true);   // 下发后锁定列表, 直至任务链结束
     updateBottomBar();
-    updateStatus(QStringLiteral("正在下发任务链 (勾选子任务): %1").arg(m_chains[idx].name));
+    updateStatus(QStringLiteral("正在下发任务链 (勾选子任务, %1): %2")
+        .arg(looped ? QStringLiteral("循环模式") : QStringLiteral("单次模式"))
+        .arg(m_chains[idx].name));
 
-    ApiService::instance().sendTaskChain(chainString, true, [this](int code, const QJsonObject &resp) {
+    ApiService::instance().sendTaskChain(chainString, true, looped, [this](int code, const QJsonObject &resp) {
         if (code == 200) {
             Toast::success(this, QStringLiteral("任务链数据已成功下发至设备"));
         } else {
-            Toast::error(this, QStringLiteral("任务链下发失败(%1): %2")
-                .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+            m_execStatus = NotStarted;
+            setListsLocked(false);
+            updateBottomBar();
+            QString err = resp.value("msg").toString(QStringLiteral("请求失败"));
+            updateStatus(QStringLiteral("任务链下发失败: %1").arg(err));
+            Toast::error(this, QStringLiteral("任务链下发失败(%1): %2").arg(code).arg(err));
         }
     });
 }
@@ -1720,81 +2177,27 @@ void TaskChainWidget::onGroupSendAll()
 
     // 序列化为标准任务链字符串并下发全部 (POST /task/chain/sendTask)
     QString chainString = QString::fromUtf8(QJsonDocument(chainJson).toJson(QJsonDocument::Compact));
+    bool looped = (m_loopCheck && m_loopCheck->isChecked());
 
     m_execStatus = Running;
+    setListsLocked(true);   // 下发后锁定列表, 直至任务链结束
     updateBottomBar();
-    updateStatus(QStringLiteral("正在下发任务链 (全部子任务): %1").arg(m_chains[idx].name));
+    updateStatus(QStringLiteral("正在下发任务链 (全部子任务, %1): %2")
+        .arg(looped ? QStringLiteral("循环模式") : QStringLiteral("单次模式"))
+        .arg(m_chains[idx].name));
 
-    ApiService::instance().sendTaskChain(chainString, true, [this](int code, const QJsonObject &resp) {
+    ApiService::instance().sendTaskChain(chainString, true, looped, [this](int code, const QJsonObject &resp) {
         if (code == 200) {
             Toast::success(this, QStringLiteral("全部任务链数据已成功下发至设备"));
         } else {
-            Toast::error(this, QStringLiteral("任务链下发失败(%1): %2")
-                .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
+            m_execStatus = NotStarted;
+            setListsLocked(false);
+            updateBottomBar();
+            QString err = resp.value("msg").toString(QStringLiteral("请求失败"));
+            updateStatus(QStringLiteral("任务链下发失败: %1").arg(err));
+            Toast::error(this, QStringLiteral("任务链下发失败(%1): %2").arg(code).arg(err));
         }
     });
-}
-
-// ── 面板4: 可拖拽标签 ──
-
-void TaskChainWidget::onActionTriggered(const QString &actionName)
-{
-    if (m_currentTaskIndex < 0) {
-        QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("请先选择一个任务"));
-        return;
-    }
-
-    QJsonArray groups = currentTaskGroups();
-    if (groups.isEmpty()) {
-        QJsonObject newGroup;
-        newGroup["group_name"] = "group_1";
-        newGroup["name"]       = "group_1";
-        newGroup["enable"]     = true;
-        newGroup["checked"]    = true;
-        groups.append(newGroup);
-    }
-
-    int groupIdx = m_groupList->currentRow();
-    if (groupIdx < 0 || groupIdx >= groups.size()) groupIdx = groups.size() - 1;
-
-    QJsonObject group = groups[groupIdx].toObject();
-    group["actionType"] = actionName;
-
-    QJsonArray actions = group.value("actions").toArray();
-    QJsonObject action;
-    action["name"]        = actionName;
-    action["action_desc"] = actionName;
-    action["action_type"] = actionTypeFromName(actionName);
-
-    QJsonObject params;
-    if (actionName == "路径导航") {
-        QString stName = !m_stations.isEmpty() ? m_stations[0].name : "LM3";
-        action["target_station"] = stName;
-        params["target_station"] = stName;
-        params["target"]         = stName;
-    } else if (actionName == "平动") {
-        action["direction"] = "前进";
-        action["distance"]  = 1.0;
-        action["speed"]     = 0.2;
-        params["direction"] = "前进";
-        params["distance"]  = 1.0;
-        params["speed"]     = 0.2;
-    } else if (actionName == "转动") {
-        action["direction"] = "顺时针(右转)";
-        action["angle"]     = 90.0;
-        action["speed"]     = 0.5;
-        params["direction"] = "顺时针(右转)";
-        params["angle"]     = 90.0;
-        params["speed"]     = 0.5;
-    }
-    action["params"] = params;
-    actions.append(action);
-    group["actions"] = actions;
-    groups[groupIdx] = group;
-    setCurrentTaskGroups(groups);
-
-    refreshGroupList();
-    updateStatus(QStringLiteral("已添加动作: %1").arg(actionName));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1871,6 +2274,10 @@ void TaskChainWidget::updateBottomBar()
         }
     }
 
+    // 任务链执行中: 以 MQTT /taskchain/currentTask 上报的当前任务/组为准
+    if (!m_currentTaskName.isEmpty())  taskName  = m_currentTaskName;
+    if (!m_currentGroupName.isEmpty()) groupName = m_currentGroupName;
+
     // 状态文字
     QString statusText;
     switch (m_execStatus) {
@@ -1889,79 +2296,30 @@ void TaskChainWidget::updateBottomBar()
 
     m_bottomInfoLabel->setText(parts.join("  |  "));
 
-    // 按钮互斥逻辑
-    if (chainName.isEmpty()) {
-        // 无任务链
-        m_suspendResumeBtn->setText(QStringLiteral("暂停任务链"));
-        m_suspendResumeBtn->setEnabled(false);
-        m_cancelBtn->setEnabled(false);
-        m_executeNextBtn->setEnabled(false);
-    } else {
-        m_executeNextBtn->setEnabled(true);
+    // 暂停/继续任务链: 由 MQTT /taskchain/status 的车辆状态决定
+    // robotWorking=false 无任务运行 → 隐藏; 运行中未暂停 → “暂停任务链”; 已暂停 → “继续任务链”
+    m_suspendResumeBtn->setVisible(m_chainWorking);
+    m_suspendResumeBtn->setEnabled(m_chainWorking);
+    m_suspendResumeBtn->setText(m_chainPaused ? QStringLiteral("继续任务链")
+                                              : QStringLiteral("暂停任务链"));
 
-        switch (m_execStatus) {
-        case NotStarted:
-            m_suspendResumeBtn->setText(QStringLiteral("暂停任务链"));
-            m_suspendResumeBtn->setEnabled(false);
-            m_cancelBtn->setEnabled(false);
-            break;
-        case Running:
-            m_suspendResumeBtn->setText(QStringLiteral("继续任务链"));
-            m_suspendResumeBtn->setEnabled(true);
-            m_cancelBtn->setEnabled(true);
-            break;
-        case Suspended:
-            m_suspendResumeBtn->setText(QStringLiteral("继续任务链"));
-            m_suspendResumeBtn->setEnabled(true);
-            m_cancelBtn->setEnabled(true);
-            break;
-        case Completed:
-            m_suspendResumeBtn->setText(QStringLiteral("暂停任务链"));
-            m_suspendResumeBtn->setEnabled(false);
-            m_cancelBtn->setEnabled(false);
-            break;
-        }
-    }
+    bool isWorking = (m_chainWorking || m_execStatus == Running);
+    m_cancelBtn->setEnabled(m_chainWorking);
+    m_executeNextBtn->setEnabled(isWorking && !chainName.isEmpty());
 }
 
 void TaskChainWidget::updateTaskSelectBtn()
 {
     if (!m_taskSelectAllBtn) return;
-    bool allChecked = true;
-    for (int i = 0; i < m_taskList->count(); ++i) {
-        auto *widget = m_taskList->itemWidget(m_taskList->item(i));
-        if (widget) {
-            auto *cb = widget->findChild<QCheckBox*>();
-            if (cb && cb->isChecked()) continue;
-        }
-        allChecked = false;
-        break;
-    }
-    if (m_taskList->count() == 0 || !allChecked) {
-        m_taskSelectAllBtn->setText(QStringLiteral("全选任务"));
-    } else {
-        m_taskSelectAllBtn->setText(QStringLiteral("取消选中"));
-    }
+    m_taskSelectAllBtn->setText(allCheckBoxesChecked(m_taskList)
+        ? QStringLiteral("取消选中") : QStringLiteral("全选任务"));
 }
 
 void TaskChainWidget::updateGroupSelectBtn()
 {
     if (!m_groupSelectAllBtn) return;
-    bool allChecked = true;
-    for (int i = 0; i < m_groupList->count(); ++i) {
-        auto *widget = m_groupList->itemWidget(m_groupList->item(i));
-        if (widget) {
-            auto *cb = widget->findChild<QCheckBox*>();
-            if (cb && cb->isChecked()) continue;
-        }
-        allChecked = false;
-        break;
-    }
-    if (m_groupList->count() == 0 || !allChecked) {
-        m_groupSelectAllBtn->setText(QStringLiteral("全选组"));
-    } else {
-        m_groupSelectAllBtn->setText(QStringLiteral("取消选中"));
-    }
+    m_groupSelectAllBtn->setText(allCheckBoxesChecked(m_groupList)
+        ? QStringLiteral("取消选中") : QStringLiteral("全选组"));
 }
 
 QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool onlyChecked) const
@@ -1986,9 +2344,10 @@ QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool only
         subTask["enable"]        = enable;
 
         QJsonArray groupInfo;
-        QJsonArray rawGroups = taskObj.value("group_info").isArray()
-            ? taskObj.value("group_info").toArray()
-            : taskObj.value("groups").toArray();
+        // 以界面正在编辑的 groups 为准, group_info 仅作为兼容旧数据的兜底
+        QJsonArray rawGroups = taskObj.value("groups").isArray()
+            ? taskObj.value("groups").toArray()
+            : taskObj.value("group_info").toArray();
 
         for (int g = 0; g < rawGroups.size(); ++g) {
             QJsonObject rawGroup = rawGroups[g].toObject();
@@ -2016,51 +2375,59 @@ QJsonObject TaskChainWidget::exportChainToJson(const ChainData &chain, bool only
 
                 QString actionType = rawAction.value("action_type").toString();
                 if (actionType.isEmpty()) actionType = actionTypeFromName(name);
+                actionType = normalizeActionType(actionType, name);
 
                 action["action_type"] = actionType;
                 action["action_desc"] = name.isEmpty() ? actionDescFromType(actionType) : name;
 
                 QJsonObject params = rawAction.value("params").toObject();
 
-                if (actionType == "0") {
-                    // 路径导航: 纯净字段 target_station (如 "LM3")
+                if (actionType == "99") {
+                    // 路径导航: target_station 存路网点 id
                     QString station = params.value("target_station").toString();
                     if (station.isEmpty()) station = rawAction.value("target_station").toString();
                     if (station.isEmpty()) station = params.value("target").toString();
                     if (station.isEmpty()) station = rawAction.value("target").toString();
-                    if (station.isEmpty() || station == QStringLiteral("未知")) {
-                        station = !m_stations.isEmpty() ? m_stations[0].name : "LM3";
+                    // 兼容历史数据: 存的是名称时统一转换成 id
+                    for (const auto &st : m_stations) {
+                        if (st.name == station) { station = st.id; break; }
                     }
+                    // 用户未选择站点时保持为空, 不填充任何默认站点
+                    if (station == QStringLiteral("未知")) station.clear();
                     action["target_station"] = station;
-                } else if (actionType == "1") {
-                    // 平动
-                    action["direction"] = params.contains("direction") ? params.value("direction").toString() : rawAction.value("direction").toString("前进");
-                    action["distance"]  = params.contains("distance") ? params.value("distance").toDouble() : rawAction.value("distance").toDouble(1.0);
-                    action["speed"]     = params.contains("speed") ? params.value("speed").toDouble() : rawAction.value("speed").toDouble(0.2);
-                } else if (actionType == "2") {
-                    // 转动
-                    action["direction"] = params.contains("direction") ? params.value("direction").toString() : rawAction.value("direction").toString("顺时针(右转)");
-                    action["angle"]     = params.contains("angle") ? params.value("angle").toDouble() : rawAction.value("angle").toDouble(90.0);
-                    action["speed"]     = params.contains("speed") ? params.value("speed").toDouble() : rawAction.value("speed").toDouble(0.5);
-                } else if (actionType == "3") {
+                } else if (actionType == "6") {
+                    // 平动: 与“地图与控制-移动-平动”一致, 直接传 distance / vx / vy
+                    action["distance"] = params.contains("distance") ? params.value("distance").toDouble() : rawAction.value("distance").toDouble(1.0);
+                    action["vx"]       = params.contains("vx") ? params.value("vx").toDouble() : rawAction.value("vx").toDouble(0.2);
+                    action["vy"]       = params.contains("vy") ? params.value("vy").toDouble() : rawAction.value("vy").toDouble(0.0);
+                } else if (actionType == "5") {
+                    // 转动: 旋转方向由旋转角度的正负决定, 不传方向字段
+                    action["rotate_angle"] = params.contains("angle") ? params.value("angle").toDouble() : rawAction.value("angle").toDouble(-90.0);
+                    action["rotate_speed"] = params.contains("speed") ? params.value("speed").toDouble() : rawAction.value("speed").toDouble(30.0);
+                } else if (actionType == "10") {
                     // 播放音频
                     QString audioName = params.value("audio_name").toString();
                     if (audioName.isEmpty()) audioName = params.value("audioName").toString();
                     if (audioName.isEmpty()) audioName = rawAction.value("audio_name").toString();
                     if (audioName.isEmpty()) audioName = rawAction.value("audioName").toString();
                     action["audio_name"] = audioName;
-                    action["loop"] = params.contains("loop") ? params.value("loop").toString() : rawAction.value("loop").toString("否");
-                } else if (actionType == "4") {
-                    // 顶升
-                    action["operation"] = params.contains("operation") ? params.value("operation").toString() : rawAction.value("operation").toString("顶起");
-                    action["height"]    = params.contains("height") ? params.value("height").toDouble() : rawAction.value("height").toDouble(0.05);
-                } else if (actionType == "5") {
-                    // 停止播放音频
-                    QString audioName = params.value("audioName").toString();
-                    if (audioName.isEmpty()) audioName = params.value("audio_name").toString();
-                    if (audioName.isEmpty()) audioName = rawAction.value("audio_name").toString();
-                    if (audioName.isEmpty()) audioName = rawAction.value("audioName").toString();
-                    action["audio_name"] = audioName;
+                    // 循环播放: 传参统一为 yes / no (兼容历史数据中的 是 / 否 及布尔值)
+                    QString loopVal = params.contains("loop") ? params.value("loop").toVariant().toString()
+                                                              : rawAction.value("loop").toVariant().toString();
+                    if (loopVal.isEmpty()) loopVal = "no";
+                    if (loopVal == "是" || loopVal.compare("true", Qt::CaseInsensitive) == 0) loopVal = "yes";
+                    else if (loopVal == "否" || loopVal.compare("false", Qt::CaseInsensitive) == 0) loopVal = "no";
+                    action["loop"] = loopVal;
+                } else if (actionType == "3") {
+                    // 顶升: 传目标高度 lift_height (0-0.15m) 与升降线速度 lift_linear (上限 0.1 m/s)
+                    double h = params.contains("lift_height") ? params.value("lift_height").toDouble()
+                                                              : rawAction.value("lift_height").toDouble(0.05);
+                    double v = params.contains("lift_linear") ? params.value("lift_linear").toDouble()
+                                                              : rawAction.value("lift_linear").toDouble(0.05);
+                    action["lift_height"] = qBound(0.0, h, kMaxLiftHeight);
+                    action["lift_linear"] = qBound(0.0, v, kMaxLiftLinearSpeed);
+                } else if (actionType == "11") {
+                    // 停止播放音频: 不需要选择音频，直接传 action_type 即可 (无需携带 audio_name 字段)
                 } else {
                     for (auto it = params.begin(); it != params.end(); ++it) {
                         if (it.key() != "checked" && it.key() != "target" && it.key() != "id") {
@@ -2141,6 +2508,7 @@ TaskChainWidget::ChainData TaskChainWidget::importChainFromJson(const QJsonObjec
 
                 QString actionType = rawAction.value("action_type").toString();
                 if (actionType.isEmpty()) actionType = actionTypeFromName(actionDesc);
+                actionType = normalizeActionType(actionType, actionDesc);
                 if (actionDesc.isEmpty()) actionDesc = actionDescFromType(actionType);
 
                 action["name"]        = actionDesc;
@@ -2148,12 +2516,54 @@ TaskChainWidget::ChainData TaskChainWidget::importChainFromJson(const QJsonObjec
                 action["action_type"] = actionType;
 
                 QJsonObject params;
-                for (auto it = rawAction.begin(); it != rawAction.end(); ++it) {
-                    if (it.key() != "name" && it.key() != "action_desc" && it.key() != "action_type") {
-                        params[it.key()] = it.value();
-                        if (it.key() == "target_station") params["target"] = it.value();
-                        if (it.key() == "audio_name") params["audioName"] = it.value();
+                if (actionType != "11") {
+                    for (auto it = rawAction.begin(); it != rawAction.end(); ++it) {
+                        if (it.key() != "name" && it.key() != "action_desc" && it.key() != "action_type") {
+                            params[it.key()] = it.value();
+                            if (it.key() == "target_station") params["target"] = it.value();
+                            if (it.key() == "audio_name") params["audioName"] = it.value();
+                            // 界面参数键名与下发字段名对应
+                            if (it.key() == "rotate_angle") params["angle"] = it.value();
+                            if (it.key() == "rotate_speed") params["speed"] = it.value();
+                        }
                     }
+                }
+                // 兼容历史平动数据: direction + speed 转换为 vx / vy / distance
+                if (actionType == "6" && !params.contains("vx") && params.contains("direction")) {
+                    const QString dir = params.value("direction").toString();
+                    const double  spd = params.value("speed").toDouble(0.2);
+                    double dist = params.value("distance").toDouble(1.0);
+                    params.remove("direction");
+                    params.remove("speed");
+                    // 方向改为由 vx / vy 的正负表示, 距离只保留大小
+                    if (dir == "左移") {
+                        params["vx"] = 0.0;
+                        params["vy"] = spd;
+                    } else if (dir == "右移") {
+                        params["vx"] = 0.0;
+                        params["vy"] = -spd;
+                    } else if (dir == "后退") {
+                        params["vx"] = -spd;
+                        params["vy"] = 0.0;
+                    } else {
+                        params["vx"] = spd;
+                        params["vy"] = 0.0;
+                    }
+                    params["distance"] = std::abs(dist);
+                }
+                // 下发字段名与界面参数键名统一为 angle/speed, 避免参数摘要重复显示
+                params.remove("rotate_angle");
+                params.remove("rotate_speed");
+                // 兼容历史顶升数据: operation + height 转换为 lift_height / lift_linear
+                if (actionType == "3" && !params.contains("lift_height") && params.contains("height")) {
+                    params["lift_height"] = params.value("height").toDouble(0.05);
+                    params["lift_linear"] = kMaxLiftLinearSpeed;
+                }
+                if (actionType == "3") {
+                    params.remove("operation");
+                    params.remove("height");
+                    params["lift_height"] = qBound(0.0, params.value("lift_height").toDouble(0.05), kMaxLiftHeight);
+                    params["lift_linear"] = qBound(0.0, params.value("lift_linear").toDouble(0.05), kMaxLiftLinearSpeed);
                 }
                 action["params"] = params;
                 outActions.append(action);
@@ -2178,10 +2588,15 @@ void TaskChainWidget::executeSingleAction(const QJsonObject &action)
     QString type = action.value("action_type").toString();
     int actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
 
-    if (type == "0") {
+    if (type == "99") {
         // 路径导航: set_robot_fix_path / set_third_fix_path
         QString targetStation = action.value("target_station").toString();
-        if (targetStation.isEmpty()) targetStation = "LM3";
+        if (targetStation.isEmpty()) {
+            // 未设置目标站点时不使用任何默认站点, 直接跳过
+            updateStatus(QStringLiteral("路径导航缺少目标站点, 已跳过该动作"));
+            Toast::error(this, QStringLiteral("路径导航未设置目标站点, 请先选择站点"));
+            return;
+        }
 
         QJsonObject fixPath;
         QJsonObject d;
@@ -2209,54 +2624,38 @@ void TaskChainWidget::executeSingleAction(const QJsonObject &action)
             qDebug() << "[TaskChain] setRobotFixPath to" << targetStation << "code:" << code << resp;
         });
         updateStatus(QStringLiteral("正在向控制器下发路径导航: 目标站点 %1").arg(targetStation));
-    } else if (type == "1" || type == "6") {
-        // 平动: 按照文档规范调用控制器 set_action_control (action_type: 6)
-        QString dir = action.value("direction").toString("前进");
-        double dist = action.value("distance").toDouble(1.0);
-        double spd  = MotionConfigManager::instance().clampLinearSpeed(action.value("speed").toDouble(0.2));
+    } else if (type == "6") {
+        // 平动: 与“地图与控制-移动-平动”一致, 直接下发 distance / vx / vy
+        const auto &mc = MotionConfigManager::instance();
+        double vx   = mc.clampSignedLinearSpeed(action.value("vx").toDouble(0.2));
+        double vy   = mc.clampSignedLinearSpeed(action.value("vy").toDouble(0.0));
+        double dist = std::max(0.0, action.value("distance").toDouble(1.0));
 
-        double vx = 0.0, vy = 0.0, sendDist = dist;
-        if (dir == "前进") {
-            vx = spd; vy = 0.0; sendDist = std::abs(dist);
-        } else if (dir == "后退") {
-            vx = spd; vy = 0.0; sendDist = -std::abs(dist);
-        } else if (dir == "左移") {
-            vx = 0.0; vy = spd; sendDist = std::abs(dist);
-        } else if (dir == "右移") {
-            vx = 0.0; vy = spd; sendDist = -std::abs(dist);
-        }
-
-        ApiService::instance().setLinearMotion(vx, vy, sendDist, actionId, [this, dir, dist](int code, const QJsonObject &resp) {
-            qDebug() << "[TaskChain] setLinearMotion (" << dir << dist << "m) code:" << code << resp;
+        ApiService::instance().setLinearMotion(vx, vy, dist, actionId, [this, vx, vy, dist](int code, const QJsonObject &resp) {
+            qDebug() << "[TaskChain] setLinearMotion (vx" << vx << "vy" << vy << dist << "m) code:" << code << resp;
         });
-        updateStatus(QStringLiteral("正在向控制器下发平动动作: %1 %2m (速度 %3m/s)").arg(dir).arg(dist).arg(spd));
-    } else if (type == "2" || type == "5") {
-        // 转动: 按照文档规范调用控制器 set_action_control (action_type: 5)
-        QString dir = action.value("direction").toString("顺时针(右转)");
-        double deg  = action.value("angle").toDouble(90.0);
-        double spd  = MotionConfigManager::instance().clampAngularSpeedRad(action.value("speed").toDouble(0.5));
-
+        updateStatus(QStringLiteral("正在向控制器下发平动动作: vx %1 m/s, vy %2 m/s, 距离 %3 m").arg(vx).arg(vy).arg(dist));
+    } else if (type == "5") {
+        // 转动: 旋转方向由旋转角度的正负决定
+        double deg = action.value("rotate_angle").toDouble(-90.0);
+        // 参数以 °/s 保存, 下发前换算为 rad/s
+        double spdDeg = MotionConfigManager::instance().clampSignedAngularSpeedDeg(action.value("rotate_speed").toDouble(30.0));
+        double spd    = spdDeg * M_PI / 180.0;
         double angleRad = deg * M_PI / 180.0;
-        if (dir.contains("顺时针") || dir.contains("右转")) {
-            angleRad = -std::abs(angleRad);
-        } else {
-            angleRad = std::abs(angleRad);
-        }
 
-        ApiService::instance().setRotateMotion(angleRad, spd, actionId, [this, dir, deg](int code, const QJsonObject &resp) {
-            qDebug() << "[TaskChain] setRotateMotion (" << dir << deg << "°) code:" << code << resp;
+        ApiService::instance().setRotateMotion(angleRad, spd, actionId, [this, angleRad, deg](int code, const QJsonObject &resp) {
+            qDebug() << "[TaskChain] setRotateMotion (" << deg << "° =" << angleRad << "rad) code:" << code << resp;
         });
-        updateStatus(QStringLiteral("正在向控制器下发转动动作: %1 %2° (角速度 %3rad/s)").arg(dir).arg(deg).arg(spd));
-    } else if (type == "4") {
-        // 顶升: 按照文档规范调用控制器 set_action_control (action_type: 3)
-        QString op = action.value("operation").toString("顶起");
-        double h   = action.value("height").toDouble(0.05);
-        int actVal = (op == "顶起") ? 1 : 0;
+        updateStatus(QStringLiteral("正在向控制器下发转动动作: %1° (角速度 %2°/s)").arg(deg).arg(spdDeg));
+    } else if (type == "3") {
+        // 顶升: 传目标高度 lift_height (0-0.15m) 与升降线速度 lift_linear (上限 0.1 m/s)
+        double h = qBound(0.0, action.value("lift_height").toDouble(0.05), kMaxLiftHeight);
+        double v = qBound(0.0, action.value("lift_linear").toDouble(0.05), kMaxLiftLinearSpeed);
 
-        ApiService::instance().setJackControl(actVal, h, actionId, [this, op](int code, const QJsonObject &resp) {
-            qDebug() << "[TaskChain] setJackControl (" << op << ") code:" << code << resp;
+        ApiService::instance().setJackControl(h, v, actionId, [this, h, v](int code, const QJsonObject &resp) {
+            qDebug() << "[TaskChain] setJackControl (lift_height" << h << "lift_linear" << v << ") code:" << code << resp;
         });
-        updateStatus(QStringLiteral("正在向控制器下发顶升动作: %1 (高度 %2m)").arg(op).arg(h));
+        updateStatus(QStringLiteral("正在向控制器下发顶升动作: 目标高度 %1m, 线速度 %2m/s").arg(h).arg(v));
     }
 }
 
@@ -2273,6 +2672,10 @@ void TaskChainWidget::onSuspendResume()
         });
         updateStatus(QStringLiteral("任务链已向服务端发送暂停指令"));
         Toast::info(this, QStringLiteral("任务链已暂停"));
+
+        if (m_overlayTextLabel) {
+            m_overlayTextLabel->setText(QStringLiteral("任务链已暂停"));
+        }
     } else if (m_execStatus == Suspended) {
         m_execStatus = Running;
         // PUT /task/chain/control?command=continue navigation
@@ -2284,6 +2687,10 @@ void TaskChainWidget::onSuspendResume()
         });
         updateStatus(QStringLiteral("任务链已向服务端发送继续指令"));
         Toast::success(this, QStringLiteral("任务链已继续"));
+
+        if (m_overlayTextLabel) {
+            m_overlayTextLabel->setText(QStringLiteral("任务执行中"));
+        }
     }
     updateBottomBar();
 }
@@ -2291,6 +2698,8 @@ void TaskChainWidget::onSuspendResume()
 void TaskChainWidget::onCancelChain()
 {
     m_execStatus = NotStarted;
+    // 取消任务链，隐藏遮罩解锁编辑区域
+    setListsLocked(false);
     // PUT /task/chain/control?command=stop navigation
     ApiService::instance().controlTaskChain(QStringLiteral("stop navigation"), [this](int code, const QJsonObject &resp) {
         if (code != 200) {
@@ -2305,30 +2714,20 @@ void TaskChainWidget::onCancelChain()
 
 void TaskChainWidget::onExecuteNext()
 {
-    int idx = currentChainIndex();
-    if (idx < 0) return;
-
-    QJsonObject chainJson = exportChainToJson(m_chains[idx], false);
-    QJsonArray subTasks = chainJson.value("sub_task_info").toArray();
-
-    // 寻找可执行动作并调用控制器接口下发
-    bool executed = false;
-    for (const auto &subVal : subTasks) {
-        QJsonObject subObj = subVal.toObject();
-        QJsonArray groups = subObj.value("group_info").toArray();
-        for (const auto &gVal : groups) {
-            QJsonObject gObj = gVal.toObject();
-            QJsonArray acts = gObj.value("actions").toArray();
-            if (!acts.isEmpty()) {
-                executeSingleAction(acts[0].toObject());
-                executed = true;
-                break;
-            }
-        }
-        if (executed) break;
-    }
-
     m_execStatus = Running;
-    updateStatus(QStringLiteral("已向控制器触发 Next 任务动作"));
+    updateStatus(QStringLiteral("正在请求服务端执行 Next 任务..."));
     updateBottomBar();
+
+    // POST /task/chain/sendNextTask (端口 8048)
+    ApiService::instance().sendNextTask([this](int code, const QJsonObject &resp) {
+        if (code == 200) {
+            Toast::success(this, QStringLiteral("执行 Next 任务成功"));
+            updateStatus(QStringLiteral("服务端已执行 Next 任务"));
+        } else {
+            QString msg = resp.value("msg").toString(QStringLiteral("请求失败"));
+            Toast::error(this, QStringLiteral("执行 Next 任务失败(%1): %2").arg(code).arg(msg));
+            updateStatus(QStringLiteral("执行 Next 任务失败: %1").arg(msg));
+        }
+        updateBottomBar();
+    });
 }

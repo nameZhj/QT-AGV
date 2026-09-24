@@ -7,7 +7,6 @@
 #include <QTimer>
 #include <QJsonObject>
 
-class AgvInfoWidget;
 class CreateMapWidget;
 class EditConfigWidget;
 class MapViewWidget;
@@ -63,7 +62,6 @@ protected:
     QStackedWidget *m_stack    = nullptr;
 
     // Pages
-    AgvInfoWidget    *m_agvInfoPage    = nullptr;
     CreateMapWidget  *m_createMapPage  = nullptr;
     EditConfigWidget *m_editConfigPage = nullptr;
     MapViewWidget    *m_mapPage        = nullptr;
@@ -74,10 +72,18 @@ protected:
     QMap<QString, QWidget *> m_dynamicPages;
 
     // Status bar labels
-    QLabel *m_sbDevice  = nullptr;
-    QLabel *m_sbCarId   = nullptr;
-    QLabel *m_sbConn    = nullptr;
+    QLabel *m_sbDevice    = nullptr;
+    QLabel *m_sbCarId     = nullptr;
+    QLabel *m_sbConn      = nullptr;
+    QLabel *m_sbCov       = nullptr;
+    QLabel *m_sbLatency   = nullptr;
+    QLabel *m_sbTeleop    = nullptr;
+    QLabel *m_sbLocStatus = nullptr;
+    QLabel *m_sbMapStatus = nullptr;
     QPushButton *m_teleopBtn = nullptr;   // 底部"开始遥控"按钮
+
+    int     m_networkLatency = -1;
+    void    testNetworkLatency();
 
     QTimer *m_statusTimer = nullptr;
 };

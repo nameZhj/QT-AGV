@@ -1,5 +1,4 @@
 #include "MainWindow.h"
-#include "widgets/AgvInfoWidget.h"
 #include "widgets/CreateMapWidget.h"
 #include "widgets/EditConfigWidget.h"
 #include "widgets/MapViewWidget.h"
@@ -25,6 +24,8 @@
 #include <QStatusBar>
 #include <QLabel>
 #include <QTimer>
+#include <QTcpSocket>
+#include <QElapsedTimer>
 #include <QFrame>
 #include <QMessageBox>
 #include <QSplitter>
@@ -429,12 +430,11 @@ void MainWindow::setupHeaderBar()
     // entry inside "地图管理" (see MapViewWidget's toolbar / onCreateMap()).
     struct SectionDef { QString text; int pageIndex; };
     const QList<SectionDef> sections = {
-        {"  地图与控制", 1},
-        // {"  任务管理  ", 3},  // 暂不需要任务管理功能，已隐藏
-        {"  任务链  ", 6},
-        {"  参数配置  ", 5},
-        {"  设备信息  ", 0},
-        {"  任务日志  ", 4},
+        {"  地图与控制", 0},
+        // {"  任务管理  ", 2},  // 暂不需要任务管理功能，已隐藏
+        {"  任务链  ", 5},
+        {"  参数配置  ", 4},
+        {"  任务日志  ", 3},
     };
 
     for (int i = 0; i < sections.size(); ++i) {
@@ -446,7 +446,7 @@ void MainWindow::setupHeaderBar()
             onSectionChanged(act->data().toInt());
         });
     }
-    highlightTabForPageIndex(1);   // 与 initPages() 的 m_stack->setCurrentIndex(1) 保持一致
+    highlightTabForPageIndex(0);   // 与 initPages() 的 m_stack->setCurrentIndex(0) 保持一致
 
     addToolBar(Qt::TopToolBarArea, m_sectionBar);
 
@@ -468,7 +468,6 @@ void MainWindow::setupContentArea()
 
 void MainWindow::initPages()
 {
-    m_agvInfoPage    = new AgvInfoWidget;
     m_createMapPage  = new CreateMapWidget;
     m_editConfigPage = new EditConfigWidget;
     m_mapPage        = new MapViewWidget;
@@ -476,13 +475,12 @@ void MainWindow::initPages()
     m_taskLogPage    = new TaskLogWidget;
     m_taskChainPage  = new TaskChainWidget;
 
-    m_stack->addWidget(m_agvInfoPage);     // 0 设备信息
-    m_stack->addWidget(m_mapPage);         // 1 地图列表
-    m_stack->addWidget(m_createMapPage);   // 2 创建地图
-    m_stack->addWidget(m_taskPage);        // 3 任务管理
-    m_stack->addWidget(m_taskLogPage);     // 4 任务日志
-    m_stack->addWidget(m_editConfigPage);  // 5 参数配置
-    m_stack->addWidget(m_taskChainPage);   // 6 任务链
+    m_stack->addWidget(m_mapPage);         // 0 地图列表
+    m_stack->addWidget(m_createMapPage);   // 1 创建地图
+    m_stack->addWidget(m_taskPage);        // 2 任务管理
+    m_stack->addWidget(m_taskLogPage);     // 3 任务日志
+    m_stack->addWidget(m_editConfigPage);  // 4 参数配置
+    m_stack->addWidget(m_taskChainPage);   // 5 任务链
 
     connect(m_taskPage,    &TaskWidget::navigateRequested,
             this, &MainWindow::onNavigateRequested);
@@ -490,15 +488,17 @@ void MainWindow::initPages()
             this, &MainWindow::onNavigateRequested);
     connect(m_mapPage,     &MapViewWidget::navigateRequested,
             this, &MainWindow::onNavigateRequested);
+    connect(m_mapPage,     &MapViewWidget::mapStatusChanged,
+            this, &MainWindow::updateStatusBar);
     connect(m_createMapPage, &CreateMapWidget::goBack, this, [this]() {
         m_stack->setCurrentWidget(m_mapPage);
         m_mapPage->forceRefreshAfterMapping();  // 强制清缓存+重新下载最新地图
-        highlightTabForPageIndex(1);
+        highlightTabForPageIndex(0);
     });
 
     connect(m_stack, &QStackedWidget::currentChanged, this, &MainWindow::refreshCurrentPage);
 
-    m_stack->setCurrentIndex(1);
+    m_stack->setCurrentIndex(0);
 }
 
 void MainWindow::setupStatusBar()
@@ -514,9 +514,20 @@ void MainWindow::setupStatusBar()
     m_sbConn->setToolTip("点击重新连接 MQTT");
     m_sbConn->installEventFilter(this);
 
+    m_sbCov       = new QLabel("置信度: --");
+    m_sbLatency   = new QLabel("网络延迟: --");
+    m_sbTeleop    = new QLabel("无人抢占控制权");
+    m_sbLocStatus = new QLabel("定位状态: 定位失败");
+    m_sbMapStatus = new QLabel("地图加载: 未加载");
+
     sb->addWidget(m_sbDevice);
     sb->addWidget(m_sbCarId);
     sb->addWidget(m_sbConn);
+    sb->addWidget(m_sbCov);
+    sb->addWidget(m_sbLatency);
+    sb->addWidget(m_sbTeleop);
+    sb->addWidget(m_sbLocStatus);
+    sb->addWidget(m_sbMapStatus);
 
     // 抢占控制权按钮已移至顶部地图视图工具栏，底栏不再放置
 
@@ -527,10 +538,12 @@ void MainWindow::setupStatusBar()
     connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::updateStatusBar);
     m_statusTimer->start(3000);
 
-    // 实时同步 MQTT 状态，当连接建立或变化时立即响应，避免需要点击才显示已连接
+    // 实时同步 MQTT 状态与车辆数据
     connect(&MqttService::instance(), &MqttService::connected,    this, &MainWindow::updateStatusBar);
     connect(&MqttService::instance(), &MqttService::disconnected, this, &MainWindow::updateStatusBar);
     connect(&MqttService::instance(), &MqttService::stateChanged, this, &MainWindow::updateStatusBar);
+    connect(&RobotInfoManager::instance(), &RobotInfoManager::currentRobotInfoUpdated,
+            this, &MainWindow::updateStatusBar);
 
     updateStatusBar();
 
@@ -541,6 +554,13 @@ void MainWindow::setupStatusBar()
 
 void MainWindow::connectServices()
 {
+    // 单车独占：连接新车前主动断开旧的所有连接，清空旧订阅与旧车数据缓存
+    MqttService::instance().clearAllSubscriptions();
+    MqttService::instance().disconnectFromHost();
+
+    QString curCarId = AppConfig::instance().agvId().trimmed();
+    if (curCarId.isEmpty()) curCarId = AppConfig::instance().currentDevice().carId.trimmed();
+    RobotInfoManager::instance().resetForCar(curCarId);
     RobotInfoManager::instance().init();
 
     QString ip = AppConfig::instance().serverIp();
@@ -567,7 +587,7 @@ void MainWindow::onSectionChanged(int index)
             // 用户取消或 API 调用中，恢复之前选中的菜单项
             // 创建地图页面(index=2)没有对应的菜单项，其父级是"地图管理"(index=1)
             int prevIdx = m_stack->currentIndex();
-            if (prevIdx == 2) prevIdx = 1;   // 创建地图 → 地图管理
+            if (prevIdx == 1) prevIdx = 0;   // 创建地图 → 地图管理
             for (QAction *act : m_secGroup->actions()) {
                 if (act->data().toInt() == prevIdx) {
                     m_secGroup->blockSignals(true);
@@ -590,20 +610,18 @@ void MainWindow::onSectionChanged(int index)
 void MainWindow::refreshCurrentPage(int index)
 {
     switch (index) {
-    case 0:  // 设备信息 - MQTT实时数据，无需主动刷新
-        break;
-    case 1:  // 地图管理
+    case 0:  // 地图管理
         if (m_mapPage) m_mapPage->refreshData();
         break;
-    case 2:  // 创建地图 - 无需刷新列表
+    case 1:  // 创建地图 - 无需刷新列表
         break;
-    case 3:  // 任务管理
+    case 2:  // 任务管理
         if (m_taskPage) m_taskPage->refreshList();
         break;
-    case 4:  // 任务日志
+    case 3:  // 任务日志
         if (m_taskLogPage) m_taskLogPage->refreshData();
         break;
-    case 5:  // 参数配置
+    case 4:  // 参数配置
         if (m_editConfigPage) m_editConfigPage->refreshData();
         break;
     default: break;
@@ -613,13 +631,12 @@ void MainWindow::refreshCurrentPage(int index)
 void MainWindow::switchToPage(const QString &pageKey)
 {
     static const QMap<QString, int> pageMap = {
-        {"agv_info",    0},
-        {"map",         1},
-        {"create_map",  2},
-        {"task",        3},
-        {"tasklog",     4},
-        {"edit_config", 5},
-        {"taskchain",   6},
+        {"map",         0},
+        {"create_map",  1},
+        {"task",        2},
+        {"tasklog",     3},
+        {"edit_config", 4},
+        {"taskchain",   5},
     };
     auto it = pageMap.find(pageKey);
     if (it != pageMap.end()) {
@@ -647,7 +664,7 @@ void MainWindow::onNavigateRequested(const QString &target, const QString &id)
     if (target == "map_show") {
         // MapViewWidget handles map switching internally; navigate to map page
         m_stack->setCurrentWidget(m_mapPage);
-        highlightTabForPageIndex(1);
+        highlightTabForPageIndex(0);
 
     } else if (target == "create_map") {
         // Secondary page under 地图管理 — no tab to highlight, leave it as-is.
@@ -706,12 +723,12 @@ void MainWindow::onChangeDevice()
         }
         m_dynamicPages.clear();
 
-        // 切换设备后返回默认主页：地图与控制 (pageIndex 1) 并同步高亮导航栏与刷新数据
-        highlightTabForPageIndex(1);
-        if (m_stack->currentIndex() == 1) {
+        // 切换设备后返回默认主页：地图与控制 (pageIndex 0) 并同步高亮导航栏与刷新数据
+        highlightTabForPageIndex(0);
+        if (m_stack->currentIndex() == 0) {
             if (m_mapPage) m_mapPage->refreshData();
         } else {
-            m_stack->setCurrentIndex(1);
+            m_stack->setCurrentIndex(0);
         }
     }
 }
@@ -737,6 +754,98 @@ void MainWindow::updateStatusBar()
         m_sbConn->setText("○ MQTT: 未连接");
         m_sbConn->setStyleSheet("color:#e05555; background:transparent; border-right:1px solid #2d3340;");
     }
+
+    const RobotInfo &info = RobotInfoManager::instance().currentInfo();
+
+    // 1. 置信度
+    if (m_sbCov) {
+        if (info.covScore >= 0.0) {
+            double cs = (info.covScore > 1.0) ? info.covScore / 100.0 : info.covScore;
+            int pct = qRound(cs * 100.0);
+            m_sbCov->setText(QString("置信度: <span style='color:%1;'>%2%</span>")
+                                 .arg(pct <= 40 ? "#ef4444" : "#22c55e").arg(pct));
+        } else {
+            m_sbCov->setText("置信度: <span style='color:#8898a8;'>--</span>");
+        }
+    }
+
+    // 2. 网络延迟
+    if (m_sbLatency) {
+        int lat = (info.latency >= 0) ? info.latency : m_networkLatency;
+        if (lat >= 0) {
+            QString col = (lat < 60) ? "#22c55e" : ((lat < 150) ? "#eab308" : "#ef4444");
+            m_sbLatency->setText(QString("网络延迟: <span style='color:%1;'>%2 ms</span>").arg(col).arg(lat));
+        } else {
+            m_sbLatency->setText("网络延迟: <span style='color:#8898a8;'>--</span>");
+        }
+    }
+
+    // 3. 是否抢占控制权 (抢占控制权 / 无人抢占控制权)
+    if (m_sbTeleop) {
+        bool isTeleop = TeleopController::instance().isActive();
+        if (isTeleop) {
+            m_sbTeleop->setText("<span style='color:#f87171;'>抢占控制权</span>");
+        } else {
+            m_sbTeleop->setText("<span style='color:#38bdf8;'>无人抢占控制权</span>");
+        }
+    }
+
+    // 4. 定位状态 (定位成功或失败)
+    if (m_sbLocStatus) {
+        bool locSuccess = info.hasPose && (info.covScore < 0.0 || info.covScore >= 0.3);
+        if (locSuccess) {
+            m_sbLocStatus->setText("定位状态: <span style='color:#22c55e;'>定位成功</span>");
+        } else {
+            m_sbLocStatus->setText("定位状态: <span style='color:#ef4444;'>定位失败</span>");
+        }
+    }
+
+    // 5. 地图加载状态 (成功/失败)
+    if (m_sbMapStatus) {
+        if (m_mapPage) {
+            m_sbMapStatus->setText(QString("地图加载: <span style='color:%1;'>%2</span>")
+                                      .arg(m_mapPage->mapStatusColor(), m_mapPage->mapStatusText()));
+        } else {
+            m_sbMapStatus->setText("地图加载: <span style='color:#8898a8;'>未加载</span>");
+        }
+    }
+
+    testNetworkLatency();
+}
+
+void MainWindow::testNetworkLatency()
+{
+    const RobotInfo &info = RobotInfoManager::instance().currentInfo();
+    if (info.latency >= 0) {
+        m_networkLatency = info.latency;
+        return;
+    }
+
+    QString ip = AppConfig::instance().serverIp();
+    if (ip.isEmpty()) return;
+
+    auto *socket = new QTcpSocket(this);
+    auto *timer = new QElapsedTimer;
+    timer->start();
+
+    connect(socket, &QTcpSocket::connected, this, [this, socket, timer]() {
+        int elapsed = static_cast<int>(timer->elapsed());
+        m_networkLatency = qMax(1, elapsed);
+        if (m_sbLatency) {
+            QString col = (m_networkLatency < 60) ? "#22c55e" : ((m_networkLatency < 150) ? "#eab308" : "#ef4444");
+            m_sbLatency->setText(QString("网络延迟: <span style='color:%1;'>%2 ms</span>").arg(col).arg(m_networkLatency));
+        }
+        socket->disconnectFromHost();
+        socket->deleteLater();
+        delete timer;
+    });
+
+    connect(socket, &QTcpSocket::errorOccurred, this, [socket, timer](QAbstractSocket::SocketError) {
+        socket->deleteLater();
+        delete timer;
+    });
+
+    socket->connectToHost(ip, 8048);
 }
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)

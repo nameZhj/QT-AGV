@@ -41,6 +41,11 @@ private:
     QString basename(const QString &path) const;
     static QPair<QString,QString> fieldMetaFor(const QString &key);
 
+    void parseMetadata(const QByteArray &rawJson);
+    QJsonObject findMetadataForConfig(const QJsonObject &configEntry) const;
+    QString getDefaultValueString(const QJsonObject &metaObj, const QString &fullPath) const;
+    void updateDefaultValuesInTable();
+
     // UI
     QLineEdit *m_filterEdit = nullptr;
     QTreeWidget *m_groupTree = nullptr;
@@ -51,6 +56,7 @@ private:
 
     // 数据
     QJsonArray m_configs;
+    QJsonArray m_metadataList;     // /rbrainrobot/get_config_metadata 元数据
     QJsonObject m_originalConfigs; // 用于跟踪原始值
     QString m_currentGroupKey;
     int m_currentConfigIdx = -1; // -1 表示显示整个分组，>=0 表示显示特定配置文件

@@ -38,6 +38,43 @@ static QString extractLinkStatus(const QJsonObject &obj, const QString &key = "l
     return QString();
 }
 
+// ── 地图列表缓存与匹配 (/robot/map/listAll) ─────────────────────────────────
+static QMap<QString, QString> s_mapIdToName;
+static bool s_isFetchingMaps = false;
+
+static void fetchGlobalMapList(std::function<void()> onDone = nullptr) {
+    if (s_isFetchingMaps) {
+        if (onDone) onDone();
+        return;
+    }
+    s_isFetchingMaps = true;
+    ApiService::instance().listMapAll(QJsonObject{{"pageNum", 1}, {"pageSize", 1000}}, [onDone](int code, const QJsonObject &data) {
+        s_isFetchingMaps = false;
+        if (code == 200) {
+            const QJsonArray rows = data.value("rows").toArray();
+            for (const auto &v : rows) {
+                QJsonObject m = v.toObject();
+                QString mid = jsonIdStr(m.value("mapId"));
+                if (mid.isEmpty() && m.contains("mapId")) mid = QString::number(m.value("mapId").toInt());
+                QString mname = m.value("mapName").toString().trimmed();
+                if (!mid.isEmpty() && !mname.isEmpty()) {
+                    s_mapIdToName[mid] = mname;
+                }
+            }
+        }
+        if (onDone) onDone();
+    });
+}
+
+static QString lookupMapName(const QString &mapId) {
+    if (mapId.isEmpty() || mapId == "0") return QString();
+    if (s_mapIdToName.contains(mapId)) {
+        return s_mapIdToName.value(mapId);
+    }
+    fetchGlobalMapList();
+    return QString();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  BatteryBadge
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -555,8 +592,25 @@ void DeviceCard::updateCardDisplay()
         m_nameLabel->setToolTip(displayName);
     }
 
-    // 2. 绑定地图名称 (如 qlyy)
+    // 2. 绑定地图名称 (如从接口查询到的真实地图名称)
     QString mapName = m_profile.mapName.trimmed();
+    if (mapName.startsWith("地图 ID:", Qt::CaseInsensitive)) {
+        QString mid = mapName.mid(QString("地图 ID:").length()).trimmed();
+        QString realName = lookupMapName(mid);
+        mapName = realName.isEmpty() ? mid : realName;
+        m_profile.mapName = mapName;
+    } else {
+        bool ok = false;
+        mapName.toInt(&ok);
+        if (ok) {
+            QString realName = lookupMapName(mapName);
+            if (!realName.isEmpty()) {
+                mapName = realName;
+                m_profile.mapName = realName;
+            }
+        }
+    }
+
     if (mapName.isEmpty()) {
         m_mapLabel->setText("--");
     } else {
@@ -754,25 +808,56 @@ void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
                 }
             }
 
-            // 2. 提取绑定的地图名称
+            // 2. 提取绑定的地图名称 (若为地图ID，从 /robot/map/listAll 列表中匹配真实地图名称)
             QString mapName;
-            for (const char *k : {"mapName", "map_name", "currentMap", "current_map", "map_filename", "map"}) {
+            for (const char *k : {"mapName", "map_name", "currentMap", "current_map", "map_filename"}) {
                 if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
                     mapName = d.value(k).toString().trimmed();
                     break;
                 }
             }
-            if (mapName.isEmpty()) {
-                if (info.map_id != 0) {
-                    mapName = QString("地图 ID: %1").arg(info.map_id);
-                } else {
-                    QJsonValue mv = d.contains("map_id") ? d.value("map_id") : d.value("mapId");
-                    if (!mv.isUndefined() && !mv.isNull()) {
-                        QString mid = mv.toVariant().toString().trimmed();
-                        if (!mid.isEmpty() && mid != "0") {
-                            mapName = QString("地图 ID: %1").arg(mid);
-                        }
+
+            QString foundMapId;
+            if (info.map_id != 0) {
+                foundMapId = QString::number(info.map_id);
+            } else {
+                QJsonValue mv = d.contains("map_id") ? d.value("map_id") : d.value("mapId");
+                if (!mv.isUndefined() && !mv.isNull()) {
+                    QString mid = mv.toVariant().toString().trimmed();
+                    if (!mid.isEmpty() && mid != "0") {
+                        foundMapId = mid;
                     }
+                }
+            }
+
+            if (!mapName.isEmpty()) {
+                if (mapName.startsWith("地图 ID:", Qt::CaseInsensitive)) {
+                    foundMapId = mapName.mid(QString("地图 ID:").length()).trimmed();
+                    mapName.clear();
+                } else {
+                    bool ok = false;
+                    mapName.toInt(&ok);
+                    if (ok) {
+                        foundMapId = mapName;
+                        mapName.clear();
+                    }
+                }
+            }
+
+            if (mapName.isEmpty() && !foundMapId.isEmpty()) {
+                QString lookedUp = lookupMapName(foundMapId);
+                if (!lookedUp.isEmpty()) {
+                    mapName = lookedUp;
+                } else {
+                    fetchGlobalMapList([this, foundMapId]() {
+                        QString name = lookupMapName(foundMapId);
+                        if (!name.isEmpty()) {
+                            m_profile.mapName = name;
+                            updateCardDisplay();
+                            AppConfig::instance().saveDevice(m_profile);
+                        }
+                    });
+                    mapName = foundMapId;
                 }
             }
 
@@ -1206,6 +1291,12 @@ void DeviceManagerDialog::refreshCards()
         m_cardsGrid->addWidget(card, i / cols, i % cols);
         m_cards.append(card);
     }
+
+    fetchGlobalMapList([this]() {
+        for (auto *c : m_cards) {
+            if (c) c->updateCardDisplay();
+        }
+    });
 }
 
 void DeviceManagerDialog::onRefreshAll()
@@ -1312,6 +1403,10 @@ void DeviceManagerDialog::connectDevice(int index)
     const QList<DeviceProfile> list = AppConfig::instance().deviceList();
     if (index < 0 || index >= list.size()) return;
 
+    // 单车独占：连接新车前主动断开旧的所有连接，清空旧订阅
+    MqttService::instance().clearAllSubscriptions();
+    MqttService::instance().disconnectFromHost();
+
     if (index < m_cards.size())
         m_cards[index]->setBusy(true);
 
@@ -1319,6 +1414,7 @@ void DeviceManagerDialog::connectDevice(int index)
     AppConfig::instance().setServerIp(list[index].ip);
     QString effectiveCarId = list[index].carId.trimmed().isEmpty() ? "1" : list[index].carId.trimmed();
     AppConfig::instance().setAgvId(effectiveCarId);
+    RobotInfoManager::instance().resetForCar(effectiveCarId);
 
     QList<DeviceProfile> list2 = AppConfig::instance().deviceList();
     if (index < list2.size()) {

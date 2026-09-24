@@ -36,11 +36,37 @@ void RobotInfoManager::onMqttConnected()
         updateFromPayload(topic, payload);
     };
 
-    // 订阅通用与多机通配符 info 话题
+    // 严禁订阅通配符 /rob/+/info，彻底杜绝局域网多车广播串联
+    QString curCarId = AppConfig::instance().agvId().trimmed();
+    if (curCarId.isEmpty()) {
+        curCarId = AppConfig::instance().currentDevice().carId.trimmed();
+    }
+    if (curCarId.isEmpty()) curCarId = QStringLiteral("1");
+
     mqtt.subscribeTopic(QStringLiteral("/info"), 0, handlePayload);
     mqtt.subscribeTopic(QStringLiteral("info"), 0, handlePayload);
-    mqtt.subscribeTopic(QStringLiteral("/rob/+/info"), 0, handlePayload);
     mqtt.subscribeTopic(QStringLiteral("/rob/info"), 0, handlePayload);
+    mqtt.subscribeTopic(QString("/rob/%1/info").arg(curCarId), 0, handlePayload);
+}
+
+void RobotInfoManager::resetForCar(const QString &newCarId)
+{
+    {
+        QWriteLocker locker(&m_lock);
+        m_robots.clear(); // 清理旧车全部数据与缓存
+    }
+
+    auto &mqtt = MqttService::instance();
+    if (mqtt.isConnected()) {
+        auto handlePayload = [this](const QString &topic, const QByteArray &payload) {
+            updateFromPayload(topic, payload);
+        };
+        QString targetId = newCarId.trimmed().isEmpty() ? QStringLiteral("1") : newCarId.trimmed();
+        mqtt.subscribeTopic(QStringLiteral("/info"), 0, handlePayload);
+        mqtt.subscribeTopic(QStringLiteral("info"), 0, handlePayload);
+        mqtt.subscribeTopic(QStringLiteral("/rob/info"), 0, handlePayload);
+        mqtt.subscribeTopic(QString("/rob/%1/info").arg(targetId), 0, handlePayload);
+    }
 }
 
 RobotInfo RobotInfoManager::currentInfo() const
@@ -113,11 +139,17 @@ bool RobotInfoManager::updateFromPayload(const QString &topic, const QByteArray 
         }
     }
 
-    // 兜底至当前默认车辆
+    // 严格单车限制：若报文指定的车辆 ID 与当前连接的主机车辆 ID 不符，立即丢弃
+    QString curId = AppConfig::instance().agvId().trimmed();
+    if (curId.isEmpty()) curId = AppConfig::instance().currentDevice().carId.trimmed();
+    if (curId.isEmpty()) curId = QStringLiteral("1");
+
+    if (!carId.isEmpty() && carId != curId) {
+        return false;
+    }
+
     if (carId.isEmpty()) {
-        carId = AppConfig::instance().agvId().trimmed();
-        if (carId.isEmpty()) carId = AppConfig::instance().currentDevice().carId.trimmed();
-        if (carId.isEmpty()) carId = QStringLiteral("1");
+        carId = curId;
     }
 
     if (outCarId) {
@@ -139,10 +171,6 @@ bool RobotInfoManager::updateFromPayload(const QString &topic, const QByteArray 
 
     // 派发信号
     emit robotInfoUpdated(carId, snapshot);
-
-    QString curId = AppConfig::instance().agvId().trimmed();
-    if (curId.isEmpty()) curId = AppConfig::instance().currentDevice().carId.trimmed();
-    if (curId.isEmpty()) curId = QStringLiteral("1");
 
     if (carId == curId) {
         emit currentRobotInfoUpdated(snapshot);

@@ -10,6 +10,9 @@
 #include "core/RouteFeatureSelect.h"
 #include "core/ToggleSwitch.h"
 #include "core/MotionConfigManager.h"
+#include "core/AlignConfigManager.h"
+#include "DirectionPadWidget.h"
+#include "core/TeleopController.h"
 #include <QPointer>
 #include <QPushButton>
 #include <QComboBox>
@@ -301,6 +304,18 @@ QPixmap drawToolIcon(const QString &name, const QColor &col, int sz = 22)
         QPolygonF arrow; arrow << QPointF(sz*0.80, sz*0.28) << QPointF(sz*0.60, sz*0.18) << QPointF(sz*0.65, sz*0.42);
         p.drawPolygon(arrow);
     }
+    else if (name == "teleop") {
+        // 遥控手柄图标：手柄外壳 + 十字键 + 按键点
+        p.setPen(QPen(col, 1.4)); p.setBrush(Qt::NoBrush);
+        QRectF body(sz*0.14, sz*0.26, sz*0.72, sz*0.48);
+        p.drawRoundedRect(body, sz*0.18, sz*0.18);
+        p.setPen(QPen(col, 1.5, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(sz*0.34, sz*0.40), QPointF(sz*0.34, sz*0.60));
+        p.drawLine(QPointF(sz*0.24, sz*0.50), QPointF(sz*0.44, sz*0.50));
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        p.drawEllipse(QPointF(sz*0.68, sz*0.44), sz*0.05, sz*0.05);
+        p.drawEllipse(QPointF(sz*0.60, sz*0.54), sz*0.05, sz*0.05);
+    }
     return pm;
 }
 
@@ -542,7 +557,7 @@ void MapEditWidget::setupUI()
     connect(m_editMapBtn, &QPushButton::clicked, this, &MapEditWidget::onEditMap);
     tl->addWidget(m_editMapBtn);
 
-    m_importSmapBtn = topBtn("导入 .smap", "#2e7d32");
+    m_importSmapBtn = topBtn("导入 .smap路网", "#2e7d32");
     m_importSmapBtn->setToolTip(ttHtml("导入 .smap", "选择并导入 .smap 地图路网文件"));
     m_importSmapBtn->installEventFilter(new InstantTip(m_importSmapBtn));
     connect(m_importSmapBtn, &QPushButton::clicked, this, &MapEditWidget::onImportSmap);
@@ -553,6 +568,15 @@ void MapEditWidget::setupUI()
     connect(m_saveBtn, &QPushButton::clicked, this, [this]() { onSaveMap(); });
     tl->addWidget(m_saveBtn);
 
+    m_teleopBtn = topBtn("抢占控制权", "#1e6fd4");
+    m_teleopBtn->setIcon(makeToolIcon("teleop"));
+    m_teleopBtn->setToolTip(ttHtml("抢占控制权",
+        "点击抢占控制权（暂停导航并接管键盘/舵盘控制），再次点击恢复导航\n"
+        "键盘: W A S D 移动 | Space 刹车 | Ctrl 加速 | P 升降上 | L 升降下"));
+    m_teleopBtn->installEventFilter(new InstantTip(m_teleopBtn));
+    connect(m_teleopBtn, &QPushButton::clicked, this, &MapEditWidget::onTeleopClicked);
+    tl->addWidget(m_teleopBtn);
+
     QPushButton *helpBtn = topBtn("帮助 (F1)", "#34495e");
     helpBtn->setToolTip(ttHtml("帮助 (F1)", "查看键盘快捷键与地图编辑操作指南"));
     helpBtn->installEventFilter(new InstantTip(helpBtn));
@@ -560,6 +584,43 @@ void MapEditWidget::setupUI()
     tl->addWidget(helpBtn);
 
     root->addWidget(topBar);
+
+    // ── 站点类型子工具条: 站点 / 工作站 / 特殊工作站 ────────────────────────────
+    // 对应现有三类点位: 普通点(LM) / 高精度点(AP, typeName=ActionPoint) / 充电桩点(CP_, typeName=ChargePoint)
+    m_stationBar = new QWidget;
+    m_stationBar->setStyleSheet("background:#1e2d3d; border-bottom:1px solid rgba(255,255,255,0.06);");
+    {
+        QHBoxLayout *sbl = new QHBoxLayout(m_stationBar);
+        sbl->setContentsMargins(8, 3, 8, 3);
+        sbl->setSpacing(6);
+
+        QLabel *sbTitle = new QLabel("站点");
+        sbTitle->setStyleSheet("color:#9ab8d8; font-size:12px; font-weight:bold; background:transparent; border:none;");
+        sbl->addWidget(sbTitle);
+
+        auto mkStationBtn = [&](const QString &text, int mode) {
+            auto *b = new QPushButton(text);
+            b->setCheckable(true);
+            b->setFocusPolicy(Qt::NoFocus);
+            b->setCursor(Qt::PointingHandCursor);
+            b->setFixedHeight(24);
+            b->setStyleSheet(
+                "QPushButton{background:transparent; color:#9ab8d8; border:1px solid transparent;"
+                "border-radius:4px; padding:2px 12px; font-size:12px;}"
+                "QPushButton:hover{background:rgba(255,255,255,14);}"
+                "QPushButton:checked{background:#2b4a6f; color:#ffffff; border:1px solid #3d6a9a;}");
+            connect(b, &QPushButton::clicked, this, [this, mode]() { setDrawMode(mode); });
+            sbl->addWidget(b);
+            m_stationBtns[mode] = b;
+        };
+        mkStationBtn("站点",       Point);          // 普通点 (LM)
+        mkStationBtn("工作站",     HighPrecision);  // 高精度点 (AP / ActionPoint)
+        mkStationBtn("特殊工作站", Charge);         // 充电桩点 (CP_ / ChargePoint)
+
+        sbl->addStretch();
+    }
+    m_stationBar->setVisible(false);
+    root->addWidget(m_stationBar);
 
     // ── Content row ───────────────────────────────────────────────────────────
     QWidget *content = new QWidget;
@@ -582,9 +643,7 @@ void MapEditWidget::setupUI()
         {Line,          "line",         "线路 (L)",     "绘制直线路径：空地自动建站，连续连线，右键/Esc结束"},
         {Curve,         "curve",        "曲线 (B)",     "绘制多阶贝塞尔曲线：起点→控制点→终点，自动吸附/建站"},
         {-1,            "",             "",             ""},
-        {Point,         "point",        "站点 (M)",     "放置普通站点 LM（蓝）"},
-        {Charge,        "charge",       "充电桩 (C)",   "放置充电桩站点 CP（金）"},
-        {HighPrecision, "highprecision","精定位点 (T)", "放置高精定位站点 TL（红）"},
+        {Point,         "point",        "站点 (M)",     "放置站点：站点 LM（蓝）/ 工作站 AP（红）/ 特殊工作站 CP_（金）\n在顶部“站点”子工具条中切换类型"},
         {-1,            "",             "",             ""},
         {Eraser,        "eraser",       "橡皮擦 (E)",   "擦除栅格涂改：恢复可通行区域"},
         {Brush,         "brush",        "画笔 (P)",     "涂黑栅格地图：标记障碍物/墙体"},
@@ -619,8 +678,9 @@ void MapEditWidget::setupUI()
                     return;
                 }
                 QPointF sp = worldToScene(m_carX, m_carY);
-                addPoint(sp);
-                Toast::success(this, QString("已在设备位置(%1, %2)添加普通站点").arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2));
+                addPoint(sp, m_carYaw, m_carTheta);
+                Toast::success(this, QString("已在设备位置(%1, %2)添加普通站点\n朝向角: %3°")
+                    .arg(m_carX, 0, 'f', 2).arg(m_carY, 0, 'f', 2).arg(m_carTheta, 0, 'f', 1));
             });
         } else if (t.mode == -3) {
             connect(b, &QPushButton::clicked, this, [this]() { addDevicePoint("charge"); });
@@ -683,6 +743,18 @@ void MapEditWidget::setupUI()
     m_coordLabel->adjustSize();
     m_coordLabel->raise();
 
+    // 虚拟遥控舵盘 (浮动于编辑地图左下角，支持鼠标直观遥控与实时按键状态反馈)
+    m_directionPad = new DirectionPadWidget(m_mapView);
+    m_directionPad->move(16, qMax(16, m_mapView->height() - m_directionPad->height() - 16));
+    m_directionPad->raise();
+
+    connect(m_mapView, &MapCanvas::canvasResized, this, [this](const QSize &sz) {
+        if (m_directionPad) {
+            m_directionPad->move(16, sz.height() - m_directionPad->height() - 16);
+            m_directionPad->raise();
+        }
+    });
+
     m_topRuler  = new RulerWidget(RulerWidget::Horizontal);
     m_leftRuler = new RulerWidget(RulerWidget::Vertical);
 
@@ -699,11 +771,19 @@ void MapEditWidget::setupUI()
     miHBox->addWidget(m_mapView, 1);
     maVBox->addWidget(mapInner, 1);
 
-    cl->addWidget(mapArea, 1);
+    auto *editSplitter = new QSplitter(Qt::Horizontal);
+    editSplitter->setChildrenCollapsible(false);
+    editSplitter->setHandleWidth(5);
+    editSplitter->setStyleSheet(
+        "QSplitter::handle{background:#232733;}"
+        "QSplitter::handle:hover{background:#3b82f6;}"
+        "QSplitter::handle:pressed{background:#1d4ed8;}");
+    editSplitter->addWidget(mapArea);
 
     // ── Right panel ───────────────────────────────────────────────────────────
     QWidget *rightOuter = new QWidget;
-    rightOuter->setFixedWidth(280);
+    rightOuter->setMinimumWidth(260);
+    rightOuter->setMaximumWidth(650);
     rightOuter->setStyleSheet(S_RIGHTPANEL);
 
     QScrollArea *sa = new QScrollArea;
@@ -739,7 +819,7 @@ void MapEditWidget::setupUI()
         return {container, l};
     };
 
-    auto mkFormRow = [](const QString &label, QWidget *editor) -> QWidget* {
+    auto mkFormRow = [](const QString &label, QWidget *editor, const QString &unit = QString()) -> QWidget* {
         auto *w = new QWidget;
         w->setStyleSheet("background:transparent; border:none;");
         auto *h = new QHBoxLayout(w);
@@ -751,6 +831,12 @@ void MapEditWidget::setupUI()
         lbl->setStyleSheet("color:#7e96b0; font-size:11px; background:transparent; border:none;");
         h->addWidget(lbl);
         h->addWidget(editor, 1);
+        if (!unit.isEmpty()) {
+            auto *unitLbl = new QLabel(unit);
+            unitLbl->setMinimumWidth(26);
+            unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none;");
+            h->addWidget(unitLbl);
+        }
         return w;
     };
 
@@ -817,20 +903,17 @@ void MapEditWidget::setupUI()
         m_stationXSpin = new QDoubleSpinBox;
         m_stationXSpin->setRange(-99999.0, 99999.0);
         m_stationXSpin->setDecimals(3);
-        m_stationXSpin->setSuffix(" m");
-        sl->addWidget(mkFormRow("X 坐标:", m_stationXSpin));
+        sl->addWidget(mkFormRow("X 坐标:", m_stationXSpin, "m"));
 
         m_stationYSpin = new QDoubleSpinBox;
         m_stationYSpin->setRange(-99999.0, 99999.0);
         m_stationYSpin->setDecimals(3);
-        m_stationYSpin->setSuffix(" m");
-        sl->addWidget(mkFormRow("Y 坐标:", m_stationYSpin));
+        sl->addWidget(mkFormRow("Y 坐标:", m_stationYSpin, "m"));
 
         m_stationYawSpin = new QDoubleSpinBox;
         m_stationYawSpin->setRange(-360.0, 360.0);
         m_stationYawSpin->setDecimals(1);
-        m_stationYawSpin->setSuffix(" °");
-        sl->addWidget(mkFormRow("朝向角度:", m_stationYawSpin));
+        sl->addWidget(mkFormRow("朝向角度:", m_stationYawSpin, "°"));
 
         // 站点特性复选框
         auto *attrCard = new QWidget;
@@ -861,11 +944,8 @@ void MapEditWidget::setupUI()
         m_stationEpcXLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
         m_stationEpcYLabel = new QLabel("--");
         m_stationEpcYLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
-        m_stationEpcYawLabel = new QLabel("--");
-        m_stationEpcYawLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
         el->addWidget(mkFormRow("epc X:", m_stationEpcXLabel));
         el->addWidget(mkFormRow("epc Y:", m_stationEpcYLabel));
-        el->addWidget(mkFormRow("epc Yaw:", m_stationEpcYawLabel));
         sl->addWidget(m_stationEpcGroup);
         m_stationEpcGroup->setVisible(false);
 
@@ -950,54 +1030,47 @@ void MapEditWidget::setupUI()
         m_lineMaxSpeedSpin->setRange(0.01, mc.maxSpeed());
         m_lineMaxSpeedSpin->setSingleStep(0.05);
         m_lineMaxSpeedSpin->setValue(mc.maxSpeed());
-        m_lineMaxSpeedSpin->setSuffix(" m/s");
         m_lineMaxSpeedSpin->setToolTip(QString("受全局最大速度限制 (上限: %1 m/s)").arg(mc.maxSpeed()));
-        mcl->addWidget(mkFormRow("最大速度:", m_lineMaxSpeedSpin));
+        mcl->addWidget(mkFormRow("最大速度:", m_lineMaxSpeedSpin, "m/s"));
 
         m_lineMaxAccSpin = new QDoubleSpinBox;
         m_lineMaxAccSpin->setRange(0.01, mc.maxAcceleration());
         m_lineMaxAccSpin->setSingleStep(0.05);
         m_lineMaxAccSpin->setValue(mc.maxAcceleration());
-        m_lineMaxAccSpin->setSuffix(" m/s²");
         m_lineMaxAccSpin->setToolTip(QString("受全局最大加速度限制 (上限: %1 m/s²)").arg(mc.maxAcceleration()));
-        mcl->addWidget(mkFormRow("最大加速度:", m_lineMaxAccSpin));
+        mcl->addWidget(mkFormRow("最大加速度:", m_lineMaxAccSpin, "m/s²"));
 
         m_lineMaxDecSpin = new QDoubleSpinBox;
         m_lineMaxDecSpin->setRange(0.01, mc.maxDeceleration());
         m_lineMaxDecSpin->setSingleStep(0.05);
         m_lineMaxDecSpin->setValue(mc.maxDeceleration());
-        m_lineMaxDecSpin->setSuffix(" m/s²");
         m_lineMaxDecSpin->setToolTip(QString("受全局最大减速度限制 (上限: %1 m/s²)").arg(mc.maxDeceleration()));
-        mcl->addWidget(mkFormRow("最大减速度:", m_lineMaxDecSpin));
+        mcl->addWidget(mkFormRow("最大减速度:", m_lineMaxDecSpin, "m/s²"));
 
         m_lineMaxRotSpin = new QDoubleSpinBox;
         m_lineMaxRotSpin->setRange(1.0, mc.maxAngularSpeedDeg());
         m_lineMaxRotSpin->setSingleStep(5.0);
         m_lineMaxRotSpin->setValue(mc.maxAngularSpeedDeg());
-        m_lineMaxRotSpin->setSuffix(" °/s");
         m_lineMaxRotSpin->setToolTip(QString("受全局最大角速度限制 (上限: %1 °/s)").arg(mc.maxAngularSpeedDeg()));
-        mcl->addWidget(mkFormRow("最大角速度:", m_lineMaxRotSpin));
+        mcl->addWidget(mkFormRow("最大角速度:", m_lineMaxRotSpin, "°/s"));
 
         m_lineReachDistSpin = new QDoubleSpinBox;
         m_lineReachDistSpin->setRange(0.01, qMax(1.0, mc.arrivalDistanceTolerance()));
         m_lineReachDistSpin->setSingleStep(0.01);
         m_lineReachDistSpin->setValue(mc.arrivalDistanceTolerance());
-        m_lineReachDistSpin->setSuffix(" m");
-        mcl->addWidget(mkFormRow("到达距离精度:", m_lineReachDistSpin));
+        mcl->addWidget(mkFormRow("到达距离精度:", m_lineReachDistSpin, "m"));
 
         m_lineReachAngleSpin = new QDoubleSpinBox;
         m_lineReachAngleSpin->setRange(0.1, qMax(45.0, mc.arrivalAngleToleranceDeg()));
         m_lineReachAngleSpin->setSingleStep(0.1);
         m_lineReachAngleSpin->setValue(mc.arrivalAngleToleranceDeg());
-        m_lineReachAngleSpin->setSuffix(" °");
-        mcl->addWidget(mkFormRow("到达角度精度:", m_lineReachAngleSpin));
+        mcl->addWidget(mkFormRow("到达角度精度:", m_lineReachAngleSpin, "°"));
 
         m_lineRoadWidthSpin = new QDoubleSpinBox;
         m_lineRoadWidthSpin->setRange(0.5, qMax(10.0, mc.routeWidth()));
         m_lineRoadWidthSpin->setSingleStep(0.5);
         m_lineRoadWidthSpin->setValue(mc.routeWidth());
-        m_lineRoadWidthSpin->setSuffix(" m");
-        mcl->addWidget(mkFormRow("路线宽度:", m_lineRoadWidthSpin));
+        mcl->addWidget(mkFormRow("路线宽度:", m_lineRoadWidthSpin, "m"));
 
         // 监听全局运动控制参数变化，动态调整各输入控件的上限与 ToolTip
         connect(&MotionConfigManager::instance(), &MotionConfigManager::configChanged, this, [this]() {
@@ -1042,6 +1115,46 @@ void MapEditWidget::setupUI()
         });
 
         ll->addWidget(motionCard);
+
+        // 实时避障范围卡片 (对齐 base.json 规范)
+        auto *obsCard = new QWidget;
+        obsCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
+        auto *ocl = new QVBoxLayout(obsCard);
+        ocl->setContentsMargins(6,6,6,6);
+        ocl->setSpacing(3);
+        auto *oTitle = new QLabel("实时避障范围");
+        oTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
+        ocl->addWidget(oTitle);
+
+        m_lineObsStopLenSpin = new QDoubleSpinBox;
+        m_lineObsStopLenSpin->setRange(0.00, 5.00);
+        m_lineObsStopLenSpin->setSingleStep(0.05);
+        m_lineObsStopLenSpin->setValue(0.00);
+        m_lineObsStopLenSpin->setToolTip("正向停止膨胀半径 (intrusion_stop_length)");
+        ocl->addWidget(mkFormRow("正向停止膨胀:", m_lineObsStopLenSpin, "m"));
+
+        m_lineObsStopWidSpin = new QDoubleSpinBox;
+        m_lineObsStopWidSpin->setRange(0.00, 5.00);
+        m_lineObsStopWidSpin->setSingleStep(0.05);
+        m_lineObsStopWidSpin->setValue(0.00);
+        m_lineObsStopWidSpin->setToolTip("侧向停止膨胀半径 (intrusion_stop_width)");
+        ocl->addWidget(mkFormRow("侧向停止膨胀:", m_lineObsStopWidSpin, "m"));
+
+        m_lineObsDecelLenSpin = new QDoubleSpinBox;
+        m_lineObsDecelLenSpin->setRange(0.00, 5.00);
+        m_lineObsDecelLenSpin->setSingleStep(0.05);
+        m_lineObsDecelLenSpin->setValue(0.00);
+        m_lineObsDecelLenSpin->setToolTip("正向减速膨胀半径 (intrusion_deceleration_length)");
+        ocl->addWidget(mkFormRow("正向减速膨胀:", m_lineObsDecelLenSpin, "m"));
+
+        m_lineObsDecelWidSpin = new QDoubleSpinBox;
+        m_lineObsDecelWidSpin->setRange(0.00, 5.00);
+        m_lineObsDecelWidSpin->setSingleStep(0.05);
+        m_lineObsDecelWidSpin->setValue(0.00);
+        m_lineObsDecelWidSpin->setToolTip("侧向减速膨胀半径 (intrusion_deceleration_width)");
+        ocl->addWidget(mkFormRow("侧向减速膨胀:", m_lineObsDecelWidSpin, "m"));
+
+        ll->addWidget(obsCard);
         pl->addWidget(m_linePropGroup);
 
         // ==========================================
@@ -1119,11 +1232,20 @@ void MapEditWidget::setupUI()
     }
 
     rl->addStretch();
-    cl->addWidget(rightOuter);
+    editSplitter->addWidget(rightOuter);
+    editSplitter->setStretchFactor(0, 1);
+    editSplitter->setStretchFactor(1, 0);
+    editSplitter->setSizes({960, 300});
+    cl->addWidget(editSplitter, 1);
     root->addWidget(content, 1);
 
     setFocusPolicy(Qt::StrongFocus);
     setupShortcuts();
+
+    // 抢占控制权与遥控状态同步
+    connect(&TeleopController::instance(), &TeleopController::activeChanged,
+            this, &MapEditWidget::onTeleopActiveChanged);
+    onTeleopActiveChanged(TeleopController::instance().isActive());
 }
 
 // ── Snap helpers ──────────────────────────────────────────────────────────────
@@ -1663,34 +1785,47 @@ void MapEditWidget::renderMap()
         crossItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
         crossItem->setData(0, type); crossItem->setData(1, id); crossItem->setData(2, fillCol);
 
-        // 若配置了车头朝向角，绘制微型方向指针；长方形与名称本身保持水平正向，确保文字永远清晰可读
+        // 获取朝向角 (弧度制)
         double yawVal = 0.0;
         if (pt.contains("yaw")) yawVal = pt.value("yaw").toDouble();
         else if (pt.contains("robotYaw")) yawVal = pt.value("robotYaw").toDouble();
         else if (pt.contains("theta")) yawVal = pt.value("theta").toDouble() * M_PI / 180.0;
-        if (yawVal != 0.0) {
-            double angleDeg = 90.0 - yawVal * 180.0 / M_PI;
-            double rad = qDegreesToRadians(angleDeg);
-            double pr = rectW / 2.0 + 2.5;
-            QPointF pHead(std::sin(rad) * pr, -std::cos(rad) * pr);
-            QPolygonF ptr;
-            QPointF norm(-std::cos(rad) * 2.0, -std::sin(rad) * 2.0);
-            ptr << pHead + QPointF(std::sin(rad) * 3.5, -std::cos(rad) * 3.5)
-                << pHead + norm
-                << pHead - norm;
-            auto *pItem = m_scene->addPolygon(ptr, QPen(Qt::NoPen), QBrush(borderCol));
-            pItem->setParentItem(item);
-            pItem->setAcceptedMouseButtons(Qt::NoButton);
-            pItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
-        }
+
+        // 1. 地图中所有的点显示的朝向都和它设置的角度一致:
+        //    ENU 坐标系逆时针为正，Qt 场景坐标系顺时针为正，旋转角为 -yawVal * 180 / M_PI
+        double rotDeg = -yawVal * 180.0 / M_PI;
+        item->setRotation(rotDeg);
+
+        // 2. 在方框（站点图标）的十字中心加个简单小巧的线体箭头表示方向:
+        //    item 已对齐朝向角度，在本地坐标系下从十字原点 (0, 0) 沿正 X 轴伸出小线段并带纤细折角箭头
+        double arrowLen = qBound(3.5, rectW * 0.26, 6.5);
+        double wingLen  = qBound(1.8, arrowLen * 0.40, 2.6);
+        double wingHalf = qBound(1.2, wingLen * 0.65, 1.8);
+
+        QPainterPath arrowLinePath;
+        arrowLinePath.moveTo(0.0, 0.0);
+        arrowLinePath.lineTo(arrowLen, 0.0);
+        arrowLinePath.moveTo(arrowLen - wingLen, -wingHalf);
+        arrowLinePath.lineTo(arrowLen, 0.0);
+        arrowLinePath.lineTo(arrowLen - wingLen, wingHalf);
+
+        QPen arrowPen(QColor("#E74C3C"), 0.9, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        auto *arrowItem = m_scene->addPath(arrowLinePath, arrowPen);
+        arrowItem->setParentItem(item);
+        arrowItem->setPos(0, 0);
+        arrowItem->setZValue(12);
+        arrowItem->setAcceptedMouseButtons(Qt::NoButton);
+        arrowItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
 
         m_featureItems[type + "_" + id] = item;
 
-        // 站点名称：直接绘制在矩形框下部，水平居中，与上方红色十字完全分离无遮挡，深色高对比度，尺寸紧凑工整
+        // 站点名称：水平正向居中显示，反向旋转抵消父级旋转以保持永远水平易读
         auto *lbl = m_scene->addText(nameText, f);
         lbl->document()->setDocumentMargin(0);
         lbl->setDefaultTextColor(QColor("#1A1A1A"));
         lbl->setParentItem(item);
+        lbl->setTransformOriginPoint(tw / 2.0, fm.height() / 2.0);
+        lbl->setRotation(-rotDeg);
         double textY = (rectH >= 12.0) ? (rectH * 0.16) : (rectH / 2.0 + 1.0);
         lbl->setPos(-tw / 2.0, textY);
         lbl->setAcceptedMouseButtons(Qt::NoButton);
@@ -1832,6 +1967,10 @@ void MapEditWidget::fitView()
 void MapEditWidget::resizeEvent(QResizeEvent *e)
 {
     QWidget::resizeEvent(e);
+    if (m_directionPad && m_mapView) {
+        m_directionPad->move(16, qMax(16, m_mapView->height() - m_directionPad->height() - 16));
+        m_directionPad->raise();
+    }
     if (!m_hasInitialFit && m_imgW > 0 && m_imgH > 0)
         QTimer::singleShot(50, this, [this]{ fitView(); });
 }
@@ -2100,6 +2239,12 @@ void MapEditWidget::setDrawMode(int mode)
     bool showH = (m_drawStatus == Drag);
     for (auto &lst : m_curveHandles.values())
         for (auto *h : lst) if (h) h->setVisible(showH);
+
+    // 站点类型子工具条: 站点类工具(站点/工作站/特殊工作站)激活时显示
+    bool isStationMode = (m_drawStatus == Point || m_drawStatus == HighPrecision || m_drawStatus == Charge);
+    if (m_stationBar) m_stationBar->setVisible(isStationMode);
+    for (auto it = m_stationBtns.begin(); it != m_stationBtns.end(); ++it)
+        it.value()->setChecked(it.key() == m_drawStatus);
 }
 
 void MapEditWidget::cancelDraw()
@@ -2131,14 +2276,26 @@ int MapEditWidget::nextIdNum(const QJsonArray &arr, const QString &prefix)
     return maxN + 1;
 }
 
-void MapEditWidget::addPoint(const QPointF &sp)
+void MapEditWidget::addPoint(const QPointF &sp, double yaw, double theta)
 {
     QPointF w = sceneToWorld(sp.x(), sp.y());
     int n = nextIdNum(m_points, "p_");
     QJsonObject pt;
-    pt["id"] = QString("p_%1").arg(n); pt["name"] = QString("LM%1").arg(n);
-    pt["x"] = w.x(); pt["y"] = w.y();
-    pt["yaw"] = 0.0;
+    pt["id"] = QString("p_%1").arg(n);
+    pt["name"] = QString("LM%1").arg(n);
+    pt["typeName"] = "LandMark";
+    pt["x"] = w.x();
+    pt["y"] = w.y();
+    pt["yaw"] = yaw;            // 绝对朝向角 (弧度制)
+    pt["theta"] = theta;        // 角度制朝向角
+    pt["robotYaw"] = 0.0;       // 对齐规范: robotYaw 设为 0.0
+    pt["roll"] = 0.0;
+    pt["pitch"] = 0.0;
+    pt["offset"] = 0.0;
+    pt["isyawfix"] = false;
+    pt["rdsDockable"] = true;
+    pt["allowRotate"] = true;
+    pt["useDownPGV"] = false;
     m_points.append(pt);
     m_dirty = true;
     renderMap();
@@ -2150,15 +2307,19 @@ void MapEditWidget::addCharge(const QPointF &sp, double epcX, double epcY, doubl
     QPointF w = sceneToWorld(sp.x(), sp.y());
     int n = nextIdNum(m_charges, "c_");
     QJsonObject ch;
-    ch["id"] = QString("c_%1").arg(n); ch["name"] = QString("CP%1").arg(n);
+    ch["id"] = QString("c_%1").arg(n); ch["name"] = QString("CP_%1").arg(n);
+    // 类型名称: 仅新增 typeName 字段, 不改变原有 id 与类型
+    ch["typeName"] = "ChargePoint";
     ch["x"] = w.x(); ch["y"] = w.y();
-    // 充电桩的设备相对定位末端坐标(end-effector position coordinates)
+    // 特殊工作站(充电桩)相对定位末端坐标: 存入 epc_x, epc_y, epc_theta，并补充存入 epc_Yaw/epc_yaw 保证后台兼容
     ch["epc_x"] = epcX;
     ch["epc_y"] = epcY;
     ch["epc_theta"] = epcTheta;
     ch["epcX"] = epcX;
     ch["epcY"] = epcY;
     ch["epcTheta"] = epcTheta;
+    ch["epc_Yaw"] = epcTheta;
+    ch["epc_yaw"] = epcTheta;
     ch["yaw"] = yaw;            // Vue charge.js: yaw 存设备打点时的绝对姿态角 carYaw (弧度制)
     ch["theta"] = theta;        // Vue charge.js: theta 存设备打点时的角度制朝向角 (如 180°/0°)
     ch["roll"] = 0.0;
@@ -2167,6 +2328,9 @@ void MapEditWidget::addCharge(const QPointF &sp, double epcX, double epcY, doubl
     ch["isyawfix"] = false;
     // Vue charge.js addChargeExtraProps: robotYaw 始终为 0
     ch["robotYaw"] = 0.0;
+    ch["rdsDockable"] = true;
+    ch["allowRotate"] = true;
+    ch["useDownPGV"] = false;
     m_charges.append(ch);
     m_dirty = true;
     renderMap();
@@ -2178,15 +2342,19 @@ void MapEditWidget::addHighPrecisionPoint(const QPointF &sp, double epcX, double
     QPointF w = sceneToWorld(sp.x(), sp.y());
     int n = nextIdNum(m_highPrecisionPoints, "hp_");
     QJsonObject hp;
-    hp["id"] = QString("hp_%1").arg(n); hp["name"] = QString("TL%1").arg(n);
+    hp["id"] = QString("hp_%1").arg(n); hp["name"] = QString("AP%1").arg(n);
+    // 类型名称: 仅新增 typeName 字段, 不改变原有 id 与类型
+    hp["typeName"] = "ActionPoint";
     hp["x"] = w.x(); hp["y"] = w.y();
-    // 高精度点的设备相对定位末端坐标(end-effector position coordinates)
+    // 工作站(高精定位点)相对定位末端坐标: 存入 epc_x, epc_y, epc_theta，并补充存入 epc_Yaw/epc_yaw 保证后台兼容
     hp["epc_x"] = epcX;
     hp["epc_y"] = epcY;
     hp["epc_theta"] = epcTheta;
     hp["epcX"] = epcX;
     hp["epcY"] = epcY;
     hp["epcTheta"] = epcTheta;
+    hp["epc_Yaw"] = epcTheta;
+    hp["epc_yaw"] = epcTheta;
     hp["yaw"] = yaw;            // Vue highPrecision.js: yaw 存设备打点时的绝对姿态角 carYaw (弧度制)
     hp["theta"] = theta;        // Vue highPrecision.js: theta 存设备打点时的角度制朝向角 (如 180°/0°)
     hp["roll"] = 0.0;
@@ -2195,6 +2363,9 @@ void MapEditWidget::addHighPrecisionPoint(const QPointF &sp, double epcX, double
     hp["isyawfix"] = false;
     // Vue highPrecision.js addHighPrecisionExtraProps: robotYaw 始终为 0
     hp["robotYaw"] = 0.0;
+    hp["rdsDockable"] = true;
+    hp["allowRotate"] = true;
+    hp["useDownPGV"] = false;
     m_highPrecisionPoints.append(hp);
     m_dirty = true;
     renderMap();
@@ -2302,6 +2473,10 @@ void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
     ln["reachdist"]  = mc.arrivalDistanceTolerance();
     ln["reachangle"] = mc.arrivalAngleToleranceDeg();
     ln["width"]      = mc.routeWidth();
+    ln["intrusion_stop_length"]         = 0.0;
+    ln["intrusion_stop_width"]          = 0.0;
+    ln["intrusion_deceleration_length"] = 0.0;
+    ln["intrusion_deceleration_width"]  = 0.0;
     m_lines.append(ln);
     m_dirty = true;
     renderMap();
@@ -2330,6 +2505,10 @@ void MapEditWidget::addCurve(const QPointF &a, const QPointF &b,
     cv["reachdist"]  = mc.arrivalDistanceTolerance();
     cv["reachangle"] = mc.arrivalAngleToleranceDeg();
     cv["width"]      = mc.routeWidth();
+    cv["intrusion_stop_length"]         = 0.0;
+    cv["intrusion_stop_width"]          = 0.0;
+    cv["intrusion_deceleration_length"] = 0.0;
+    cv["intrusion_deceleration_width"]  = 0.0;
     m_curves.append(cv);
     m_dirty = true;
     renderMap();
@@ -2399,6 +2578,10 @@ void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
     cv["reachdist"]  = mc.arrivalDistanceTolerance();
     cv["reachangle"] = mc.arrivalAngleToleranceDeg();
     cv["width"]      = mc.routeWidth();
+    cv["intrusion_stop_length"]         = 0.0;
+    cv["intrusion_stop_width"]          = 0.0;
+    cv["intrusion_deceleration_length"] = 0.0;
+    cv["intrusion_deceleration_width"]  = 0.0;
 
     // 控制点数组(世界坐标)
     QJsonArray ctrlArr;
@@ -2532,20 +2715,17 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
         m_stationPgvChk->setChecked(obj.value("useDownPGV").toBool(false));
 
         bool isDevicePoint = (realType == "charge" || realType == "highPrecision");
-        m_stationXSpin->setReadOnly(isDevicePoint);
-        m_stationYSpin->setReadOnly(isDevicePoint);
-        m_stationYawSpin->setReadOnly(isDevicePoint);
+        // 工作站与特殊工作站的 xy 与朝向角均支持自由编辑
+        m_stationXSpin->setReadOnly(false);
+        m_stationYSpin->setReadOnly(false);
+        m_stationYawSpin->setReadOnly(false);
 
-        QString roStyle = "background:#12151e; color:#627284; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;";
         QString rwStyle = "background:#131722; color:#cfddea; border:1px solid #2b384e; border-radius:4px; padding:2px 6px; font-size:12px;";
-        m_stationXSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
-        m_stationYSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
-        m_stationYawSpin->setStyleSheet(isDevicePoint ? roStyle : rwStyle);
+        m_stationXSpin->setStyleSheet(rwStyle);
+        m_stationYSpin->setStyleSheet(rwStyle);
+        m_stationYawSpin->setStyleSheet(rwStyle);
 
         if (isDevicePoint) {
-            double theta = obj.contains("epc_theta") ? obj.value("epc_theta").toDouble()
-                                                      : obj.value("epcTheta").toDouble();
-            m_stationEpcYawLabel->setText(QString::number(theta, 'f', 4) + " rad (" + QString::number(theta * 180.0 / M_PI, 'f', 1) + "°)");
             double epcX = obj.contains("epc_x") ? obj.value("epc_x").toDouble()
                                                  : obj.value("epcX").toDouble();
             double epcY = obj.contains("epc_y") ? obj.value("epc_y").toDouble()
@@ -2594,6 +2774,12 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
         m_lineReachDistSpin->setValue(obj.value("reachdist").toDouble(mc.arrivalDistanceTolerance()));
         m_lineReachAngleSpin->setValue(obj.value("reachangle").toDouble(mc.arrivalAngleToleranceDeg()));
         m_lineRoadWidthSpin->setValue(obj.value("width").toDouble(mc.routeWidth()));
+
+        // 实时避障范围定向膨胀参数 (m)
+        m_lineObsStopLenSpin->setValue(obj.value("intrusion_stop_length").toDouble(0.0));
+        m_lineObsStopWidSpin->setValue(obj.value("intrusion_stop_width").toDouble(0.0));
+        m_lineObsDecelLenSpin->setValue(obj.value("intrusion_deceleration_length").toDouble(0.0));
+        m_lineObsDecelWidSpin->setValue(obj.value("intrusion_deceleration_width").toDouble(0.0));
     }
 
     m_propsPanel->setVisible(true);
@@ -2609,8 +2795,105 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
     }
 }
 
+void MapEditWidget::syncLineObstaclesToEndpoints()
+{
+    // 汇总所有线路设置的实时避障范围 (取连接到该站点的各线路最大安全膨胀值)
+    struct ObstacleParam {
+        double stopLen = 0.0;
+        double stopWid = 0.0;
+        double decelLen = 0.0;
+        double decelWid = 0.0;
+        bool hasValue = false;
+    };
+    QMap<QString, ObstacleParam> nodeObsMap;
+
+    auto collectLineObstacle = [&](const QJsonArray &arr) {
+        for (const auto &v : arr) {
+            QJsonObject ln = v.toObject();
+            double sl = ln.value("intrusion_stop_length").toDouble(0.0);
+            double sw = ln.value("intrusion_stop_width").toDouble(0.0);
+            double dl = ln.value("intrusion_deceleration_length").toDouble(0.0);
+            double dw = ln.value("intrusion_deceleration_width").toDouble(0.0);
+            bool hasObstacle = (sl > 0.0 || sw > 0.0 || dl > 0.0 || dw > 0.0);
+            if (!hasObstacle) continue;
+
+            QString sId = ln.value("startid").toString();
+            QString eId = ln.value("endid").toString();
+
+            auto updateNode = [&](const QString &nodeId) {
+                if (nodeId.isEmpty()) return;
+                ObstacleParam &param = nodeObsMap[nodeId];
+                param.stopLen  = qMax(param.stopLen, sl);
+                param.stopWid  = qMax(param.stopWid, sw);
+                param.decelLen = qMax(param.decelLen, dl);
+                param.decelWid = qMax(param.decelWid, dw);
+                param.hasValue = true;
+            };
+            updateNode(sId);
+            updateNode(eId);
+        }
+    };
+
+    collectLineObstacle(m_lines);
+    collectLineObstacle(m_curves);
+
+    // 将避障参数同步赋给站点 (包含普通站点 m_points、充电桩 m_charges、高精度点 m_highPrecisionPoints)
+    // 格式与 Vue 中 base.json 及 task/edit.vue 的 actions 格式 100% 对齐，同时 properties 平铺兼容
+    auto syncToPointArray = [&](QJsonArray &ptArr) {
+        for (int i = 0; i < ptArr.size(); ++i) {
+            QJsonObject pt = ptArr[i].toObject();
+            QString ptId = pt.value("id").toString();
+            if (nodeObsMap.contains(ptId)) {
+                const auto &param = nodeObsMap.value(ptId);
+                // 1. properties 顶层平铺字段
+                pt["intrusion_stop_length"]         = param.stopLen;
+                pt["intrusion_stop_width"]          = param.stopWid;
+                pt["intrusion_deceleration_length"] = param.decelLen;
+                pt["intrusion_deceleration_width"]  = param.decelWid;
+
+                // 2. Vue actions 动作列表 (action_type: 21, name: "实时避障范围")
+                QJsonArray actions = pt.value("actions").toArray();
+                bool foundAction = false;
+                for (int j = 0; j < actions.size(); ++j) {
+                    QJsonObject act = actions[j].toObject();
+                    if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
+                        act["name"] = "实时避障范围";
+                        act["action_type"] = 21;
+                        act["intrusion_stop_length"]         = param.stopLen;
+                        act["intrusion_stop_width"]          = param.stopWid;
+                        act["intrusion_deceleration_length"] = param.decelLen;
+                        act["intrusion_deceleration_width"]  = param.decelWid;
+                        actions[j] = act;
+                        foundAction = true;
+                        break;
+                    }
+                }
+                if (!foundAction) {
+                    QJsonObject act;
+                    act["name"] = "实时避障范围";
+                    act["action_type"] = 21;
+                    act["intrusion_stop_length"]         = param.stopLen;
+                    act["intrusion_stop_width"]          = param.stopWid;
+                    act["intrusion_deceleration_length"] = param.decelLen;
+                    act["intrusion_deceleration_width"]  = param.decelWid;
+                    actions.append(act);
+                }
+                pt["actions"] = actions;
+                ptArr[i] = pt;
+            }
+        }
+    };
+
+    syncToPointArray(m_points);
+    syncToPointArray(m_charges);
+    syncToPointArray(m_highPrecisionPoints);
+}
+
 void MapEditWidget::onSaveMap(std::function<void(bool success)> onFinished)
 {
+    // 同步线路避障参数到端点（与 Vue actions 规范完全一致）
+    syncLineObstaclesToEndpoints();
+
     // 1. Flush any dragged handle positions to JSON (支持任意阶贝塞尔)
     for (auto it = m_curveHandles.begin(); it != m_curveHandles.end(); ++it) {
         auto &lst = it.value();
@@ -2828,7 +3111,8 @@ void MapEditWidget::applyPropsEdit()
         QString newKind  = m_stationTypeCombo->currentData().toString();
         double newX      = m_stationXSpin->value();
         double newY      = m_stationYSpin->value();
-        double newYawRad = m_stationYawSpin->value() * M_PI / 180.0;
+        double newYawDeg = m_stationYawSpin->value();
+        double newYawRad = newYawDeg * M_PI / 180.0;
         bool dockable    = m_stationDockableChk->isChecked();
         bool rotate      = m_stationRotateChk->isChecked();
         bool pgv         = m_stationPgvChk->isChecked();
@@ -2860,6 +3144,8 @@ void MapEditWidget::applyPropsEdit()
                 pointObj["x"]    = newX;
                 pointObj["y"]    = newY;
                 pointObj["yaw"]  = newYawRad;
+                pointObj["theta"] = newYawDeg;
+                pointObj["robotYaw"] = 0.0;
                 pointObj["rdsDockable"] = dockable;
                 pointObj["allowRotate"] = rotate;
                 pointObj["useDownPGV"]  = pgv;
@@ -2881,6 +3167,8 @@ void MapEditWidget::applyPropsEdit()
                     o["x"]           = newX;
                     o["y"]           = newY;
                     o["yaw"]         = newYawRad;
+                    o["theta"]       = newYawDeg;
+                    o["robotYaw"]    = 0.0;
                     o["rdsDockable"] = dockable;
                     o["allowRotate"] = rotate;
                     o["useDownPGV"]  = pgv;
@@ -2942,6 +3230,10 @@ void MapEditWidget::applyPropsEdit()
         double reachDist  = m_lineReachDistSpin->value();
         double reachAngle = m_lineReachAngleSpin->value();
         double roadWidth  = m_lineRoadWidthSpin->value();
+        double obsStopLen  = m_lineObsStopLenSpin->value();
+        double obsStopWid  = m_lineObsStopWidSpin->value();
+        double obsDecelLen = m_lineObsDecelLenSpin->value();
+        double obsDecelWid = m_lineObsDecelWidSpin->value();
 
         auto updLine = [&](QJsonArray &arr) {
             for (int i = 0; i < arr.size(); ++i) {
@@ -2956,12 +3248,17 @@ void MapEditWidget::applyPropsEdit()
                 o["reachdist"]  = reachDist;
                 o["reachangle"] = reachAngle;
                 o["width"]      = roadWidth;
+                o["intrusion_stop_length"]         = obsStopLen;
+                o["intrusion_stop_width"]          = obsStopWid;
+                o["intrusion_deceleration_length"] = obsDecelLen;
+                o["intrusion_deceleration_width"]  = obsDecelWid;
                 arr[i] = o;
                 break;
             }
         };
         if (m_selType == "line")       updLine(m_lines);
         else if (m_selType == "curve") updLine(m_curves);
+        syncLineObstaclesToEndpoints();
     }
 
     renderMap();
@@ -3436,11 +3733,17 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             break;
         case Charge:
             if (hasOverlap(sp)) { selectFeatureAt(sp); }
-            else { addCharge(sp); }
+            else {
+                const double epcX = AlignConfigManager::instance().epcX();
+                addCharge(sp, epcX, 0.0, 0.0);
+            }
             break;
         case HighPrecision:
             if (hasOverlap(sp)) { selectFeatureAt(sp); }
-            else { addHighPrecisionPoint(sp); }
+            else {
+                const double epcX = AlignConfigManager::instance().epcX();
+                addHighPrecisionPoint(sp, epcX, 0.0, 0.0);
+            }
             break;
         case Line: {
             if (!m_drawHasP1) {
@@ -3833,6 +4136,15 @@ void MapEditWidget::keyPressEvent(QKeyEvent *event)
                           qobject_cast<QComboBox*>(focused));
 
     if (!inInputWidget) {
+        if (TeleopController::instance().isActive()) {
+            int k = event->key();
+            if (k == Qt::Key_W || k == Qt::Key_A || k == Qt::Key_S || k == Qt::Key_D ||
+                k == Qt::Key_Space || k == Qt::Key_P || k == Qt::Key_L) {
+                // 抢占遥控期间，WASD/Space/P/L 交由全局遥控器处理，不触发地图编辑快捷键
+                return;
+            }
+        }
+
         if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
             deleteSelected();
             event->accept();
@@ -3936,9 +4248,9 @@ void MapEditWidget::showHelpDialog()
         scLayout->addLayout(row);
     };
     addRow("Esc", "指针模式：选择要素 / 拖拽移动站点与线路");
-    addRow("M", "普通站点工具：点击放置站点 LM（蓝）");
-    addRow("C", "充电点工具：点击放置充电桩站点 CP（金）");
-    addRow("T", "精定位点工具：点击放置高精定位站点 TL（红）");
+    addRow("M", "站点工具：点击放置站点 LM（蓝）");
+    addRow("C", "站点工具-特殊工作站：点击放置充电桩点 CP_（金，typeName=ChargePoint）");
+    addRow("T", "站点工具-工作站：点击放置高精度点 AP（红，typeName=ActionPoint）");
     addRow("P / L", "路径/线段工具：空地自动建站，连续连线");
     addRow("B", "三阶曲线工具：起点 ➔ 控制点 ➔ 终点自动吸附/建站");
     addRow("E", "橡皮擦：擦除栅格涂改，恢复可通行区域");
@@ -3999,6 +4311,39 @@ void MapEditWidget::showHelpDialog()
     connect(okBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
     btnLayout->addWidget(okBtn);
     layout->addLayout(btnLayout);
-
     dlg.exec();
+}
+
+void MapEditWidget::onTeleopClicked()
+{
+    TeleopController::instance().setActive(!TeleopController::instance().isActive());
+}
+
+void MapEditWidget::onTeleopActiveChanged(bool active)
+{
+    if (!m_teleopBtn) return;
+    if (active) {
+        m_teleopBtn->setText("恢复导航");
+        m_teleopBtn->setStyleSheet(
+            "QPushButton{color:white;border:none;border-radius:4px;"
+            "padding:4px 12px;font-size:12px;background:#c0392b;}"
+            "QPushButton:hover{background:#e74c3c;}");
+        Toast::info(this, "已抢占控制权：WASD 移动 | Space 刹车 | Ctrl 加速 | P/L 升降");
+        ApiService::instance().suspendWork([](int code, const QJsonObject &) {
+            if (code != 200) {
+                qWarning("暂停导航失败 (HTTP %d)，遥控可能受影响", code);
+            }
+        });
+    } else {
+        m_teleopBtn->setText("抢占控制权");
+        m_teleopBtn->setStyleSheet(
+            "QPushButton{color:white;border:none;border-radius:4px;"
+            "padding:4px 12px;font-size:12px;background:#1e6fd4;}"
+            "QPushButton:hover{background:#2980e8;}");
+        ApiService::instance().continueWork([](int code, const QJsonObject &) {
+            if (code != 200) {
+                qWarning("恢复导航失败 (HTTP %d)", code);
+            }
+        });
+    }
 }

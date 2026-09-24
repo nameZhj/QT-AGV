@@ -41,6 +41,7 @@ public:
     void setLinkStatus(bool linked);
     // 主动断开设备连接与 MQTT
     void disconnectDevice();
+    void updateCardDisplay();
 
 signals:
     void doubleClicked(int index);
@@ -55,7 +56,6 @@ protected:
 private:
     void startMqttMonitor(const QString &ip, const QString &carId);
     void setOnlineUI(bool online);
-    void updateCardDisplay();
 
     int m_index = 0;
     DeviceProfile m_profile;

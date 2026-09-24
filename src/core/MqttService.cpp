@@ -90,6 +90,9 @@ void MqttService::disconnectFromHost()
     }
     if (m_client) {
         m_client->disconnectFromHost();
+        m_client->deleteLater();
+        m_client = nullptr;
+        setupClient();
     }
 }
 
@@ -145,6 +148,19 @@ void MqttService::unsubscribeTopic(const QString &topic)
     }
 }
 
+void MqttService::clearAllSubscriptions()
+{
+    if (isConnected() && m_client) {
+        for (auto it = m_topics.cbegin(); it != m_topics.cend(); ++it) {
+            const QStringList variants = getTopicVariants(it.key());
+            for (const QString &varTopic : variants) {
+                m_client->unsubscribe(varTopic);
+            }
+        }
+    }
+    m_topics.clear();
+}
+
 void MqttService::publish(const QString &topic, const QByteArray &payload, int qos)
 {
     if (!isConnected()) {
@@ -153,7 +169,7 @@ void MqttService::publish(const QString &topic, const QByteArray &payload, int q
     }
     if (m_loggingEnabled && !topic.contains(QStringLiteral("/log")) && topic != QStringLiteral("log")) {
         qDebug().noquote() << QStringLiteral("[MQTT PUB] Topic: %1 | Payload: %2")
-                              .arg(topic, QString::fromUtf8(payload).left(300));
+                              .arg(topic, QString::fromUtf8(payload));
     }
     m_client->publish(topic, payload, static_cast<quint8>(qos));
 }
@@ -292,7 +308,7 @@ void MqttService::onMessageReceived(const QByteArray &message, const QMqttTopicN
     // 打印接收日志 (受 m_loggingEnabled 开关控制，默认关闭以避免刷屏)
     if (m_loggingEnabled && !topicStr.contains(QStringLiteral("/log")) && topicStr != QStringLiteral("log")) {
         qDebug().noquote() << QStringLiteral("[MQTT RECV] Topic: %1 | Payload: %2")
-                              .arg(topicStr, QString::fromUtf8(message).left(300));
+                              .arg(topicStr, QString::fromUtf8(message));
     }
 
     // 快照式拷贝待执行回调列表，杜绝业务回调中退订/订阅导致容器迭代器失效崩溃 (Reentrancy Safety)
@@ -343,13 +359,7 @@ QStringList MqttService::getTopicVariants(const QString &topic)
         variants.append(QStringLiteral(":/") + trimmed);
     }
 
-    // 若订阅了通用 /info 话题，自动扩充订阅通配符 /rob/+/info 与 :/rob/+/info
-    if (trimmed == QStringLiteral("/info") || trimmed == QStringLiteral("info") || trimmed == QStringLiteral(":/info")) {
-        variants.append(QStringLiteral("/rob/+/info"));
-        variants.append(QStringLiteral(":/rob/+/info"));
-        variants.append(QStringLiteral("rob/+/info"));
-    }
-
+    // 保持单车专用订阅，绝不自动扩充多车通配符 /rob/+/info，彻底避免多台车数据窜扰
     variants.removeDuplicates();
     return variants;
 }

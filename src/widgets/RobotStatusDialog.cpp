@@ -562,7 +562,11 @@ void RobotStatusDialog::updateFromRobotInfo(const RobotInfo &info)
 
     // ── 3. 机器人导航状态 ──
     if (info.map_id != 0 && m_valCurMap) {
-        m_valCurMap->setText(QString::number(info.map_id));
+        if (!m_mapName.isEmpty() && (m_mapId.isEmpty() || m_mapId.toInt() == info.map_id)) {
+            m_valCurMap->setText(m_mapName);
+        } else {
+            m_valCurMap->setText(QString::number(info.map_id));
+        }
     }
     if (m_valNavStatus) {
         m_valNavStatus->setText(info.navStatusText());

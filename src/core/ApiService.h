@@ -73,12 +73,9 @@ public:
     // 端口 8061 工作通道
     void suspendWork(const Callback &cb);
     void continueWork(const Callback &cb);
-    // 自检与终端通道
-    void startCheck(const Callback &cb);
-    void startTerminal(const Callback &cb);
-    void stopTerminal(const Callback &cb);
     // 参数配置
     void getAllConfigsPreserve(const RawCallback &cb);
+    void getConfigMetadata(const RawCallback &cb);
     void modifyParam(const QJsonObject &params, const Callback &cb);
     void getConfigSummary(const FileCallback &cb);
     void updateConfigSummary(const QString &filePath, const Callback &cb);
@@ -149,8 +146,11 @@ public:
     void batchSaveTaskChain(const QJsonArray &chains, const Callback &cb);        ///< POST /task/chain/batchSave (JSON 数组: [{fileName, fileContent}])
     void deleteTaskChain(const QString &fileName, const Callback &cb);            ///< DELETE /task/chain/{fileName}
     void listTaskChain(const Callback &cb);                                       ///< GET /task/chain/list
-    void sendTaskChain(const QString &taskChainString, bool enabled, const Callback &cb); ///< POST /task/chain/sendTask
+    void sendTaskChain(const QString &taskChainString, bool enabled, bool looped, const Callback &cb); ///< POST /task/chain/sendTask
+    void sendTaskChain(const QString &taskChainString, bool enabled, const Callback &cb);               ///< POST /task/chain/sendTask (looped=false)
     void controlTaskChain(const QString &command, const Callback &cb);            ///< PUT /task/chain/control?command=...
+    void sendNextTask(const Callback &cb = nullptr);                              ///< POST /task/chain/sendNextTask (端口 8048)
+    void sendNextTask(const QJsonObject &data, const Callback &cb);               ///< POST /task/chain/sendNextTask (端口 8048)
 
     // ========== 音频接口 (端口 8048) ==========
     void listAudio(const Callback &cb);                                    ///< GET  /robot/audio/list
@@ -170,8 +170,8 @@ public:
     // 转动便捷方法 (action_type: 5, rotate_angle, rotate_speed)
     void setRotateMotion(double rotateAngleRad, double rotateSpeed, int actionId, const Callback &cb);
 
-    // 顶升便捷方法 (action_type: 3, action: 1抬升/0下降, height)
-    void setJackControl(int action, double height, int actionId, const Callback &cb);
+    // 顶升便捷方法 (action_type: 3, lift_height 目标高度 / lift_linear 顶升线速度)
+    void setJackControl(double liftHeight, double liftLinear, int actionId, const Callback &cb);
 
     // 2. AGV 固定路径导航下发
     void setRobotFixPath(const QJsonObject &data, const Callback &cb);

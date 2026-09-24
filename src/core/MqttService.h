@@ -49,6 +49,7 @@ public:
 
     // 取消订阅
     void unsubscribeTopic(const QString &topic);
+    void clearAllSubscriptions();
 
     // 发布消息
     void publish(const QString &topic, const QByteArray &payload, int qos = 1);

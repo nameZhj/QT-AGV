@@ -312,6 +312,12 @@ void MapCanvas::mousePressEvent(QMouseEvent *e)
     QGraphicsView::mousePressEvent(e);
 }
 
+void MapCanvas::mouseDoubleClickEvent(QMouseEvent *e)
+{
+    emit sceneDoubleClicked(mapToScene(e->pos()), e->button());
+    e->accept();
+}
+
 void MapCanvas::mouseMoveEvent(QMouseEvent *e)
 {
     if (m_rotating) {

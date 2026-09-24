@@ -19,6 +19,7 @@
 #include <QTimer>
 #include <QSettings>
 #include "core/MotionConfigManager.h"
+#include "core/AlignConfigManager.h"
 
 // ── Toolbar icon helpers：图标在上、文字在下 (Qt::ToolButtonTextUnderIcon)，
 // 与 MapViewWidget/TaskWidget 工具栏按钮风格保持一致 ─────────────────────────
@@ -195,11 +196,12 @@ void EditConfigWidget::setupUI() {
   splitter->addWidget(m_groupTree);
 
   m_paramTable = new QTableWidget;
-  m_paramTable->setColumnCount(3);
-  m_paramTable->setHorizontalHeaderLabels({"参数名", "值", "说明"});
+  m_paramTable->setColumnCount(4);
+  m_paramTable->setHorizontalHeaderLabels({"参数名", "值", "默认值", "说明"});
   m_paramTable->horizontalHeader()->setStretchLastSection(true);
   m_paramTable->setColumnWidth(0, 220);
-  m_paramTable->setColumnWidth(1, 300);
+  m_paramTable->setColumnWidth(1, 260);
+  m_paramTable->setColumnWidth(2, 200);
   m_paramTable->setItemDelegateForColumn(1, new ParamItemDelegate(m_paramTable));
   m_paramTable->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::SelectedClicked | QAbstractItemView::EditKeyPressed);
   // 默认行高偏矮，叠加 stylesheet 的 item padding 后，Qt 不会重新计算行高，
@@ -257,9 +259,48 @@ static void ensureMotionControlConfig(QJsonArray &configs) {
   }
 }
 
+static void ensureAlignConfig(QJsonArray &configs) {
+  auto &ac = AlignConfigManager::instance();
+  for (int i = 0; i < configs.size(); ++i) {
+    QJsonObject entry = configs[i].toObject();
+    QString path = entry.value("file_path").toString().toLower();
+    QJsonObject params = entry.value("params").toObject();
+    if (params.contains("cylinder_length") || path.contains("secondary_localization_reflector")) {
+      if (params.contains("cylinder_length")) {
+        ac.setCylinderLength(params.value("cylinder_length").toDouble(ac.cylinderLength()));
+      }
+      if (params.contains("anti_align_depth")) {
+        ac.setAntiAlignDepth(params.value("anti_align_depth").toDouble(ac.antiAlignDepth()));
+      } else {
+        params["anti_align_depth"] = ac.antiAlignDepth();
+        entry["params"] = params;
+        configs[i] = entry;
+      }
+      break;
+    }
+  }
+}
+
 void EditConfigWidget::refreshData() { loadAll(); }
 
 void EditConfigWidget::loadAll() {
+  // 1. 尝试从本地缓存恢复元数据
+  QSettings settings;
+  QByteArray cachedMeta = settings.value("editConfig/cachedMetadata").toByteArray();
+  if (!cachedMeta.isEmpty() && m_metadataList.isEmpty()) {
+    parseMetadata(cachedMeta);
+  }
+
+  // 2. 异步请求 /rbrainrobot/get_config_metadata (端口 8062) 获取默认值元数据
+  ApiService::instance().getConfigMetadata(
+      [this](int mCode, const QByteArray &mRaw) {
+        if (mCode == 200) {
+          parseMetadata(mRaw);
+          updateDefaultValuesInTable();
+        }
+      });
+
+  // 3. 异步请求 /rbrainrobot/get_all_configs (端口 8062) 获取当前配置数据
   ApiService::instance().getAllConfigsPreserve(
       [this](int code, const QByteArray &rawData) {
         QJsonArray list;
@@ -305,6 +346,7 @@ void EditConfigWidget::loadAll() {
 
         // 确保“运动控制”分组及对应的7项参数完备存在
         ensureMotionControlConfig(list);
+        ensureAlignConfig(list);
 
         m_configs = list;
         refreshGroups();
@@ -453,6 +495,7 @@ QPair<QString, QString> EditConfigWidget::fieldMetaFor(const QString &key) {
       {"max_detection_range", {"最远探测距离", "单位 m"}},
       {"min_point_threshold", {"最少检出点数", ""}},
       {"length_dock", {"出库距离", "单位 m"}},
+      {"anti_align_depth", {"正走入深度", "单位米"}},
       {"cylinder_length", {"前后货架腿中心点距离", "单位 m"}},
       {"cylinder_recognition_range", {"货架腿识别范围", ""}},
       {"lift_topic_name", {"顶升话题名称", ""}},
@@ -533,11 +576,19 @@ void EditConfigWidget::addParamRows(const QJsonObject &params, int configIdx,
     else
       value = "null";
 
+    // Look up default value from metadata
+    QJsonObject metaObj;
+    if (configIdx >= 0 && configIdx < m_configs.size()) {
+      metaObj = findMetadataForConfig(m_configs[configIdx].toObject());
+    }
+    QString defaultStr = getDefaultValueString(metaObj, fullPath);
+
     // Filter
     auto fm = fieldMetaFor(key);
     if (!filter.isEmpty()) {
       bool hit = fullPath.toLower().contains(filter) ||
                  value.toLower().contains(filter) ||
+                 defaultStr.toLower().contains(filter) ||
                  fm.first.contains(filter) || fm.second.contains(filter);
       if (!hit)
         continue;
@@ -556,14 +607,22 @@ void EditConfigWidget::addParamRows(const QJsonObject &params, int configIdx,
     // Column 1: value (editable)
     m_paramTable->setItem(row, 1, new QTableWidgetItem(value));
 
-    // Column 2: Chinese name + remark (not editable)
+    // Column 2: default value (not editable)
+    auto *defaultItem = new QTableWidgetItem(defaultStr);
+    defaultItem->setFlags(defaultItem->flags() & ~Qt::ItemIsEditable);
+    defaultItem->setForeground(QColor(0x94, 0xa3, 0xb8));
+    defaultItem->setData(Qt::UserRole, configIdx);
+    defaultItem->setData(Qt::UserRole + 1, fullPath);
+    m_paramTable->setItem(row, 2, defaultItem);
+
+    // Column 3: Chinese name + remark (not editable)
     QString desc = fm.first;
     if (!fm.second.isEmpty())
       desc += "  (" + fm.second + ")";
     auto *descItem = new QTableWidgetItem(desc);
     descItem->setFlags(descItem->flags() & ~Qt::ItemIsEditable);
     descItem->setForeground(QColor(0x88, 0x99, 0xaa));
-    m_paramTable->setItem(row, 2, descItem);
+    m_paramTable->setItem(row, 3, descItem);
   }
 }
 
@@ -881,4 +940,170 @@ void EditConfigWidget::onParamCellChanged(int row, int col) {
 
   entry["params"] = jsonSet(params, segments, newLeaf).toObject();
   m_configs[configIdx] = entry;
+
+  if (!segments.isEmpty()) {
+    const QString lastKey = segments.last();
+    if (lastKey == "anti_align_depth") {
+      AlignConfigManager::instance().setAntiAlignDepth(newLeaf.toDouble(AlignConfigManager::instance().antiAlignDepth()));
+    } else if (lastKey == "cylinder_length") {
+      AlignConfigManager::instance().setCylinderLength(newLeaf.toDouble(AlignConfigManager::instance().cylinderLength()));
+    }
+  }
+}
+
+void EditConfigWidget::parseMetadata(const QByteArray &rawJson) {
+  QJsonParseError err;
+  QJsonDocument doc = QJsonDocument::fromJson(rawJson, &err);
+  if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+    return;
+  }
+  QJsonObject root = doc.object();
+  QJsonArray list;
+  if (root.contains("data")) {
+    QJsonValue dv = root.value("data");
+    if (dv.isArray()) {
+      list = dv.toArray();
+    } else if (dv.isObject()) {
+      QJsonObject dataObj = dv.toObject();
+      if (dataObj.contains("data") && dataObj.value("data").isArray()) {
+        list = dataObj.value("data").toArray();
+      } else {
+        for (const auto &k : dataObj.keys()) {
+          if (dataObj.value(k).isArray()) {
+            list = dataObj.value(k).toArray();
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (!list.isEmpty()) {
+    m_metadataList = list;
+    QSettings settings;
+    settings.setValue("editConfig/cachedMetadata", rawJson);
+  }
+}
+
+QJsonObject EditConfigWidget::findMetadataForConfig(const QJsonObject &configEntry) const {
+  if (m_metadataList.isEmpty() || configEntry.isEmpty()) return QJsonObject();
+
+  QString cfgPath = configEntry.value("file_path").toString().trimmed().toLower();
+  QString cfgName = configEntry.value("name").toString().trimmed().toLower();
+  QString cfgBase = basename(cfgPath).toLower();
+
+  // 1. 完全匹配 file_path
+  for (const auto &v : m_metadataList) {
+    QJsonObject meta = v.toObject();
+    QString mPath = meta.value("file_path").toString().trimmed().toLower();
+    if (!cfgPath.isEmpty() && cfgPath == mPath) return meta;
+  }
+
+  // 2. 完全匹配 name
+  for (const auto &v : m_metadataList) {
+    QJsonObject meta = v.toObject();
+    QString mName = meta.value("name").toString().trimmed().toLower();
+    if (!cfgName.isEmpty() && cfgName == mName) return meta;
+  }
+
+  // 3. 匹配 basename
+  for (const auto &v : m_metadataList) {
+    QJsonObject meta = v.toObject();
+    QString mPath = meta.value("file_path").toString().trimmed().toLower();
+    QString mBase = basename(mPath).toLower();
+    if (!cfgBase.isEmpty() && cfgBase == mBase) return meta;
+  }
+
+  // 4. 忽略 .yaml 后缀匹配名称 (如 motion_control 对比 motion_control.yaml)
+  auto stripYaml = [](const QString &s) {
+    return s.endsWith(".yaml") ? s.left(s.length() - 5) : (s.endsWith(".yml") ? s.left(s.length() - 4) : s);
+  };
+  QString cleanCfg = stripYaml(cfgName.isEmpty() ? cfgBase : cfgName);
+  for (const auto &v : m_metadataList) {
+    QJsonObject meta = v.toObject();
+    QString mName = meta.value("name").toString().trimmed().toLower();
+    QString mBase = basename(meta.value("file_path").toString().trimmed().toLower());
+    QString cleanMeta = stripYaml(mName.isEmpty() ? mBase : mName);
+    if (!cleanCfg.isEmpty() && cleanCfg == cleanMeta) return meta;
+  }
+
+  return QJsonObject();
+}
+
+QString EditConfigWidget::getDefaultValueString(const QJsonObject &metaObj,
+                                               const QString &fullPath) const {
+  if (metaObj.isEmpty() || fullPath.isEmpty())
+    return QStringLiteral("--");
+
+  QJsonObject curObj = metaObj.value("params").toObject();
+  const QStringList parts = fullPath.split('.');
+
+  for (int i = 0; i < parts.size() - 1; ++i) {
+    QJsonValue nextVal = curObj.value(parts[i]);
+    if (!nextVal.isObject()) {
+      return QStringLiteral("--");
+    }
+    curObj = nextVal.toObject();
+  }
+
+  QString leafKey = parts.last();
+  QJsonValue leafVal = curObj.value(leafKey);
+  if (!leafVal.isObject()) {
+    return QStringLiteral("--");
+  }
+
+  QJsonObject paramMeta = leafVal.toObject();
+  if (!paramMeta.contains("default")) {
+    return QStringLiteral("--");
+  }
+
+  QJsonValue def = paramMeta.value("default");
+  if (def.isNull()) {
+    return QStringLiteral("null");
+  }
+  if (def.isString()) {
+    return def.toString();
+  }
+  if (def.isDouble()) {
+    double d = def.toDouble();
+    return (d == (long long)d) ? QString::number((long long)d)
+                               : QString::number(d, 'g', 10);
+  }
+  if (def.isBool()) {
+    return def.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+  }
+  if (def.isArray()) {
+    return QString::fromUtf8(
+        QJsonDocument(def.toArray()).toJson(QJsonDocument::Compact));
+  }
+  return QStringLiteral("--");
+}
+
+void EditConfigWidget::updateDefaultValuesInTable() {
+  if (!m_paramTable || m_paramTable->rowCount() == 0) return;
+  m_paramTable->blockSignals(true);
+  for (int r = 0; r < m_paramTable->rowCount(); ++r) {
+    auto *keyItem = m_paramTable->item(r, 0);
+    auto *defItem = m_paramTable->item(r, 2);
+    if (!keyItem) continue;
+
+    int configIdx = keyItem->data(Qt::UserRole).toInt();
+    QString fullPath = keyItem->data(Qt::UserRole + 1).toString();
+    if (fullPath.isEmpty()) fullPath = keyItem->text();
+
+    if (configIdx >= 0 && configIdx < m_configs.size()) {
+      QJsonObject metaObj = findMetadataForConfig(m_configs[configIdx].toObject());
+      QString defaultStr = getDefaultValueString(metaObj, fullPath);
+      if (!defItem) {
+        defItem = new QTableWidgetItem(defaultStr);
+        defItem->setFlags(defItem->flags() & ~Qt::ItemIsEditable);
+        defItem->setForeground(QColor(0x94, 0xa3, 0xb8));
+        defItem->setData(Qt::UserRole, configIdx);
+        defItem->setData(Qt::UserRole + 1, fullPath);
+        m_paramTable->setItem(r, 2, defItem);
+      } else {
+        defItem->setText(defaultStr);
+      }
+    }
+  }
+  m_paramTable->blockSignals(false);
 }

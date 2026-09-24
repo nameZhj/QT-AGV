@@ -36,7 +36,16 @@ CarWidget::CarWidget(QWidget *parent)
                 if (info.map_id != 0) {
                     auto *mapItem = m_table->item(row, 2);
                     if (mapItem && (mapItem->text().trimmed().isEmpty() || mapItem->text().startsWith("地图 ID:"))) {
-                        mapItem->setText(QString("地图 ID: %1").arg(info.map_id));
+                        QString mname;
+                        for (const auto &m : m_mapOptions) {
+                            QJsonObject obj = m.toObject();
+                            if (jsonIdStr(obj.value("mapId")) == QString::number(info.map_id) ||
+                                obj.value("mapId").toInt() == info.map_id) {
+                                mname = obj.value("mapName").toString().trimmed();
+                                break;
+                            }
+                        }
+                        mapItem->setText(!mname.isEmpty() ? mname : QString::number(info.map_id));
                     }
                 }
                 break;
@@ -122,6 +131,26 @@ void CarWidget::loadMapOptions()
             QJsonObject obj = item.toObject();
             m_mapFilter->addItem(obj.value("mapName").toString(), jsonIdStr(obj.value("mapId")));
         }
+
+        // 若当前列表中有未解析出名字的地图，用最新加载的地图选项尝试匹配替换
+        for (int row = 0; row < m_table->rowCount(); ++row) {
+            auto *mapItem = m_table->item(row, 2);
+            if (mapItem) {
+                QString txt = mapItem->text().trimmed();
+                bool ok = false;
+                int mid = txt.toInt(&ok);
+                if (ok && mid > 0) {
+                    for (const auto &m : m_mapOptions) {
+                        QJsonObject obj = m.toObject();
+                        if (jsonIdStr(obj.value("mapId")) == QString::number(mid) ||
+                            obj.value("mapId").toInt() == mid) {
+                            mapItem->setText(obj.value("mapName").toString().trimmed());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     });
 }
 
@@ -156,7 +185,16 @@ void CarWidget::getList()
                 statusText = rInfo.statusText();
                 statusCol = QColor(rInfo.statusColor());
                 if (mapName.isEmpty() && rInfo.map_id != 0) {
-                    mapName = QString("地图 ID: %1").arg(rInfo.map_id);
+                    QString mname;
+                    for (const auto &m : m_mapOptions) {
+                        QJsonObject obj = m.toObject();
+                        if (jsonIdStr(obj.value("mapId")) == QString::number(rInfo.map_id) ||
+                            obj.value("mapId").toInt() == rInfo.map_id) {
+                            mname = obj.value("mapName").toString().trimmed();
+                            break;
+                        }
+                    }
+                    mapName = !mname.isEmpty() ? mname : QString::number(rInfo.map_id);
                 }
             }
 

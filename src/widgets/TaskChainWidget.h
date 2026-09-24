@@ -17,6 +17,7 @@
 #include <QComboBox>
 
 class QVBoxLayout;
+class QTimer;
 
 // 动作标签定义: 标签名 + 类别 + 参数定义字段
 struct ActionDef {
@@ -38,6 +39,7 @@ class TaskChainWidget : public QWidget
     Q_OBJECT
 public:
     explicit TaskChainWidget(QWidget *parent = nullptr);
+    ~TaskChainWidget() override;
 
 signals:
     void goBack();
@@ -53,19 +55,14 @@ private slots:
     void onTaskNew();
     void onTaskDelete();
     void onTaskSelectAll();
-    void onTaskItemChanged(QListWidgetItem *item);
 
     // 面板3: 组模块
     void onGroupAdd();
     void onGroupInsert();
     void onGroupDelete();
     void onGroupSelectAll();
-    void onGroupLoopToggled(bool checked);
     void onGroupSendSelected();
     void onGroupSendAll();
-
-    // 面板4: 可拖拽标签
-    void onActionTriggered(const QString &actionName);
 
     // 底部状态栏控制按钮
     void onSuspendResume();
@@ -74,6 +71,7 @@ private slots:
 
 protected:
     void showEvent(QShowEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private:
     void executeSingleAction(const QJsonObject &action);
@@ -94,9 +92,29 @@ private:
     };
     QList<StationItem> m_stations;
     void loadMapStations();
+    QString stationName(const QString &idOrName) const;   // 路网点 id -> 显示名称
+
+    // 本地缓存 (exe 同级 taskChainCache.json) + 服务器列表
+    void loadChainsFromCacheAndServer();
+    void scheduleCacheWrite();
+    void writeCache();
+
+    // 任务链运行状态 (MQTT /taskchain/status)
+    void subscribeChainStatus();
+    void onChainStatusMessage(const QByteArray &payload);
+
+    // 任务链执行进度 (MQTT /taskchain/currentTask): {"currentTask":"sub_task_1","currentGroup":"group_2"}
+    void subscribeChainCurrentTask();
+    void onChainCurrentTaskMessage(const QByteArray &payload);
+
+    // 执行期间锁定任务链/任务/组列表 (robotWorking=false 时解锁)
+    void setListsLocked(bool locked);
+    void installLockFilter(QWidget *w, bool install);
+    void applyRuntimeSelection();          // 按 MQTT 上报的当前任务/组设置选中项
+    QString subTaskNameAt(int taskIdx) const;
+    QString groupNameAt(int groupIdx) const;
 
     // 数据操作
-    void addChainItem(const QString &name);
     void selectChain(int index);
     int  currentChainIndex() const;
     void refreshTaskList();
@@ -140,7 +158,7 @@ private:
     QPushButton *m_groupInsertBtn   = nullptr;
     QPushButton *m_groupDeleteBtn   = nullptr;
     QPushButton *m_groupSelectAllBtn = nullptr;
-    QCheckBox   *m_groupLoopCheck   = nullptr;
+    QCheckBox   *m_loopCheck        = nullptr;
     QPushButton *m_groupSendSelBtn   = nullptr;
     QPushButton *m_groupSendAllBtn   = nullptr;
     QLabel      *m_groupHintLabel   = nullptr;
@@ -167,6 +185,31 @@ private:
     QList<ChainData> m_chains;
     int m_currentChainIndex = -1;
     int m_currentTaskIndex = -1;    // 当前选中的任务
+
+    // 缓存状态: m_cacheLoaded 保证每个运行周期只从缓存+服务器载入一次
+    // m_didSave 标记本次运行是否点击过“保存”, 未保存则退出时清理本地缓存
+    QTimer *m_cacheTimer = nullptr;
+    bool m_cacheLoaded = false;
+    bool m_didSave = false;
+
+    // MQTT /taskchain/status: robotWorking 有任务在运行, robotPause 已暂停
+    bool m_chainWorking = false;
+    bool m_chainPaused  = false;
+    bool m_statusSubscribed = false;
+
+    // MQTT /taskchain/currentTask: 当前执行到的任务/组名称
+    bool    m_currentSubscribed = false;
+    QString m_currentTaskName;
+    QString m_currentGroupName;
+    // 列表锁定标记: 下发任务链后锁定, robotWorking=false 时解锁
+    bool    m_listLocked = false;
+    // 覆盖整个编辑区域的半透明遮罩控件与文本
+    QWidget *m_panelsContainer   = nullptr;
+    QWidget *m_lockOverlay       = nullptr;
+    QLabel  *m_overlayTextLabel  = nullptr;
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
 
     // 辅助: 获取当前任务的 groups 数组
     QJsonArray currentTaskGroups() const;

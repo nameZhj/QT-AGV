@@ -108,7 +108,7 @@ void ApiService::handleReply(QNetworkReply *reply, const Callback &cb)
         }
 
         const QByteArray data = reply->readAll();
-        qDebug().noquote() << QStringLiteral("[HTTP RESP] %1 <- %2").arg(urlStr, QString::fromUtf8(data).left(500));
+        qDebug().noquote() << QStringLiteral("[HTTP RESP] %1 <- %2").arg(urlStr, QString::fromUtf8(data));
 
         QJsonParseError err;
         const QJsonDocument doc = QJsonDocument::fromJson(data, &err);
@@ -187,7 +187,7 @@ void ApiService::post(const QString &url, const QJsonObject &data, const Callbac
 {
     const QString requestUrl = buildUrl(url, port);
     const QByteArray body = QJsonDocument(data).toJson(QJsonDocument::Compact);
-    qDebug().noquote() << QStringLiteral("[HTTP SEND] POST %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
+    qDebug().noquote() << QStringLiteral("[HTTP SEND] POST %1 -> %2").arg(requestUrl, QString::fromUtf8(body));
 
     const QNetworkRequest req = buildRequest(requestUrl, withToken, kDefaultTimeoutMs);
     QNetworkReply *reply = m_manager->post(req, body);
@@ -198,7 +198,7 @@ void ApiService::postArray(const QString &url, const QJsonArray &data, const Cal
 {
     const QString requestUrl = buildUrl(url, port);
     const QByteArray body = QJsonDocument(data).toJson(QJsonDocument::Compact);
-    qDebug().noquote() << QStringLiteral("[HTTP SEND] POST %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
+    qDebug().noquote() << QStringLiteral("[HTTP SEND] POST %1 -> %2").arg(requestUrl, QString::fromUtf8(body));
 
     const QNetworkRequest req = buildRequest(requestUrl, withToken, kDefaultTimeoutMs);
     QNetworkReply *reply = m_manager->post(req, body);
@@ -209,7 +209,7 @@ void ApiService::put(const QString &url, const QJsonObject &data, const Callback
 {
     const QString requestUrl = buildUrl(url, port);
     const QByteArray body = QJsonDocument(data).toJson(QJsonDocument::Compact);
-    qDebug().noquote() << QStringLiteral("[HTTP SEND] PUT %1 -> %2").arg(requestUrl, QString::fromUtf8(body).left(300));
+    qDebug().noquote() << QStringLiteral("[HTTP SEND] PUT %1 -> %2").arg(requestUrl, QString::fromUtf8(body));
 
     const QNetworkRequest req = buildRequest(requestUrl, withToken, kDefaultTimeoutMs);
     QNetworkReply *reply = m_manager->put(req, body);
@@ -352,24 +352,14 @@ void ApiService::continueWork(const Callback &cb)
     post("/rbrainrobot/continue", QJsonObject(), cb, 8061, false);
 }
 
-void ApiService::startCheck(const Callback &cb)
-{
-    get("/rbrainrobot/self_check", cb, 8062, false);
-}
-
-void ApiService::startTerminal(const Callback &cb)
-{
-    post("/rbrainrobot/start_terminal", QJsonObject(), cb, 8062, false);
-}
-
-void ApiService::stopTerminal(const Callback &cb)
-{
-    post("/rbrainrobot/stop_terminal", QJsonObject(), cb, 8062, false);
-}
-
 void ApiService::getAllConfigsPreserve(const RawCallback &cb)
 {
     getRaw("/rbrainrobot/get_all_configs", cb, 8062, false);
+}
+
+void ApiService::getConfigMetadata(const RawCallback &cb)
+{
+    getRaw("/rbrainrobot/get_config_metadata", cb, 8062, false);
 }
 
 void ApiService::modifyParam(const QJsonObject &params, const Callback &cb)
@@ -705,17 +695,33 @@ void ApiService::listTaskChain(const Callback &cb)
     get("/task/chain/list", cb);
 }
 
-void ApiService::sendTaskChain(const QString &taskChainString, bool enabled, const Callback &cb)
+void ApiService::sendTaskChain(const QString &taskChainString, bool enabled, bool looped, const Callback &cb)
 {
     QJsonObject body;
     body["enabled"]         = enabled;
+    body["looped"]          = looped;
     body["taskChainString"] = taskChainString;
     post("/task/chain/sendTask", body, cb);
+}
+
+void ApiService::sendTaskChain(const QString &taskChainString, bool enabled, const Callback &cb)
+{
+    sendTaskChain(taskChainString, enabled, false, cb);
 }
 
 void ApiService::controlTaskChain(const QString &command, const Callback &cb)
 {
     put(appendQuery("/task/chain/control", QJsonObject{{"command", command}}), QJsonObject(), cb);
+}
+
+void ApiService::sendNextTask(const Callback &cb)
+{
+    sendNextTask(QJsonObject(), cb);
+}
+
+void ApiService::sendNextTask(const QJsonObject &data, const Callback &cb)
+{
+    post("/task/chain/sendNextTask", data, cb, 8048);
 }
 
 // ========== 音频接口 (端口 8048) ==========
@@ -829,22 +835,22 @@ void ApiService::setRotateMotion(double rotateAngleRad, double rotateSpeed, int 
 
     QJsonObject actionObj;
     actionObj["action_id"]    = actionId;
-    actionObj["action_type"]  = 5;
+    actionObj["action_type"]  = 12;
     actionObj["rotate_angle"] = rotateAngleRad;
     actionObj["rotate_speed"] = rotateSpeed;
     setActionControl(actionObj, cb);
 }
 
-void ApiService::setJackControl(int action, double height, int actionId, const Callback &cb)
+void ApiService::setJackControl(double liftHeight, double liftLinear, int actionId, const Callback &cb)
 {
     if (actionId <= 0) {
         actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
     }
     QJsonObject actionObj;
-    actionObj["action_id"]     = actionId;
-    actionObj["action_type"]   = 3; // 3: 顶升车上升或下降
-    actionObj["action"]        = action;
-    actionObj["action_height"] = height;
+    actionObj["action_id"]   = actionId;
+    actionObj["action_type"] = 3; // 3: 顶升车上升或下降
+    actionObj["lift_height"] = liftHeight;   // 目标顶升高度 (m, 0-0.15)
+    actionObj["lift_linear"] = liftLinear;   // 顶升线速度 (m/s, 非负, 上限 0.1)
     setActionControl(actionObj, cb);
 }
 

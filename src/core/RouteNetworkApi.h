@@ -56,6 +56,19 @@ struct RoutePoint {
     QString label;              ///< 业务附加标签
     double waitTimeout = 0.0;   ///< 站点等待超时时间 (s)
 
+    // 工作站与特殊工作站相对定位参数
+    double epc_x = 0.0;
+    double epc_y = 0.0;
+    double epc_theta = 0.0;
+    QString typeName;           ///< "ActionPoint" | "ChargePoint"
+
+    // 实时避障参数 (与 Vue actions / properties 格式 100% 对齐)
+    double intrusionStopLength  = 0.0;  ///< 正向停止膨胀半径 (m)
+    double intrusionStopWidth   = 0.0;  ///< 侧向停止膨胀半径 (m)
+    double intrusionDecelLength = 0.0;  ///< 正向减速膨胀半径 (m)
+    double intrusionDecelWidth  = 0.0;  ///< 侧向减速膨胀半径 (m)
+    QJsonArray actions;                 ///< 动作列表 (Vue 标准格式，包含实时避障等 action)
+
     // 原生 JSON 序列化与反序列化
     QJsonObject toJson() const;
     static RoutePoint fromJson(const QJsonObject &obj);
@@ -93,6 +106,12 @@ struct RouteSegment {
     int priority       = 0;     ///< 调度通行优先级
     bool spinTurn      = true;  ///< 是否允许在端点原地自转
     bool avoidObstacle = true;  ///< 是否允许局部避障
+
+    // 实时避障范围定向膨胀参数 (单位: 米 m，对齐 base.json 规范)
+    double intrusionStopLength  = 0.0; ///< 正向停止膨胀半径 (m)
+    double intrusionStopWidth   = 0.0; ///< 侧向停止膨胀半径 (m)
+    double intrusionDecelLength = 0.0; ///< 正向减速膨胀半径 (m)
+    double intrusionDecelWidth  = 0.0; ///< 侧向减速膨胀半径 (m)
 
     // 原生 JSON 序列化与反序列化
     QJsonObject toJson() const;

@@ -54,7 +54,7 @@ private:
     void renderMap();
     void fitView();
 
-    void addPoint(const QPointF &sp);
+    void addPoint(const QPointF &sp, double yaw = 0, double theta = 0);
     void addCharge(const QPointF &sp, double epcX = 0, double epcY = 0, double epcTheta = 0, double yaw = 0, double theta = 0);
     void addHighPrecisionPoint(const QPointF &sp, double epcX = 0, double epcY = 0, double epcTheta = 0, double yaw = 0, double theta = 0);
     // 设备打点: 通过设备相对定位(epc)添加充电点/精定位点
@@ -129,6 +129,10 @@ private:
     void resizeEvent(QResizeEvent *e) override;
     void keyPressEvent(QKeyEvent *event) override;
 
+    // 抢占控制权与遥控
+    void onTeleopClicked();
+    void onTeleopActiveChanged(bool active);
+
     // 从已有数组中找出指定前缀的 ID 里最大的数字编号，返回 max+1
     // 保证删除再新增时不产生重复 ID
     static int nextIdNum(const QJsonArray &arr, const QString &prefix);
@@ -145,7 +149,13 @@ private:
 
     // Toolbar: mode → button
     QMap<int, QPushButton*> m_toolBtns;
+
+    // 站点类型子工具条: 站点 / 工作站 / 特殊工作站 (对应 mode Point / HighPrecision / Charge)
+    QWidget                  *m_stationBar = nullptr;
+    QMap<int, QPushButton*>   m_stationBtns;
     QPushButton *m_saveBtn       = nullptr;
+    QPushButton *m_teleopBtn     = nullptr;
+    class DirectionPadWidget *m_directionPad = nullptr;
     QPushButton *m_importSmapBtn = nullptr;
     QPushButton *m_undoBtn       = nullptr;
     QPushButton *m_redoBtn       = nullptr;
@@ -184,7 +194,6 @@ private:
     QWidget        *m_stationEpcGroup    = nullptr; // EPC相对定位数据
     QLabel         *m_stationEpcXLabel   = nullptr;
     QLabel         *m_stationEpcYLabel   = nullptr;
-    QLabel         *m_stationEpcYawLabel = nullptr;
 
     // --- 线路专属属性组 (WidgetBezierPPTW) ---
     QWidget        *m_linePropGroup      = nullptr;
@@ -202,6 +211,12 @@ private:
     QDoubleSpinBox *m_lineReachDistSpin  = nullptr; // 到达距离精度 m
     QDoubleSpinBox *m_lineReachAngleSpin = nullptr; // 到达角度精度 °
     QDoubleSpinBox *m_lineRoadWidthSpin  = nullptr; // 路线宽度 m
+
+    // --- 实时避障范围属性组 (对齐 base.json 规范) ---
+    QDoubleSpinBox *m_lineObsStopLenSpin  = nullptr; // 正向停止膨胀半径 (m)
+    QDoubleSpinBox *m_lineObsStopWidSpin  = nullptr; // 侧向停止膨胀半径 (m)
+    QDoubleSpinBox *m_lineObsDecelLenSpin = nullptr; // 正向减速膨胀半径 (m)
+    QDoubleSpinBox *m_lineObsDecelWidSpin = nullptr; // 侧向减速膨胀半径 (m)
 
     // 操作按钮
     QPushButton    *m_propApplyBtn       = nullptr;
@@ -275,6 +290,8 @@ private:
     // Manual pan state (替代 QGraphicsView::ScrollHandDrag，避免与手柄拖拽冲突)
     bool    m_panning     = false;
     QPoint  m_lastPanPos;
+
+    void    syncLineObstaclesToEndpoints();
 
     // MQTT
     QJsonArray   m_carList;

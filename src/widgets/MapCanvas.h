@@ -37,6 +37,7 @@ public:
 signals:
     void transformChanged();
     void sceneClicked(const QPointF &scenePos, Qt::MouseButton btn);
+    void sceneDoubleClicked(const QPointF &scenePos, Qt::MouseButton btn);
     void sceneMoved(const QPointF &scenePos);
     void sceneReleased(const QPointF &scenePos, Qt::MouseButton btn);
     void canvasResized(const QSize &sz);
@@ -44,6 +45,7 @@ signals:
 protected:
     void wheelEvent(QWheelEvent *e) override;
     void mousePressEvent(QMouseEvent *e) override;
+    void mouseDoubleClickEvent(QMouseEvent *e) override;
     void mouseMoveEvent(QMouseEvent *e) override;
     void mouseReleaseEvent(QMouseEvent *e) override;
     void resizeEvent(QResizeEvent *e) override;

@@ -14,8 +14,13 @@
 #include <QToolButton>
 #include <QScrollArea>
 #include <QGroupBox>
-#include <QPixmap>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QCheckBox>
+#include <QVBoxLayout>
 #include <cmath>
+
+class QStackedWidget;
 
 class RobotStatusDialog;
 struct RobotInfo;
@@ -82,6 +87,7 @@ private slots:
     void onMqttMessage(const QString &topic, const QByteArray &payload);
     void onViewTransformChanged();
     void onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn);
+    void onSceneDoubleClicked(const QPointF &scenePos, Qt::MouseButton btn);
     void onSceneMoved(const QPointF &scenePos);
     void onSceneReleased(const QPointF &scenePos, Qt::MouseButton btn);
     void onResetView();
@@ -135,8 +141,98 @@ private:
     QPointF worldToScene(double wx, double wy) const;
     QPointF sceneToWorld(double sx, double sy) const;
 
+    // ══ 右侧面板: 属性 / 图元 / 图层 三个标签页 ══════════════════════════════
+    enum RightTab  { TabProps = 0, TabElements = 1, TabLayers = 2 };
+    // 属性页的四种内容: 设备 / 站点 / 线路 / 地图
+    enum PropsView { ViewDevice = 0, ViewStation = 1, ViewRoute = 2, ViewMap = 3 };
+
+    void setRightTab(int tab);            // 切换 属性/图元/图层
+    void switchPropsView(int view);       // 切换属性页显示的内容
+    void updateDeviceMonitor(const RobotInfo &info);   // 设备数据监视 (MQTT /rob/{id}/info)
+    void updateMapPropsView();                         // 地图属性 (点击空白)
+
+    void refreshElementList();                          // 图元列表载入
+    void onElementItemClicked(QListWidgetItem *item);   // 图元列表点击 → 地图选中+居中
+    void syncElementListSelection(const QString &type, const QString &id);
+    void selectFeatureOnMap(const QString &type, const QString &id, bool center = false);
+    void clearMapSelection();
+
+    void applyLayerVisibility();       // 图层: 隐藏选中/隐藏所有站点/隐藏所有线路
+    void onShowAllElements();          // 图层: 显示所有图元
+
+    QStackedWidget *m_rightStack    = nullptr;
+    QPushButton    *m_tabPropsBtn    = nullptr;
+    QPushButton    *m_tabElementsBtn = nullptr;
+    QPushButton    *m_tabLayersBtn   = nullptr;
+    int             m_rightTab  = TabProps;
+    int             m_propsView = ViewDevice;
+
+    // 设备相关分组 (属性页-设备视图); m_deviceHasData 记录该分组当前是否有 MQTT 数据
+    QList<QWidget*> m_deviceGroups;
+    QSet<QWidget*>  m_deviceHasData;
+    void addDeviceGroup(QWidget *g) { if (g) m_deviceGroups.append(g); }
+    // 地图相关分组 (属性页-地图视图)
+    QList<QWidget*> m_mapGroups;
+    void addMapGroup(QWidget *g) { if (g) m_mapGroups.append(g); }
+
+    // 设备数据监视 (MQTT /rob/{id}/info)
+    QWidget *m_ctlGroup        = nullptr;   // 控制屏
+    QLabel  *m_ctlBatteryVal   = nullptr;
+    QLabel  *m_ctlActualVal    = nullptr;
+    QLabel  *m_ctlCmdVal       = nullptr;
+    QWidget *m_mileageGroup    = nullptr;   // 里程
+    QLabel  *m_mileageTotalVal = nullptr;
+    QLabel  *m_mileageTodayVal = nullptr;
+    QWidget *m_runtimeGroup    = nullptr;   // 运行时间
+    QLabel  *m_runtimeCurVal   = nullptr;
+    QLabel  *m_runtimeTotalVal = nullptr;
+    QWidget *m_obstacleGroup   = nullptr;   // 障碍
+    QLabel  *m_obstacleTypeVal = nullptr;
+    QLabel  *m_obstaclePointVal= nullptr;
+    QWidget *m_blockedGroup    = nullptr;   // 阻挡
+    QLabel  *m_blockedStateVal = nullptr;
+    QWidget *m_poseGroup       = nullptr;   // 车体位姿与机台
+    QLabel  *m_posePosVal      = nullptr;
+    QLabel  *m_poseYawVal      = nullptr;
+    QLabel  *m_poseThetaVal    = nullptr;
+    QLabel  *m_poseEpcVal      = nullptr;
+    QWidget *m_robotInfoGroup  = nullptr;   // 机器人信息
+    QLabel  *m_robotCarIdVal   = nullptr;
+    QLabel  *m_robotMapIdVal   = nullptr;
+    QLabel  *m_robotTaskIdVal  = nullptr;
+    QLabel  *m_robotStatusVal  = nullptr;
+
+    // 地图属性 (点击地图空白)
+    QWidget *m_mapPropsGroup   = nullptr;
+    QLabel  *m_mapPropIdVal    = nullptr;
+    QLabel  *m_mapPropAreaVal  = nullptr;
+    QWidget *m_mapCountGroup   = nullptr;
+    QLabel  *m_mapCountPointVal= nullptr;
+    QLabel  *m_mapCountHpVal   = nullptr;
+    QLabel  *m_mapCountChargeVal=nullptr;
+    QLabel  *m_mapCountLineVal = nullptr;
+    QLabel  *m_mapCountCurveVal= nullptr;
+
+    // 图元页
+    QLineEdit   *m_elemSearchEdit = nullptr;
+    QListWidget *m_elemList       = nullptr;
+
+    // 名称辅助: 路网图元的显示名 (优先 name, 其次 "起点 ⟷ 终点", 最后 id)
+    QString stationNameById(const QString &id) const;
+    QString routeFeatureName(const QJsonObject &obj) const;
+
+    // 图层页
+    QCheckBox   *m_hideSelectedChk = nullptr;
+    QCheckBox   *m_hideStationsChk = nullptr;
+    QCheckBox   *m_hideRoutesChk   = nullptr;
+    QPushButton *m_showAllElemsBtn = nullptr;
+
     // Map metadata
     QString m_mapId, m_mapName, m_tilemapPath;
+    QMap<int, QString> m_mapIdToName;
+    bool m_isFetchingMapList = false;
+    void fetchMapNameList(std::function<void()> onDone = nullptr);
+    QString lookupMapName(int mapId);
     // World extent (metres): bottom-left = (m_worldL, m_worldB), top-right = (m_worldR, m_worldT)
     double m_worldL = 0, m_worldB = 0, m_worldR = 0, m_worldT = 0;
     double m_imgW = 0, m_imgH = 0;
@@ -155,6 +251,7 @@ private:
         QString carId = "1", carName;
         double wx = 0, wy = 0, yawRad = 0;
         double speed = 0, battery = -1, covScore = -1;
+        int latency = -1;
         bool posValid = false;
     } m_robot;
 
@@ -204,6 +301,9 @@ private:
     bool        m_navMode          = false;
     bool        m_moveMode         = false;
     bool        m_navActive        = false;
+    bool        m_navPaused        = false;
+    bool        m_navEnteredRunning= false;
+    qint64      m_navStartTime     = 0;
 
     // Relocalization mode (click+drag to set position and heading)
     bool        m_relocMode        = false;
@@ -275,14 +375,35 @@ private:
     QLabel               *m_routeReachDistVal  = nullptr;
     QLabel               *m_routeReachAngleVal = nullptr;
     QLabel               *m_routeWidthVal      = nullptr;
+    QLabel               *m_routeObsRangeVal   = nullptr;
 
     QGraphicsItem        *m_selItem            = nullptr;
+    QGraphicsItem        *m_layerHiddenItem    = nullptr;   // 图层-隐藏选中图元 所隐藏的图元
     QString               m_selectedStationId;
 
     // 请求去重与防抖节流
     bool    m_isLoadingCar  = false;
     QString m_loadingMapId;
     qint64  m_lastRefreshMs = 0;
+
+    bool         m_mapLoadFailed        = false;
+
+signals:
+    void mapStatusChanged();
+
+public:
+    QString mapStatusText() const {
+        if (m_mapReady) return QStringLiteral("成功");
+        if (m_mapLoadFailed) return QStringLiteral("失败");
+        if (m_mapId.isEmpty()) return QStringLiteral("未加载");
+        return QStringLiteral("加载中...");
+    }
+    QString mapStatusColor() const {
+        if (m_mapReady) return "#22c55e";
+        if (m_mapLoadFailed) return "#ef4444";
+        if (m_mapId.isEmpty()) return "#8898a8";
+        return "#eab308";
+    }
 };
 
 #endif // MAPVIEWWIDGET_H

@@ -17,6 +17,8 @@ QJsonObject RoutePoint::toJson() const
     obj["x"]           = x;
     obj["y"]           = y;
     obj["yaw"]         = yaw;
+    obj["theta"]       = yaw * 180.0 / M_PI;
+    obj["robotYaw"]    = 0.0;
     obj["rdsDockable"] = rdsDockable;
     obj["allowRotate"] = allowRotate;
     obj["useDownPGV"]  = useDownPGV;
@@ -28,6 +30,60 @@ QJsonObject RoutePoint::toJson() const
     if (ignoreDir) obj["ignoreDir"] = true;
     if (!label.isEmpty()) obj["label"] = label;
     if (waitTimeout > 0.0) obj["waitTimeout"] = waitTimeout;
+
+    // 工作站与特殊工作站相对定位参数
+    if (epc_x != 0.0 || epc_y != 0.0 || epc_theta != 0.0 || type == "charge" || type == "highPrecision") {
+        obj["epc_x"]     = epc_x;
+        obj["epc_y"]     = epc_y;
+        obj["epc_theta"] = epc_theta;
+        obj["epcX"]      = epc_x;
+        obj["epcY"]      = epc_y;
+        obj["epcTheta"]  = epc_theta;
+        obj["epc_Yaw"]   = epc_theta;
+        obj["epc_yaw"]   = epc_theta;
+    }
+    if (!typeName.isEmpty()) obj["typeName"] = typeName;
+
+    // 实时避障参数 (与 Vue actions / properties 格式 100% 对齐)
+    if (intrusionStopLength > 0.0 || intrusionStopWidth > 0.0 ||
+        intrusionDecelLength > 0.0 || intrusionDecelWidth > 0.0) {
+        obj["intrusion_stop_length"]         = intrusionStopLength;
+        obj["intrusion_stop_width"]          = intrusionStopWidth;
+        obj["intrusion_deceleration_length"] = intrusionDecelLength;
+        obj["intrusion_deceleration_width"]  = intrusionDecelWidth;
+    }
+    QJsonArray outActions = actions;
+    if (intrusionStopLength > 0.0 || intrusionStopWidth > 0.0 ||
+        intrusionDecelLength > 0.0 || intrusionDecelWidth > 0.0) {
+        bool foundAction = false;
+        for (int i = 0; i < outActions.size(); ++i) {
+            QJsonObject act = outActions[i].toObject();
+            if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
+                act["name"] = "实时避障范围";
+                act["action_type"] = 21;
+                act["intrusion_stop_length"]         = intrusionStopLength;
+                act["intrusion_stop_width"]          = intrusionStopWidth;
+                act["intrusion_deceleration_length"] = intrusionDecelLength;
+                act["intrusion_deceleration_width"]  = intrusionDecelWidth;
+                outActions[i] = act;
+                foundAction = true;
+                break;
+            }
+        }
+        if (!foundAction) {
+            QJsonObject act;
+            act["name"] = "实时避障范围";
+            act["action_type"] = 21;
+            act["intrusion_stop_length"]         = intrusionStopLength;
+            act["intrusion_stop_width"]          = intrusionStopWidth;
+            act["intrusion_deceleration_length"] = intrusionDecelLength;
+            act["intrusion_deceleration_width"]  = intrusionDecelWidth;
+            outActions.append(act);
+        }
+    }
+    if (!outActions.isEmpty()) {
+        obj["actions"] = outActions;
+    }
 
     return obj;
 }
@@ -48,9 +104,38 @@ RoutePoint RoutePoint::fromJson(const QJsonObject &obj)
     pt.isyawfix    = obj.value("isyawfix").toBool(false);
     pt.taskid      = obj.value("taskid").toInt(0);
 
+    pt.epc_x     = obj.contains("epc_x") ? obj.value("epc_x").toDouble(0.0) : obj.value("epcX").toDouble(0.0);
+    pt.epc_y     = obj.contains("epc_y") ? obj.value("epc_y").toDouble(0.0) : obj.value("epcY").toDouble(0.0);
+    if (obj.contains("epc_theta")) pt.epc_theta = obj.value("epc_theta").toDouble(0.0);
+    else if (obj.contains("epcTheta")) pt.epc_theta = obj.value("epcTheta").toDouble(0.0);
+    else if (obj.contains("epc_Yaw")) pt.epc_theta = obj.value("epc_Yaw").toDouble(0.0);
+    else if (obj.contains("epc_yaw")) pt.epc_theta = obj.value("epc_yaw").toDouble(0.0);
+    else pt.epc_theta = 0.0;
+    pt.typeName  = obj.value("typeName").toString();
+
     pt.ignoreDir   = obj.value("ignoreDir").toBool(false);
     pt.label       = obj.value("label").toString();
     pt.waitTimeout = obj.value("waitTimeout").toDouble(0.0);
+
+    // 实时避障参数解析 (同时支持平铺 properties 与 actions 数组)
+    pt.intrusionStopLength  = obj.value("intrusion_stop_length").toDouble(0.0);
+    pt.intrusionStopWidth   = obj.value("intrusion_stop_width").toDouble(0.0);
+    pt.intrusionDecelLength = obj.value("intrusion_deceleration_length").toDouble(0.0);
+    pt.intrusionDecelWidth  = obj.value("intrusion_deceleration_width").toDouble(0.0);
+    pt.actions              = obj.value("actions").toArray();
+    if (pt.intrusionStopLength == 0.0 && pt.intrusionStopWidth == 0.0 &&
+        pt.intrusionDecelLength == 0.0 && pt.intrusionDecelWidth == 0.0) {
+        for (const auto &av : pt.actions) {
+            QJsonObject act = av.toObject();
+            if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
+                pt.intrusionStopLength  = act.value("intrusion_stop_length").toDouble(0.0);
+                pt.intrusionStopWidth   = act.value("intrusion_stop_width").toDouble(0.0);
+                pt.intrusionDecelLength = act.value("intrusion_deceleration_length").toDouble(0.0);
+                pt.intrusionDecelWidth  = act.value("intrusion_deceleration_width").toDouble(0.0);
+                break;
+            }
+        }
+    }
 
     return pt;
 }
@@ -118,6 +203,12 @@ QJsonObject RouteSegment::toJson() const
     obj["spinTurn"]      = spinTurn;
     obj["avoidObstacle"] = avoidObstacle;
 
+    // 实时避障范围定向膨胀参数
+    obj["intrusion_stop_length"]         = intrusionStopLength;
+    obj["intrusion_stop_width"]          = intrusionStopWidth;
+    obj["intrusion_deceleration_length"] = intrusionDecelLength;
+    obj["intrusion_deceleration_width"]  = intrusionDecelWidth;
+
     return obj;
 }
 
@@ -162,6 +253,11 @@ RouteSegment RouteSegment::fromJson(const QJsonObject &obj)
     seg.priority       = obj.value("priority").toInt(0);
     seg.spinTurn      = obj.value("spinTurn").toBool(true);
     seg.avoidObstacle = obj.value("avoidObstacle").toBool(true);
+
+    seg.intrusionStopLength  = obj.value("intrusion_stop_length").toDouble(0.0);
+    seg.intrusionStopWidth   = obj.value("intrusion_stop_width").toDouble(0.0);
+    seg.intrusionDecelLength = obj.value("intrusion_deceleration_length").toDouble(0.0);
+    seg.intrusionDecelWidth  = obj.value("intrusion_deceleration_width").toDouble(0.0);
 
     return seg;
 }
@@ -243,9 +339,37 @@ RouteNetwork RouteNetworkApi::fromGeoJson(const QJsonObject &root)
 
 QJsonObject RouteNetworkApi::toGeoJson(const RouteNetwork &network)
 {
+    // 汇总线路避障参数同步赋给两端端点
+    struct ObsTuple { double sl = 0, sw = 0, dl = 0, dw = 0; };
+    QMap<QString, ObsTuple> nodeObs;
+    auto collect = [&](const RouteSegment &seg) {
+        if (seg.intrusionStopLength > 0.0 || seg.intrusionStopWidth > 0.0 ||
+            seg.intrusionDecelLength > 0.0 || seg.intrusionDecelWidth > 0.0) {
+            auto update = [&](const QString &id) {
+                if (id.isEmpty()) return;
+                auto &t = nodeObs[id];
+                t.sl = qMax(t.sl, seg.intrusionStopLength);
+                t.sw = qMax(t.sw, seg.intrusionStopWidth);
+                t.dl = qMax(t.dl, seg.intrusionDecelLength);
+                t.dw = qMax(t.dw, seg.intrusionDecelWidth);
+            };
+            update(seg.startId);
+            update(seg.endId);
+        }
+    };
+    for (const auto &ln : network.lines)  collect(ln);
+    for (const auto &cv : network.curves) collect(cv);
+
     QJsonArray features;
 
-    auto makePointFeat = [](const RoutePoint &pt) {
+    auto makePointFeat = [&](RoutePoint pt) {
+        if (nodeObs.contains(pt.id)) {
+            const auto &t = nodeObs[pt.id];
+            pt.intrusionStopLength  = qMax(pt.intrusionStopLength, t.sl);
+            pt.intrusionStopWidth   = qMax(pt.intrusionStopWidth, t.sw);
+            pt.intrusionDecelLength = qMax(pt.intrusionDecelLength, t.dl);
+            pt.intrusionDecelWidth  = qMax(pt.intrusionDecelWidth, t.dw);
+        }
         QJsonArray coords;
         coords.append(pt.x); coords.append(pt.y); coords.append(0.0);
         QJsonObject geom;

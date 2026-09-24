@@ -319,13 +319,15 @@ QWidget* MotionDialog::createTranslationTab()
     auto *distLbl = new QLabel("设置距离：", panel);
     distLbl->setStyleSheet("border: none; color: #c5cbd5;");
     m_transDistSpin = new QDoubleSpinBox(panel);
-    m_transDistSpin->setRange(-100.0, 100.0);
+    m_transDistSpin->setRange(0.0, 100.0);
     m_transDistSpin->setDecimals(3);
     m_transDistSpin->setSingleStep(0.1);
     m_transDistSpin->setValue(0.000);
-    m_transDistSpin->setSuffix(" m");
+    auto *distUnitLbl = new QLabel("m", panel);
+    distUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
     formLayout->addWidget(distLbl, 0, 0);
     formLayout->addWidget(m_transDistSpin, 0, 1);
+    formLayout->addWidget(distUnitLbl, 0, 2);
 
     // 2. 设置 vx 速度
     auto *vxLbl = new QLabel("设置 vx 速度：", panel);
@@ -336,9 +338,11 @@ QWidget* MotionDialog::createTranslationTab()
     m_transVxSpin->setDecimals(3);
     m_transVxSpin->setSingleStep(0.05);
     m_transVxSpin->setValue(0.000);
-    m_transVxSpin->setSuffix(" m/s");
+    auto *vxUnitLbl = new QLabel("m/s", panel);
+    vxUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
     formLayout->addWidget(vxLbl, 1, 0);
     formLayout->addWidget(m_transVxSpin, 1, 1);
+    formLayout->addWidget(vxUnitLbl, 1, 2);
 
     // 3. 设置 vy 速度
     auto *vyLbl = new QLabel("设置 vy 速度：", panel);
@@ -348,9 +352,11 @@ QWidget* MotionDialog::createTranslationTab()
     m_transVySpin->setDecimals(3);
     m_transVySpin->setSingleStep(0.05);
     m_transVySpin->setValue(0.000);
-    m_transVySpin->setSuffix(" m/s");
+    auto *vyUnitLbl = new QLabel("m/s", panel);
+    vyUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
     formLayout->addWidget(vyLbl, 2, 0);
     formLayout->addWidget(m_transVySpin, 2, 1);
+    formLayout->addWidget(vyUnitLbl, 2, 2);
 
     // 4. 模式
     auto *modeLbl = new QLabel("模式：", panel);
@@ -374,9 +380,11 @@ QWidget* MotionDialog::createTranslationTab()
     radioLayout->addStretch();
 
     formLayout->addWidget(modeLbl, 3, 0);
-    formLayout->addWidget(radioWidget, 3, 1);
+    formLayout->addWidget(radioWidget, 3, 1, 1, 2);
 
+    formLayout->setColumnStretch(0, 0);
     formLayout->setColumnStretch(1, 1);
+    formLayout->setColumnStretch(2, 0);
     panelLayout->addLayout(formLayout);
     layout->addWidget(panel);
 
@@ -412,9 +420,11 @@ QWidget* MotionDialog::createRotationTab()
     m_rotAngleSpin->setDecimals(3);
     m_rotAngleSpin->setSingleStep(5.0);
     m_rotAngleSpin->setValue(0.000);
-    m_rotAngleSpin->setSuffix(" °");
+    auto *angleUnitLbl = new QLabel("°", panel);
+    angleUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
     formLayout->addWidget(angleLbl, 0, 0);
     formLayout->addWidget(m_rotAngleSpin, 0, 1);
+    formLayout->addWidget(angleUnitLbl, 0, 2);
 
     // 2. 设置角速度
     auto *speedLbl = new QLabel("设置角速度：", panel);
@@ -425,11 +435,15 @@ QWidget* MotionDialog::createRotationTab()
     m_rotSpeedSpin->setDecimals(3);
     m_rotSpeedSpin->setSingleStep(2.0);
     m_rotSpeedSpin->setValue(0.000);
-    m_rotSpeedSpin->setSuffix(" °/s");
+    auto *speedUnitLbl = new QLabel("°/s", panel);
+    speedUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
     formLayout->addWidget(speedLbl, 1, 0);
     formLayout->addWidget(m_rotSpeedSpin, 1, 1);
+    formLayout->addWidget(speedUnitLbl, 1, 2);
 
+    formLayout->setColumnStretch(0, 0);
     formLayout->setColumnStretch(1, 1);
+    formLayout->setColumnStretch(2, 0);
     panelLayout->addLayout(formLayout);
     layout->addWidget(panel);
 
