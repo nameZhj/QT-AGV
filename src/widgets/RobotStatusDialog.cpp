@@ -433,14 +433,8 @@ void RobotStatusDialog::initMqttSubscriptions()
         onMqttMessage(topic, payload);
     };
 
-    MqttService::instance().subscribeTopic("/info", 0, cb);
-    MqttService::instance().subscribeTopic("info", 0, cb);
-    MqttService::instance().subscribeTopic("/rob/info", 0, cb);
-
-    QString carId = AppConfig::instance().currentDevice().carId;
-    if (carId.isEmpty()) carId = AppConfig::instance().agvId();
-    if (carId.isEmpty()) carId = "1";
-    MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, cb);
+    // 只有 "/rob/1/info"
+    MqttService::instance().subscribeTopic(QStringLiteral("/rob/1/info"), 0, cb);
 }
 
 void RobotStatusDialog::setMapInfo(const QString &mapId, const QString &mapName)
@@ -553,10 +547,10 @@ void RobotStatusDialog::updateFromRobotInfo(const RobotInfo &info)
 
     if (info.covScore >= 0.0 && m_badgeConfidence) {
         double cs = (info.covScore > 1.0) ? info.covScore / 100.0 : info.covScore;
-        BadgeType bt = cs >= 0.7 ? BadgeType::Green : (cs >= 0.3 ? BadgeType::Orange : BadgeType::Red);
+        BadgeType bt = (cs > 0.0) ? BadgeType::Green : BadgeType::Red;
         updateBadge(m_badgeConfidence, QString::number(cs, 'f', 2), bt);
         if (m_valLocStatus) {
-            m_valLocStatus->setText(cs < 0.5 ? "<font color='#ef4444'>定位完成(需确认)</font>" : "<font color='#22c55e'>定位完成</font>");
+            m_valLocStatus->setText(cs > 0.0 ? "<font color='#22c55e'>定位成功</font>" : "<font color='#ef4444'>定位失败</font>");
         }
     }
 
@@ -609,8 +603,10 @@ void RobotStatusDialog::updateFromRobotState(const QString &carId, double x, dou
         m_valBatteryPct->setText(QString::number(bat, 'f', 1) + " %");
     }
     if (m_valLocStatus) {
-        if (posValid) {
-            m_valLocStatus->setText(covScore < 0.5 ? "<font color='#ef4444'>定位完成(需确认)</font>" : "<font color='#22c55e'>定位完成</font>");
+        if (covScore > 0.0) {
+            m_valLocStatus->setText("<font color='#22c55e'>定位成功</font>");
+        } else if (posValid) {
+            m_valLocStatus->setText("<font color='#ef4444'>定位失败</font>");
         } else {
             m_valLocStatus->setText("<font color='#ef4444'>未定位</font>");
         }

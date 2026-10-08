@@ -342,16 +342,6 @@ void ApiService::cancelReflectorMapping(const Callback &cb)
     post("/rbrainrobot/cancel_reflector_mapping", QJsonObject(), cb, 8062, false);
 }
 
-void ApiService::suspendWork(const Callback &cb)
-{
-    post("/rbrainrobot/suspend", QJsonObject(), cb, 8061, false);
-}
-
-void ApiService::continueWork(const Callback &cb)
-{
-    post("/rbrainrobot/continue", QJsonObject(), cb, 8061, false);
-}
-
 void ApiService::getAllConfigsPreserve(const RawCallback &cb)
 {
     getRaw("/rbrainrobot/get_all_configs", cb, 8062, false);
@@ -714,6 +704,11 @@ void ApiService::controlTaskChain(const QString &command, const Callback &cb)
     put(appendQuery("/task/chain/control", QJsonObject{{"command", command}}), QJsonObject(), cb);
 }
 
+void ApiService::controlNavigation(const QString &command, const Callback &cb)
+{
+    put(appendQuery("/robot/navigation/control", QJsonObject{{"command", command}}), QJsonObject(), cb);
+}
+
 void ApiService::sendNextTask(const Callback &cb)
 {
     sendNextTask(QJsonObject(), cb);
@@ -782,6 +777,34 @@ void ApiService::navigateTo(const QString &locationId, const Callback &cb)
     QString url = "/robot/navigation/navigate/to";
     if (!q.isEmpty()) url += "?" + q.toString();
     post(url, QJsonObject(), cb);
+}
+
+void ApiService::robotNavigationMove(const QUrlQuery &query, const Callback &cb)
+{
+    QString url = "/robot/navigation/move";
+    if (!query.isEmpty()) {
+        url += "?" + query.toString(QUrl::FullyEncoded);
+    }
+    post(url, QJsonObject(), cb, 8048);
+}
+
+void ApiService::robotNavigationMoveLinear(double vx, double vy, double distance, const Callback &cb)
+{
+    QUrlQuery q;
+    q.addQueryItem("actionType", "6");
+    q.addQueryItem("vx", QString::number(vx));
+    q.addQueryItem("vy", QString::number(vy));
+    q.addQueryItem("distance", QString::number(distance));
+    robotNavigationMove(q, cb);
+}
+
+void ApiService::robotNavigationMoveRotate(double rotateAngle, double rotateSpeed, const Callback &cb)
+{
+    QUrlQuery q;
+    q.addQueryItem("actionType", "12");
+    q.addQueryItem("rotateAngle", QString::number(rotateAngle));
+    q.addQueryItem("rotateSpeed", QString::number(rotateSpeed));
+    robotNavigationMove(q, cb);
 }
 
 // ========== 便捷重载 ==========
@@ -988,30 +1011,6 @@ void ApiService::queryActionIdStatus(int actionId, const Callback &cb)
     d["action_id"] = actionId;
     root["data"] = d;
     post("/rbrainrobot/query_action_id_status", root, cb, kControllerPort, false);
-}
-
-void ApiService::suspendRobot(const Callback &cb)
-{
-    post("/rbrainrobot/suspend", QJsonObject{}, cb, kControllerPort, false);
-}
-
-void ApiService::continueRobot(const Callback &cb)
-{
-    post("/rbrainrobot/continue", QJsonObject{}, cb, kControllerPort, false);
-}
-
-void ApiService::stopRobotTask(bool stopInPoint, const Callback &cb)
-{
-    QString ip = AppConfig::instance().currentDevice().ip;
-    if (ip.isEmpty()) ip = AppConfig::instance().serverIp();
-    QJsonObject root;
-    QJsonObject d;
-    d["robot_ip"]      = ip;
-    d["robot_port"]    = kControllerPort;
-    d["cancle"]        = true;
-    d["stop_in_point"] = stopInPoint;
-    root["data"] = d;
-    post("/rbrainrobot/stop_task", root, cb, kControllerPort, false);
 }
 
 void ApiService::setInitPose8061(double x, double y, double angleRad, const Callback &cb)

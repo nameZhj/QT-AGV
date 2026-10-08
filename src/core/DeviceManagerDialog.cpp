@@ -741,11 +741,9 @@ void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
         }
     });
 
-    connect(m_mqttClient, &QMqttClient::connected, this, [this, effectiveCarId]() {
+    connect(m_mqttClient, &QMqttClient::connected, this, [this]() {
         if (!m_mqttClient) return;
-        m_mqttClient->subscribe(QMqttTopicFilter("/info"), 0);
-        m_mqttClient->subscribe(QMqttTopicFilter("info"), 0);
-        m_mqttClient->subscribe(QMqttTopicFilter(QString("/rob/%1/info").arg(effectiveCarId)), 0);
+        m_mqttClient->subscribe(QMqttTopicFilter(QStringLiteral("/rob/1/info")), 0);
         setOnlineUI(true);
 
         // 建立周期性延迟检测，确保通讯延迟实时准确更新

@@ -399,22 +399,16 @@ void MapCanvas::initMqtt()
         MqttService::instance().connectToHost(AppConfig::instance().serverIp(), 1883);
     }
     
-    QString carId = m_trackedCarId.trimmed().isEmpty() ? "1" : m_trackedCarId.trimmed();
-    m_trackedCarId = carId;
-    MqttService::instance().subscribeTopic("/info", 0, [this](const QString &t, const QByteArray &p) { onMqttMessage(t, p); });
-    MqttService::instance().subscribeTopic("info", 0, [this](const QString &t, const QByteArray &p) { onMqttMessage(t, p); });
-    MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, [this](const QString &t, const QByteArray &p) {
+    m_trackedCarId = QStringLiteral("1");
+    MqttService::instance().subscribeTopic(QStringLiteral("/rob/1/info"), 0, [this](const QString &t, const QByteArray &p) {
         onMqttMessage(t, p);
     });
 }
 
 void MapCanvas::disconnectMqtt()
 {
-    MqttService::instance().unsubscribeTopic("/info");
-    MqttService::instance().unsubscribeTopic("info");
-    if (!m_trackedCarId.isEmpty() && MqttService::instance().isConnected()) {
-        QString topic = QString("/rob/%1/info").arg(m_trackedCarId);
-        MqttService::instance().unsubscribeTopic(topic);
+    if (MqttService::instance().isConnected()) {
+        MqttService::instance().unsubscribeTopic(QStringLiteral("/rob/1/info"));
     }
 }
 

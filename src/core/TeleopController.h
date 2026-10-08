@@ -33,6 +33,10 @@ public:
     bool isActive() const { return m_active; }
     void setActive(bool on);
 
+    // 用户标记：是否为用户主动点击抢占控制权
+    bool isUserPreempted() const { return m_userPreempted; }
+    void setUserPreempted(bool preempted);
+
     // ── 运动学参数动态配置 ──
     double baseLinearSpeed() const { return m_baseLinearSpeed; }
     double baseAngularSpeed() const { return m_baseAngularSpeed; }
@@ -48,6 +52,7 @@ public:
 
 signals:
     void activeChanged(bool active);
+    void userPreemptedChanged(bool preempted);
     void motionChanged(double linear, double angular);
     void brakeChanged(bool brake);
     void hoistChanged(int direction);   // +1 升 / -1 降 / 0 停
@@ -77,6 +82,7 @@ private:
 private:
     QTimer *m_timer = nullptr;
     bool    m_active = false;
+    bool    m_userPreempted = false;
     bool    m_wasHoisting = false;
 
     // 基础运动配置

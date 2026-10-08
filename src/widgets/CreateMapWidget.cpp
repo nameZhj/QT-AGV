@@ -656,7 +656,7 @@ void CreateMapWidget::onToggleCruiseClick()
     if (!m_cruiseSuspended) {
         auto *loading = new LoadingDialog("正在暂停巡航...", this);
         loading->show();
-        ApiService::instance().suspendWork([this, loading](int code, const QJsonObject &res) {
+        ApiService::instance().controlNavigation(QStringLiteral("pause navigation"), [this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {
@@ -675,7 +675,7 @@ void CreateMapWidget::onToggleCruiseClick()
     } else {
         auto *loading = new LoadingDialog("正在恢复巡航...", this);
         loading->show();
-        ApiService::instance().continueWork([this, loading](int code, const QJsonObject &res) {
+        ApiService::instance().controlNavigation(QStringLiteral("continue navigation"), [this, loading](int code, const QJsonObject &res) {
             loading->close();
             loading->deleteLater();
             if (code == 200) {

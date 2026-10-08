@@ -70,9 +70,6 @@ public:
     void stopReflectorMapping(const Callback &cb);
     void cancelMapping(const Callback &cb);
     void cancelReflectorMapping(const Callback &cb);
-    // 端口 8061 工作通道
-    void suspendWork(const Callback &cb);
-    void continueWork(const Callback &cb);
     // 参数配置
     void getAllConfigsPreserve(const RawCallback &cb);
     void getConfigMetadata(const RawCallback &cb);
@@ -122,9 +119,12 @@ public:
     void loadEditedMap(const QJsonObject &data, const Callback &cb);
     void getReflectorColumnInfo(const QString &mapId, const Callback &cb);
 
-    // ========== 导航 / 位姿接口 ==========
+    // ========== 导航 / 位姿 / 移动接口 (端口 8048) ==========
     void initPose(const QString &carId, const QJsonObject &pose, const Callback &cb);
     void navigateTo(const QString &locationId, const Callback &cb);
+    void robotNavigationMove(const QUrlQuery &query, const Callback &cb = nullptr);
+    void robotNavigationMoveLinear(double vx, double vy, double distance, const Callback &cb = nullptr);
+    void robotNavigationMoveRotate(double rotateAngle, double rotateSpeed, const Callback &cb = nullptr);
 
     // ========== 任务接口 ==========
     void listTask(const QJsonObject &query, const Callback &cb);
@@ -149,6 +149,7 @@ public:
     void sendTaskChain(const QString &taskChainString, bool enabled, bool looped, const Callback &cb); ///< POST /task/chain/sendTask
     void sendTaskChain(const QString &taskChainString, bool enabled, const Callback &cb);               ///< POST /task/chain/sendTask (looped=false)
     void controlTaskChain(const QString &command, const Callback &cb);            ///< PUT /task/chain/control?command=...
+    void controlNavigation(const QString &command, const Callback &cb = nullptr);  ///< PUT /robot/navigation/control?command=...
     void sendNextTask(const Callback &cb = nullptr);                              ///< POST /task/chain/sendNextTask (端口 8048)
     void sendNextTask(const QJsonObject &data, const Callback &cb);               ///< POST /task/chain/sendNextTask (端口 8048)
 
@@ -184,12 +185,7 @@ public:
     void getRobotRunStatus(const Callback &cb);
     void queryActionIdStatus(int actionId, const Callback &cb);
 
-    // 4. 暂停、继续与取消任务 (端口 8061)
-    void suspendRobot(const Callback &cb);
-    void continueRobot(const Callback &cb);
-    void stopRobotTask(bool stopInPoint, const Callback &cb);
-
-    // 5. 重定位 (端口 8061)
+    // 4. 重定位 (端口 8061)
     void setInitPose8061(double x, double y, double angleRad, const Callback &cb);
 
     // 6. 速度设置接口 (端口 8061)

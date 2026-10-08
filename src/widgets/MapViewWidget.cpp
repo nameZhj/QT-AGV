@@ -459,6 +459,8 @@ MapViewWidget::MapViewWidget(QWidget *parent)
             this, &MapViewWidget::onRobotInfoUpdated);
     connect(&TeleopController::instance(), &TeleopController::activeChanged,
             this, &MapViewWidget::onTeleopActiveChanged);
+    connect(&TeleopController::instance(), &TeleopController::userPreemptedChanged,
+            this, [this](bool) { updateNavButtonsState(); });
     onRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
 }
 
@@ -1304,14 +1306,14 @@ void MapViewWidget::updateDeviceMonitor(const RobotInfo &info)
         }
         if (m_poseYawVal) {
             m_poseYawVal->setText(info.hasPose
-                ? QString("%1 rad (%2°)").arg(info.car_yaw, 0, 'f', 3).arg(info.car_yaw * 180.0 / M_PI, 0, 'f', 1)
+                ? QString("%1°").arg(info.car_yaw * 180.0 / M_PI, 0, 'f', 1)
                 : "--");
         }
         if (m_poseThetaVal) m_poseThetaVal->setText(info.hasTheta ? QString("%1°").arg(info.theta, 0, 'f', 1) : "--");
         if (m_poseEpcVal) {
             m_poseEpcVal->setText(info.hasEpc
-                ? QString("(%1, %2) m, %3 rad")
-                      .arg(info.epc_x, 0, 'f', 3).arg(info.epc_y, 0, 'f', 3).arg(info.epc_theta, 0, 'f', 3)
+                ? QString("(%1, %2) m, %3°")
+                      .arg(info.epc_x, 0, 'f', 3).arg(info.epc_y, 0, 'f', 3).arg(info.epc_theta * 180.0 / M_PI, 0, 'f', 1)
                 : "--");
         }
         if (info.hasPose || info.hasTheta || info.hasEpc) m_deviceHasData.insert(m_poseGroup);
@@ -1558,7 +1560,7 @@ void MapViewWidget::showStationDetails(const QJsonObject &pt, const QString &typ
         yawVal = pt.value("robotYaw").toVariant().toDouble();
     }
     if (m_stationYawVal) {
-        m_stationYawVal->setText(QString("%1° (%2 rad)").arg(yawVal * 180.0 / M_PI, 0, 'f', 1).arg(yawVal, 0, 'f', 3));
+        m_stationYawVal->setText(QString("%1°").arg(yawVal * 180.0 / M_PI, 0, 'f', 1));
     }
 
     if (m_stationDockVal) {
@@ -1581,7 +1583,7 @@ void MapViewWidget::showStationDetails(const QJsonObject &pt, const QString &typ
             m_stationEpcPosVal->setText(QString("(%1, %2) m").arg(epcX, 0, 'f', 3).arg(epcY, 0, 'f', 3));
         }
         if (m_stationEpcYawVal) {
-            m_stationEpcYawVal->setText(QString("%1° (%2 rad)").arg(epcTheta * 180.0 / M_PI, 0, 'f', 1).arg(epcTheta, 0, 'f', 3));
+            m_stationEpcYawVal->setText(QString("%1°").arg(epcTheta * 180.0 / M_PI, 0, 'f', 1));
         }
         if (m_stationEpcGroup) m_stationEpcGroup->setVisible(true);
     } else {
@@ -2892,31 +2894,36 @@ void MapViewWidget::onRobotInfoUpdated(const RobotInfo &info)
     updateInfoPanel();
     updateDeviceMonitor(info);
 
+    const bool isRobotNavigating = (info.status == "1" || info.status == "2" || info.status == "3" || info.status == "5");
     if (m_navActive) {
-        if (info.status == "3" || info.status == "5") {
+        if (isRobotNavigating) {
             m_navEnteredRunning = true;
-            if (info.status == "5") {
+            if (info.status == "2" || info.status == "5") {
                 m_navPaused = true;
+            } else if (info.status == "1") {
+                m_navPaused = false;
             }
         } else {
-            // 当曾经进入过导航运行状态（status曾经为 3/5），现在变为非 3/5（如 2 就绪或 4 作业），且距离发起已超过 2 秒，才判定为导航结束
+            // 当曾经进入过导航运行状态，现在变为非导航状态（如 0 就绪），且距离发起已超过 1.5 秒，判定为导航结束
             qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_navStartTime;
-            if (m_navEnteredRunning && elapsed > 2000) {
+            if (m_navEnteredRunning && elapsed > 1500) {
                 m_navActive = false;
                 m_navEnteredRunning = false;
                 m_navPaused = false;
             } else if (!m_navEnteredRunning && elapsed > 15000) {
-                // 若下发超过 15 秒仍未进入 3/5 且未移动，超时重置
+                // 若下发超过 15 秒仍未进入且未移动，超时重置
                 m_navActive = false;
                 m_navPaused = false;
             }
         }
     } else {
-        if (info.status == "3" || info.status == "5") {
+        if (isRobotNavigating) {
             m_navActive = true;
             m_navEnteredRunning = true;
-            if (info.status == "5") {
+            if (info.status == "2" || info.status == "5") {
                 m_navPaused = true;
+            } else if (info.status == "1") {
+                m_navPaused = false;
             }
         }
     }
@@ -3927,11 +3934,10 @@ void MapViewWidget::onToggleMoveMode()
 
 void MapViewWidget::onCancelNavigation()
 {
-    // 走控制器 8061 端口取消任务接口 (Table 8 stop_task)
-    ApiService::instance().stopRobotTask(true, [](int code, const QJsonObject &resp) {
-        qDebug() << "[MapViewWidget] stopRobotTask 8061 code:" << code << resp;
+    // 统一使用 /robot/navigation/control?command=stop navigation 结束/取消导航
+    ApiService::instance().controlNavigation(QStringLiteral("stop navigation"), [](int code, const QJsonObject &resp) {
+        qDebug() << "[MapViewWidget] controlNavigation stop navigation code:" << code << resp;
     });
-    ApiService::instance().suspendWork([](int, const QJsonObject &) {});
 
     m_navActive = false;
     m_navPaused = false;
@@ -3944,25 +3950,23 @@ void MapViewWidget::onCancelNavigation()
 void MapViewWidget::onPauseNavigation()
 {
     const RobotInfo &info = RobotInfoManager::instance().currentInfo();
-    const bool isPaused = (m_navPaused || info.status == "5");
+    const bool isPaused = (m_navPaused || info.status == "2" || info.status == "5");
 
     if (isPaused) {
-        // 当前为暂停状态，点击后恢复继续导航
-        ApiService::instance().continueRobot([](int code, const QJsonObject &resp) {
-            qDebug() << "[MapViewWidget] continueRobot 8061 code:" << code << resp;
+        // 恢复导航统一使用 /robot/navigation/control?command=continue navigation
+        ApiService::instance().controlNavigation(QStringLiteral("continue navigation"), [](int code, const QJsonObject &resp) {
+            qDebug() << "[MapViewWidget] controlNavigation continue navigation code:" << code << resp;
         });
-        ApiService::instance().continueWork([](int, const QJsonObject &) {});
 
         m_navPaused = false;
         updateNavButtonsState();
         setStatus("已继续导航", "#00e676");
         Toast::success(this, "已继续导航");
     } else {
-        // 当前为导航中，点击后执行暂停导航
-        ApiService::instance().suspendRobot([](int code, const QJsonObject &resp) {
-            qDebug() << "[MapViewWidget] suspendRobot 8061 code:" << code << resp;
+        // 暂停导航统一使用 /robot/navigation/control?command=pause navigation
+        ApiService::instance().controlNavigation(QStringLiteral("pause navigation"), [](int code, const QJsonObject &resp) {
+            qDebug() << "[MapViewWidget] controlNavigation pause navigation code:" << code << resp;
         });
-        ApiService::instance().suspendWork([](int, const QJsonObject &) {});
 
         m_navPaused = true;
         updateNavButtonsState();
@@ -3974,14 +3978,18 @@ void MapViewWidget::onPauseNavigation()
 void MapViewWidget::updateNavButtonsState()
 {
     const RobotInfo &info = RobotInfoManager::instance().currentInfo();
-    const bool isNav = (m_navActive || info.status == "3" || info.status == "5");
+    // 严格根据 /rob/navigate/status 控制: status == "1" 导航中, status == "2" 暂停导航，两者均为导航进行态；status == "0" 就绪（置灰不可点击）
+    const bool isNav = (info.status == "1" || info.status == "2" || info.status == "5" || info.status == "3");
+    // 用户标记：当用户点击抢占控制权时，不要让取消导航和暂停导航按钮可点击
+    const bool isUserPreempted = TeleopController::instance().isUserPreempted() || TeleopController::instance().isActive();
+    const bool canControlNav = isNav && !isUserPreempted;
 
     if (m_cancelNavBtn) {
-        m_cancelNavBtn->setEnabled(isNav);
+        m_cancelNavBtn->setEnabled(canControlNav);
     }
     if (m_pauseNavBtn) {
-        m_pauseNavBtn->setEnabled(isNav);
-        const bool isPaused = (m_navPaused || info.status == "5");
+        m_pauseNavBtn->setEnabled(canControlNav);
+        const bool isPaused = (m_navPaused || info.status == "2" || info.status == "5");
         if (isPaused) {
             m_pauseNavBtn->setText("继续导航");
             m_pauseNavBtn->setIcon(makeMapToolIcon("resume"));
@@ -3994,30 +4002,23 @@ void MapViewWidget::updateNavButtonsState()
 
 void MapViewWidget::onTeleopClicked()
 {
-    TeleopController::instance().setActive(!TeleopController::instance().isActive());
+    const bool nextActive = !TeleopController::instance().isActive();
+    TeleopController::instance().setUserPreempted(nextActive);
+    TeleopController::instance().setActive(nextActive);
 }
 
 void MapViewWidget::onTeleopActiveChanged(bool active)
 {
-    if (!m_teleopBtn) return;
-    if (active) {
-        m_teleopBtn->setText("恢复导航");
-        m_teleopBtn->setStyleSheet(kToolBtnDanger);
-        Toast::info(this, "已抢占控制权：WASD 移动 | Space 刹车 | Ctrl 加速 | P/L 升降");
-        ApiService::instance().suspendWork([](int code, const QJsonObject &) {
-            if (code != 200) {
-                qWarning("暂停导航失败 (HTTP %d)，遥控可能受影响", code);
-            }
-        });
-    } else {
+    if (m_teleopBtn) {
+        // 保持按钮文本恒定为“抢占控制权”，仅改变视觉高亮
         m_teleopBtn->setText("抢占控制权");
-        m_teleopBtn->setStyleSheet(kToolBtnStyle);
-        ApiService::instance().continueWork([](int code, const QJsonObject &) {
-            if (code != 200) {
-                qWarning("恢复导航失败 (HTTP %d)", code);
-            }
-        });
+        m_teleopBtn->setStyleSheet(active ? kToolBtnDanger : kToolBtnStyle);
+        if (active) {
+            Toast::info(this, "已抢占控制权：WASD 移动 | Space 刹车 | Ctrl 加速 | P/L 升降");
+        }
     }
+    // 抢占控制权状态改变时立即联动取消导航与暂停导航按钮可用性
+    updateNavButtonsState();
 }
 
 void MapViewWidget::onShowRobotStatus()

@@ -14,6 +14,12 @@ RobotInfoManager &RobotInfoManager::instance()
 RobotInfoManager::RobotInfoManager(QObject *parent)
     : QObject(parent)
 {
+    // 刚开机默认初始化状态为“就绪” (status: "0")
+    RobotInfo def;
+    def.carIdStr = QStringLiteral("1");
+    def.car_id = 1;
+    def.status = QStringLiteral("0");
+    m_robots[QStringLiteral("1")] = def;
 }
 
 void RobotInfoManager::init()
@@ -36,17 +42,13 @@ void RobotInfoManager::onMqttConnected()
         updateFromPayload(topic, payload);
     };
 
-    // 严禁订阅通配符 /rob/+/info，彻底杜绝局域网多车广播串联
-    QString curCarId = AppConfig::instance().agvId().trimmed();
-    if (curCarId.isEmpty()) {
-        curCarId = AppConfig::instance().currentDevice().carId.trimmed();
-    }
-    if (curCarId.isEmpty()) curCarId = QStringLiteral("1");
+    // 唯一定位与数据监视话题：/rob/1/info
+    mqtt.subscribeTopic(QStringLiteral("/rob/1/info"), 0, handlePayload);
 
-    mqtt.subscribeTopic(QStringLiteral("/info"), 0, handlePayload);
-    mqtt.subscribeTopic(QStringLiteral("info"), 0, handlePayload);
-    mqtt.subscribeTopic(QStringLiteral("/rob/info"), 0, handlePayload);
-    mqtt.subscribeTopic(QString("/rob/%1/info").arg(curCarId), 0, handlePayload);
+    // 订阅车辆状态MQTT消息：/rob/navigate/status
+    mqtt.subscribeTopic(QStringLiteral("/rob/navigate/status"), 0, [this](const QString &, const QByteArray &payload) {
+        updateNavigateStatus(payload);
+    });
 }
 
 void RobotInfoManager::resetForCar(const QString &newCarId)
@@ -54,6 +56,11 @@ void RobotInfoManager::resetForCar(const QString &newCarId)
     {
         QWriteLocker locker(&m_lock);
         m_robots.clear(); // 清理旧车全部数据与缓存
+        RobotInfo def;
+        def.carIdStr = QStringLiteral("1");
+        def.car_id = 1;
+        def.status = QStringLiteral("0"); // 重置初始化状态为就绪
+        m_robots[QStringLiteral("1")] = def;
     }
 
     auto &mqtt = MqttService::instance();
@@ -61,23 +68,38 @@ void RobotInfoManager::resetForCar(const QString &newCarId)
         auto handlePayload = [this](const QString &topic, const QByteArray &payload) {
             updateFromPayload(topic, payload);
         };
-        QString targetId = newCarId.trimmed().isEmpty() ? QStringLiteral("1") : newCarId.trimmed();
-        mqtt.subscribeTopic(QStringLiteral("/info"), 0, handlePayload);
-        mqtt.subscribeTopic(QStringLiteral("info"), 0, handlePayload);
-        mqtt.subscribeTopic(QStringLiteral("/rob/info"), 0, handlePayload);
-        mqtt.subscribeTopic(QString("/rob/%1/info").arg(targetId), 0, handlePayload);
+        // 唯一定位与数据监视话题：/rob/1/info
+        mqtt.subscribeTopic(QStringLiteral("/rob/1/info"), 0, handlePayload);
+
+        // 订阅车辆状态MQTT消息：/rob/navigate/status
+        mqtt.subscribeTopic(QStringLiteral("/rob/navigate/status"), 0, [this](const QString &, const QByteArray &payload) {
+            updateNavigateStatus(payload);
+        });
     }
 }
 
 RobotInfo RobotInfoManager::currentInfo() const
 {
+    QReadLocker locker(&m_lock);
+    // 用户明确规定：/rob/{car_id}/info 中 car_id 永远是常数 1，优先返回 ID 为 1 的车辆信息
+    if (m_robots.contains(QStringLiteral("1"))) {
+        return m_robots.value(QStringLiteral("1"));
+    }
     QString curId = AppConfig::instance().agvId().trimmed();
     if (curId.isEmpty()) {
         curId = AppConfig::instance().currentDevice().carId.trimmed();
     }
-    if (curId.isEmpty()) curId = QStringLiteral("1");
-
-    return infoForCar(curId);
+    if (!curId.isEmpty() && m_robots.contains(curId)) {
+        return m_robots.value(curId);
+    }
+    if (!m_robots.isEmpty()) {
+        return m_robots.constBegin().value();
+    }
+    // 返回初始化空对象（默认 car_id 为 1）
+    RobotInfo def;
+    def.carIdStr = QStringLiteral("1");
+    def.car_id = 1;
+    return def;
 }
 
 RobotInfo RobotInfoManager::infoForCar(const QString &carId) const
@@ -87,12 +109,15 @@ RobotInfo RobotInfoManager::infoForCar(const QString &carId) const
     if (m_robots.contains(key)) {
         return m_robots.value(key);
     }
-    // 返回初始化空对象
+    // /rob/{car_id}/info 中 car_id 永远是常数 1，兜底回退到 1
+    if (m_robots.contains(QStringLiteral("1"))) {
+        return m_robots.value(QStringLiteral("1"));
+    }
     RobotInfo def;
-    def.carIdStr = key;
+    def.carIdStr = key.isEmpty() ? QStringLiteral("1") : key;
     bool ok = false;
-    int cid = key.toInt(&ok);
-    if (ok) def.car_id = cid;
+    int cid = def.carIdStr.toInt(&ok);
+    def.car_id = ok ? cid : 1;
     return def;
 }
 
@@ -108,8 +133,63 @@ bool RobotInfoManager::hasInfoForCar(const QString &carId) const
     return m_robots.contains(carId.trimmed());
 }
 
+bool RobotInfoManager::updateNavigateStatus(const QByteArray &payload)
+{
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        return false;
+    }
+
+    QJsonObject obj = doc.object();
+    if (!obj.contains(QStringLiteral("status"))) {
+        return false;
+    }
+
+    QString statusVal;
+    QJsonValue sv = obj.value(QStringLiteral("status"));
+    if (sv.isString()) {
+        statusVal = sv.toString().trimmed();
+    } else if (sv.isDouble()) {
+        statusVal = QString::number(sv.toInt());
+    }
+
+    if (statusVal.isEmpty()) {
+        return false;
+    }
+
+    const QString carId = QStringLiteral("1");
+    RobotInfo snapshot;
+    {
+        QWriteLocker locker(&m_lock);
+        RobotInfo &target = m_robots[carId];
+        target.carIdStr = carId;
+        target.car_id = 1;
+        target.status = statusVal; // "0" 就绪, "1" 导航中, "2" 暂停导航
+        snapshot = target;
+
+        QString curId = AppConfig::instance().agvId().trimmed();
+        if (curId.isEmpty()) curId = AppConfig::instance().currentDevice().carId.trimmed();
+        if (!curId.isEmpty() && curId != carId) {
+            m_robots[curId] = snapshot;
+        }
+    }
+
+    qDebug().noquote() << QStringLiteral("[RobotInfoManager] 收到 /rob/navigate/status -> status:%1 (%2)")
+                              .arg(statusVal, (statusVal == "0" ? "就绪" : (statusVal == "1" ? "导航中" : (statusVal == "2" ? "暂停导航" : statusVal))));
+
+    emit robotInfoUpdated(carId, snapshot);
+    emit currentRobotInfoUpdated(snapshot);
+    return true;
+}
+
 bool RobotInfoManager::updateFromPayload(const QString &topic, const QByteArray &payload, QString *outCarId)
 {
+    if (topic.endsWith(QStringLiteral("/navigate/status"))) {
+        if (outCarId) *outCarId = QStringLiteral("1");
+        return updateNavigateStatus(payload);
+    }
+
     QJsonParseError err;
     QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) {
@@ -118,39 +198,26 @@ bool RobotInfoManager::updateFromPayload(const QString &topic, const QByteArray 
 
     QJsonObject d = doc.object();
 
-    // 提取目标车辆 ID
-    QString carId;
-    if (d.contains(QStringLiteral("car_id")) && !d.value(QStringLiteral("car_id")).isNull()) {
-        QJsonValue cv = d.value(QStringLiteral("car_id"));
-        if (cv.isDouble()) carId = QString::number(cv.toInt());
-        else if (cv.isString()) carId = cv.toString().trimmed();
-    } else if (d.contains(QStringLiteral("carId")) && !d.value(QStringLiteral("carId")).isNull()) {
-        QJsonValue cv = d.value(QStringLiteral("carId"));
-        if (cv.isDouble()) carId = QString::number(cv.toInt());
-        else if (cv.isString()) carId = cv.toString().trimmed();
-    }
-
-    // 从 topic 中提取: /rob/{carId}/info
-    if (carId.isEmpty()) {
-        static const QRegularExpression topicRe(QStringLiteral("/rob/([^/]+)/info"));
-        QRegularExpressionMatch match = topicRe.match(topic);
-        if (match.hasMatch()) {
-            carId = match.captured(1).trimmed();
+    // 兼容外层包装 data 对象的结构: { code: 200, data: { ... } }
+    QJsonObject source = d;
+    if (d.contains(QStringLiteral("data")) && d.value(QStringLiteral("data")).isObject()) {
+        QJsonObject dataObj = d.value(QStringLiteral("data")).toObject();
+        for (auto it = dataObj.constBegin(); it != dataObj.constEnd(); ++it) {
+            source.insert(it.key(), it.value());
         }
     }
 
-    // 严格单车限制：若报文指定的车辆 ID 与当前连接的主机车辆 ID 不符，立即丢弃
-    QString curId = AppConfig::instance().agvId().trimmed();
-    if (curId.isEmpty()) curId = AppConfig::instance().currentDevice().carId.trimmed();
-    if (curId.isEmpty()) curId = QStringLiteral("1");
-
-    if (!carId.isEmpty() && carId != curId) {
+    // 检查是否为合法的机器人设备状态报文（防止任务链/任务结构等非状态消息污染主车状态）
+    bool isRobotInfoPayload = source.contains(QStringLiteral("car_id")) || source.contains(QStringLiteral("carId"))
+                           || source.contains(QStringLiteral("car_x"))  || source.contains(QStringLiteral("x"))
+                           || source.contains(QStringLiteral("status")) || source.contains(QStringLiteral("battery"))
+                           || source.contains(QStringLiteral("power"))  || source.contains(QStringLiteral("map_id"));
+    if (!isRobotInfoPayload) {
         return false;
     }
 
-    if (carId.isEmpty()) {
-        carId = curId;
-    }
+    // 用户明确规定：/rob/{car_id}/info 中 car_id 永远是常数 1
+    const QString carId = QStringLiteral("1");
 
     if (outCarId) {
         *outCarId = carId;
@@ -161,20 +228,24 @@ bool RobotInfoManager::updateFromPayload(const QString &topic, const QByteArray 
         QWriteLocker locker(&m_lock);
         RobotInfo &target = m_robots[carId];
         target.carIdStr = carId;
-        bool ok = false;
-        int cid = carId.toInt(&ok);
-        if (ok) target.car_id = cid;
+        target.car_id = 1;
 
-        parseInfoJson(d, &target);
+        parseInfoJson(source, &target);
+        target.car_id = 1; // 强制常数 1
+        target.carIdStr = carId;
         snapshot = target;
+
+        // 若当前配置有指定设备ID，同步写入镜像以兼容多处旧接口查询
+        QString curId = AppConfig::instance().agvId().trimmed();
+        if (curId.isEmpty()) curId = AppConfig::instance().currentDevice().carId.trimmed();
+        if (!curId.isEmpty() && curId != carId) {
+            m_robots[curId] = snapshot;
+        }
     }
 
     // 派发信号
     emit robotInfoUpdated(carId, snapshot);
-
-    if (carId == curId) {
-        emit currentRobotInfoUpdated(snapshot);
-    }
+    emit currentRobotInfoUpdated(snapshot);
 
     return true;
 }
@@ -205,43 +276,47 @@ bool RobotInfoManager::parseInfoJson(const QJsonObject &d, RobotInfo *outInfo)
     }
 
     // 3. car_x, car_y, car_z
-    if (d.contains(QStringLiteral("car_x")) && !d.value(QStringLiteral("car_x")).isNull()) {
-        outInfo->car_x = d.value(QStringLiteral("car_x")).toDouble();
-        outInfo->hasPose = true;
-    } else if (d.contains(QStringLiteral("x")) && !d.value(QStringLiteral("x")).isNull()) {
-        outInfo->car_x = d.value(QStringLiteral("x")).toDouble();
-        outInfo->hasPose = true;
-    }
+    auto extractNum = [](const QJsonObject &obj, const QStringList &keys, double defVal, bool *found = nullptr) -> double {
+        for (const QString &k : keys) {
+            if (obj.contains(k) && !obj.value(k).isNull()) {
+                QJsonValue v = obj.value(k);
+                if (v.isDouble()) {
+                    if (found) *found = true;
+                    return v.toDouble();
+                } else if (v.isString()) {
+                    bool ok = false;
+                    double dVal = v.toString().trimmed().toDouble(&ok);
+                    if (ok) {
+                        if (found) *found = true;
+                        return dVal;
+                    }
+                }
+            }
+        }
+        if (found) *found = false;
+        return defVal;
+    };
 
-    if (d.contains(QStringLiteral("car_y")) && !d.value(QStringLiteral("car_y")).isNull()) {
-        outInfo->car_y = d.value(QStringLiteral("car_y")).toDouble();
-        outInfo->hasPose = true;
-    } else if (d.contains(QStringLiteral("y")) && !d.value(QStringLiteral("y")).isNull()) {
-        outInfo->car_y = d.value(QStringLiteral("y")).toDouble();
+    bool hasX = false, hasY = false;
+    double nx = extractNum(d, {QStringLiteral("car_x"), QStringLiteral("carX"), QStringLiteral("x"), QStringLiteral("current_x"), QStringLiteral("posX")}, outInfo->car_x, &hasX);
+    double ny = extractNum(d, {QStringLiteral("car_y"), QStringLiteral("carY"), QStringLiteral("y"), QStringLiteral("current_y"), QStringLiteral("posY")}, outInfo->car_y, &hasY);
+    if (hasX || hasY) {
+        outInfo->car_x = nx;
+        outInfo->car_y = ny;
         outInfo->hasPose = true;
     }
-
-    if (d.contains(QStringLiteral("car_z")) && !d.value(QStringLiteral("car_z")).isNull()) {
-        outInfo->car_z = d.value(QStringLiteral("car_z")).toDouble();
-    } else if (d.contains(QStringLiteral("z")) && !d.value(QStringLiteral("z")).isNull()) {
-        outInfo->car_z = d.value(QStringLiteral("z")).toDouble();
-    }
+    outInfo->car_z = extractNum(d, {QStringLiteral("car_z"), QStringLiteral("carZ"), QStringLiteral("z")}, outInfo->car_z);
 
     // 4. car_yaw
-    if (d.contains(QStringLiteral("car_yaw")) && !d.value(QStringLiteral("car_yaw")).isNull()) {
-        outInfo->car_yaw = d.value(QStringLiteral("car_yaw")).toDouble();
-        outInfo->hasPose = true;
-    } else if (d.contains(QStringLiteral("yaw")) && !d.value(QStringLiteral("yaw")).isNull()) {
-        outInfo->car_yaw = d.value(QStringLiteral("yaw")).toDouble();
+    bool hasYaw = false;
+    double nyaw = extractNum(d, {QStringLiteral("car_yaw"), QStringLiteral("carYaw"), QStringLiteral("yaw"), QStringLiteral("carTheta"), QStringLiteral("theta"), QStringLiteral("angle")}, outInfo->car_yaw, &hasYaw);
+    if (hasYaw) {
+        outInfo->car_yaw = nyaw;
         outInfo->hasPose = true;
     }
 
-    // 5. status: "0"正常未开机 "2"正常开机 "3"正在导航 "4"停止导航作业中 "5"中止暂停 "6"故障
-    if (d.contains(QStringLiteral("status")) && !d.value(QStringLiteral("status")).isNull()) {
-        QJsonValue sv = d.value(QStringLiteral("status"));
-        if (sv.isString()) outInfo->status = sv.toString().trimmed();
-        else if (sv.isDouble()) outInfo->status = QString::number(sv.toInt());
-    }
+    // 5. status: 状态权威真源为独立 MQTT 话题 /rob/navigate/status ({"status":"0"} 就绪, {"status":"1"} 导航中)
+    // 刚开机默认初始化为 "0" (就绪)，不在此处被 /rob/1/info 中的旧 status 字段覆盖
 
     // 6. task_id: -1 或任务 ID
     if (d.contains(QStringLiteral("task_id")) && !d.value(QStringLiteral("task_id")).isNull()) {
@@ -394,10 +469,26 @@ bool RobotInfoManager::parseInfoJson(const QJsonObject &d, RobotInfo *outInfo)
     if (d.contains(QStringLiteral("carName")) && !d.value(QStringLiteral("carName")).isNull()) {
         outInfo->carName = d.value(QStringLiteral("carName")).toString().trimmed();
     }
-    if (d.contains(QStringLiteral("covariance_score")) && !d.value(QStringLiteral("covariance_score")).isNull()) {
-        outInfo->covScore = d.value(QStringLiteral("covariance_score")).toDouble();
-    } else if (d.contains(QStringLiteral("confidence")) && !d.value(QStringLiteral("confidence")).isNull()) {
-        outInfo->covScore = d.value(QStringLiteral("confidence")).toDouble();
+    // 定位置信度 (支持浮点数及字符串形式，支持多种命名规范)
+    bool hasCov = false;
+    double parsedCov = extractNum(d, {
+        QStringLiteral("covariance_score"), QStringLiteral("covarianceScore"),
+        QStringLiteral("confidence"), QStringLiteral("confidence_score"),
+        QStringLiteral("cov_score"), QStringLiteral("covScore"),
+        QStringLiteral("position_confidence"), QStringLiteral("loc_confidence")
+    }, -1.0, &hasCov);
+
+    if (hasCov) {
+        if (parsedCov > 1.0) {
+            parsedCov = parsedCov / 100.0;
+        }
+        // 如果提取到的值为 0.0，但当前车辆位姿正常有效且正处于导航/作业运行中(status 3/4)，且此前已有有效置信度：
+        // 说明此帧为过程过渡帧或未开启单独匹配计算，保留此前有效置信度，防止误置为 0% 触发假报警
+        if (parsedCov <= 0.0 && outInfo->hasPose && (outInfo->status == "3" || outInfo->status == "4") && outInfo->covScore > 0.0) {
+            // 保持原有效置信度
+        } else if (parsedCov >= 0.0) {
+            outInfo->covScore = parsedCov;
+        }
     }
     if (d.contains(QStringLiteral("firmware_version")) && !d.value(QStringLiteral("firmware_version")).isNull()) {
         outInfo->fwVersion = d.value(QStringLiteral("firmware_version")).toString().trimmed();

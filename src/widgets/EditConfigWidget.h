@@ -45,7 +45,14 @@ private:
     QJsonObject findMetadataForConfig(const QJsonObject &configEntry) const;
     QString getDefaultValueString(const QJsonObject &metaObj, const QString &fullPath) const;
     void updateDefaultValuesInTable();
+    void syncObstacleParamsToRouteNetwork(double stopDx, double stopDy,
+                                          double decelDx, double decelDy,
+                                          std::function<void(bool ok)> onDone = nullptr);
 
+signals:
+    void routeNetworkUpdated();
+
+private:
     // UI
     QLineEdit *m_filterEdit = nullptr;
     QTreeWidget *m_groupTree = nullptr;

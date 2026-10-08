@@ -62,14 +62,16 @@ struct RoutePoint {
     double epc_theta = 0.0;
     QString typeName;           ///< "ActionPoint" | "ChargePoint"
 
-    // 实时避障参数 (与 Vue actions / properties 格式 100% 对齐)
-    double intrusionStopLength  = 0.0;  ///< 正向停止膨胀半径 (m)
-    double intrusionStopWidth   = 0.0;  ///< 侧向停止膨胀半径 (m)
-    double intrusionDecelLength = 0.0;  ///< 正向减速膨胀半径 (m)
-    double intrusionDecelWidth  = 0.0;  ///< 侧向减速膨胀半径 (m)
+    // 实时避障参数 (与 Vue actions / properties 格式 100% 对齐，来自配置参数默认值，特殊点永远为 0)
+    double intrusionStopLength  = 0.1;  ///< 正向停止膨胀半径 (m)
+    double intrusionStopWidth   = 0.1;  ///< 侧向停止膨胀半径 (m)
+    double intrusionDecelLength = 0.5;  ///< 正向减速膨胀半径 (m)
+    double intrusionDecelWidth  = 0.3;  ///< 侧向减速膨胀半径 (m)
+    bool isCustomObstacle       = false;///< 是否用户单独修改过避障参数 (若为 true 则不使用全局避障参数)
     QJsonArray actions;                 ///< 动作列表 (Vue 标准格式，包含实时避障等 action)
 
     // 原生 JSON 序列化与反序列化
+    bool isSpecial() const;
     QJsonObject toJson() const;
     static RoutePoint fromJson(const QJsonObject &obj);
 };
@@ -107,11 +109,12 @@ struct RouteSegment {
     bool spinTurn      = true;  ///< 是否允许在端点原地自转
     bool avoidObstacle = true;  ///< 是否允许局部避障
 
-    // 实时避障范围定向膨胀参数 (单位: 米 m，对齐 base.json 规范)
-    double intrusionStopLength  = 0.0; ///< 正向停止膨胀半径 (m)
-    double intrusionStopWidth   = 0.0; ///< 侧向停止膨胀半径 (m)
-    double intrusionDecelLength = 0.0; ///< 正向减速膨胀半径 (m)
-    double intrusionDecelWidth  = 0.0; ///< 侧向减速膨胀半径 (m)
+    // 实时避障范围定向膨胀参数 (单位: 米 m，对齐 base.json 规范，默认值来自配置参数)
+    double intrusionStopLength  = 0.1; ///< 正向停止膨胀半径 (m)
+    double intrusionStopWidth   = 0.1; ///< 侧向停止膨胀半径 (m)
+    double intrusionDecelLength = 0.5; ///< 正向减速膨胀半径 (m)
+    double intrusionDecelWidth  = 0.3; ///< 侧向减速膨胀半径 (m)
+    bool isCustomObstacle       = false;///< 是否用户单独修改过避障参数 (若为 true 则不使用全局避障参数)
 
     // 原生 JSON 序列化与反序列化
     QJsonObject toJson() const;

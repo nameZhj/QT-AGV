@@ -15,6 +15,7 @@
 #include "core/TeleopController.h"
 #include "core/ApiService.h"
 #include "core/RobotInfoManager.h"
+#include "core/TaskChainManager.h"
 #include <QDebug>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -468,6 +469,9 @@ void MainWindow::setupContentArea()
 
 void MainWindow::initPages()
 {
+    // 全局启动任务链 MQTT 状态与进度监听及缓存
+    TaskChainManager::instance().init();
+
     m_createMapPage  = new CreateMapWidget;
     m_editConfigPage = new EditConfigWidget;
     m_mapPage        = new MapViewWidget;
@@ -495,6 +499,8 @@ void MainWindow::initPages()
         m_mapPage->forceRefreshAfterMapping();  // 强制清缓存+重新下载最新地图
         highlightTabForPageIndex(0);
     });
+    connect(m_editConfigPage, &EditConfigWidget::routeNetworkUpdated,
+            m_mapPage, &MapViewWidget::refreshData);
 
     connect(m_stack, &QStackedWidget::currentChanged, this, &MainWindow::refreshCurrentPage);
 
@@ -759,11 +765,14 @@ void MainWindow::updateStatusBar()
 
     // 1. 置信度
     if (m_sbCov) {
-        if (info.covScore >= 0.0) {
+        if (info.covScore > 0.0) {
             double cs = (info.covScore > 1.0) ? info.covScore / 100.0 : info.covScore;
             int pct = qRound(cs * 100.0);
-            m_sbCov->setText(QString("置信度: <span style='color:%1;'>%2%</span>")
-                                 .arg(pct <= 40 ? "#ef4444" : "#22c55e").arg(pct));
+            if (pct <= 0) pct = 1;
+            // 置信度大于0显示绿色正常
+            m_sbCov->setText(QString("置信度: <span style='color:#22c55e;'>%1%</span>").arg(pct));
+        } else if (info.covScore == 0.0) {
+            m_sbCov->setText("置信度: <span style='color:#ef4444;'>0%</span>");
         } else {
             m_sbCov->setText("置信度: <span style='color:#8898a8;'>--</span>");
         }
@@ -790,9 +799,9 @@ void MainWindow::updateStatusBar()
         }
     }
 
-    // 4. 定位状态 (定位成功或失败)
+    // 4. 定位状态 (只有置信度大于0才显示定位成功，不然显示定位失败)
     if (m_sbLocStatus) {
-        bool locSuccess = info.hasPose && (info.covScore < 0.0 || info.covScore >= 0.3);
+        bool locSuccess = (info.covScore > 0.0);
         if (locSuccess) {
             m_sbLocStatus->setText("定位状态: <span style='color:#22c55e;'>定位成功</span>");
         } else {
@@ -891,30 +900,9 @@ void MainWindow::onTeleopToggled()
 
 void MainWindow::onTeleopActiveChanged(bool active)
 {
-    if (!m_teleopBtn) return;
-    if (active) {
-        m_teleopBtn->setText("■ 恢复导航");
-        m_teleopBtn->setObjectName("teleopBtnActive");
-        // 强制刷新样式（objectName 改变后需要重新 polish）
+    if (m_teleopBtn) {
+        m_teleopBtn->setObjectName(active ? "teleopBtnActive" : "");
         m_teleopBtn->style()->unpolish(m_teleopBtn);
         m_teleopBtn->style()->polish(m_teleopBtn);
-        Toast::info(this, "已抢占控制权：WASD 移动 | Space 刹车 | Ctrl 加速 | P/L 升降");
-        // 启用遥控前先暂停巡航，避免遥控与自动巡航冲突
-        ApiService::instance().suspendWork([](int code, const QJsonObject &) {
-            if (code != 200) {
-                qWarning("暂停导航失败 (HTTP %d)，遥控可能受影响", code);
-            }
-        });
-    } else {
-        m_teleopBtn->setText("抢占控制权");
-        m_teleopBtn->setObjectName("");
-        m_teleopBtn->style()->unpolish(m_teleopBtn);
-        m_teleopBtn->style()->polish(m_teleopBtn);
-        // 停止遥控后恢复巡航
-        ApiService::instance().continueWork([](int code, const QJsonObject &) {
-            if (code != 200) {
-                qWarning("恢复导航失败 (HTTP %d)", code);
-            }
-        });
     }
 }

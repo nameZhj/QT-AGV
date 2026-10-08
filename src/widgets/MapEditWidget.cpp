@@ -154,6 +154,81 @@ static QString ttHtml(const QString &title, const QString &body)
 
 namespace {
 
+// 严格判断点是否为高精度点(工作站)或充电桩点(特殊工作站)
+bool isSpecialWorkstationPoint(const QJsonObject &obj)
+{
+    QString id = obj.value("id").toString();
+    QString name = obj.value("name").toString();
+    QString typeName = obj.value("typeName").toString();
+    QString type = obj.value("type").toString();
+    QString label = obj.value("label").toString();
+
+    if (id.startsWith("hp_", Qt::CaseInsensitive) || id.startsWith("c_", Qt::CaseInsensitive) ||
+        id.startsWith("ap_", Qt::CaseInsensitive) || id.startsWith("cp_", Qt::CaseInsensitive)) {
+        return true;
+    }
+    if (typeName.compare("ActionPoint", Qt::CaseInsensitive) == 0 ||
+        typeName.compare("ChargePoint", Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    if (type.compare("highPrecision", Qt::CaseInsensitive) == 0 ||
+        type.compare("charge", Qt::CaseInsensitive) == 0 ||
+        type.compare("highPrecisionEpc", Qt::CaseInsensitive) == 0 ||
+        type.compare("chargeEpc", Qt::CaseInsensitive) == 0 ||
+        type.compare("ActionPoint", Qt::CaseInsensitive) == 0 ||
+        type.compare("ChargePoint", Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    if (name.startsWith("AP", Qt::CaseInsensitive) ||
+        name.startsWith("CP", Qt::CaseInsensitive) ||
+        name.startsWith("TL", Qt::CaseInsensitive)) {
+        return true;
+    }
+    if (name.contains("工作站") || name.contains("充电") ||
+        label.contains("工作站") || label.contains("充电")) {
+        return true;
+    }
+    if (obj.contains("epc_x") || obj.contains("epcX") ||
+        obj.contains("epc_y") || obj.contains("epcY") ||
+        obj.contains("epc_theta") || obj.contains("epcTheta") ||
+        obj.contains("epc_Yaw") || obj.contains("epc_yaw")) {
+        return true;
+    }
+    return false;
+}
+
+// 强制将特殊工作站/工作站的四个避障参数全部置 0 (平铺字段及 actions 数组)
+void forceZeroObstacleParams(QJsonObject &obj)
+{
+    obj["intrusion_stop_length"]         = 0.0;
+    obj["intrusion_stop_width"]          = 0.0;
+    obj["intrusion_deceleration_length"] = 0.0;
+    obj["intrusion_deceleration_width"]  = 0.0;
+    obj["is_custom_obstacle"]            = false;
+
+    if (obj.contains("actions") && obj.value("actions").isArray()) {
+        QJsonArray acts = obj.value("actions").toArray();
+        bool modified = false;
+        for (int i = 0; i < acts.size(); ++i) {
+            QJsonObject act = acts[i].toObject();
+            if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
+                act["name"] = "实时避障范围";
+                act["action_type"] = 21;
+                act["intrusion_stop_length"]         = 0.0;
+                act["intrusion_stop_width"]          = 0.0;
+                act["intrusion_deceleration_length"] = 0.0;
+                act["intrusion_deceleration_width"]  = 0.0;
+                act["is_custom_obstacle"]            = false;
+                acts[i] = act;
+                modified = true;
+            }
+        }
+        if (modified) {
+            obj["actions"] = acts;
+        }
+    }
+}
+
 QPixmap drawToolIcon(const QString &name, const QColor &col, int sz = 22)
 {
     QPixmap pm(sz, sz);
@@ -1624,12 +1699,15 @@ void MapEditWidget::loadRouteData()
                 double x = coords[0].toDouble(), y = coords[1].toDouble();
                 QJsonObject obj = props;
                 obj["x"] = x; obj["y"] = y;
-                if (id.startsWith("c_"))
+                if (id.startsWith("c_", Qt::CaseInsensitive) || props.value("typeName").toString() == "ChargePoint" || props.value("type").toString() == "charge" || props.value("name").toString().startsWith("CP", Qt::CaseInsensitive) || props.value("name").toString().contains("充电")) {
+                    forceZeroObstacleParams(obj);
                     m_charges.append(obj);
-                else if (id.startsWith("hp_"))
+                } else if (id.startsWith("hp_", Qt::CaseInsensitive) || props.value("typeName").toString() == "ActionPoint" || props.value("type").toString() == "highPrecision" || props.value("name").toString().startsWith("AP", Qt::CaseInsensitive) || props.value("name").toString().startsWith("TL", Qt::CaseInsensitive) || isSpecialWorkstationPoint(obj)) {
+                    forceZeroObstacleParams(obj);
                     m_highPrecisionPoints.append(obj);
-                else
+                } else {
                     m_points.append(obj);
+                }
             } else if (gtype == "LineString") {
                 QJsonObject obj = props;
                 if (coords.size() >= 2) {
@@ -2296,6 +2374,12 @@ void MapEditWidget::addPoint(const QPointF &sp, double yaw, double theta)
     pt["rdsDockable"] = true;
     pt["allowRotate"] = true;
     pt["useDownPGV"] = false;
+    const auto &mc = MotionConfigManager::instance();
+    pt["intrusion_stop_length"]         = mc.defaultObsStopLength();
+    pt["intrusion_stop_width"]          = mc.defaultObsStopWidth();
+    pt["intrusion_deceleration_length"] = mc.defaultObsDecelLength();
+    pt["intrusion_deceleration_width"]  = mc.defaultObsDecelWidth();
+    pt["is_custom_obstacle"]            = false;
     m_points.append(pt);
     m_dirty = true;
     renderMap();
@@ -2331,6 +2415,7 @@ void MapEditWidget::addCharge(const QPointF &sp, double epcX, double epcY, doubl
     ch["rdsDockable"] = true;
     ch["allowRotate"] = true;
     ch["useDownPGV"] = false;
+    forceZeroObstacleParams(ch);
     m_charges.append(ch);
     m_dirty = true;
     renderMap();
@@ -2366,6 +2451,7 @@ void MapEditWidget::addHighPrecisionPoint(const QPointF &sp, double epcX, double
     hp["rdsDockable"] = true;
     hp["allowRotate"] = true;
     hp["useDownPGV"] = false;
+    forceZeroObstacleParams(hp);
     m_highPrecisionPoints.append(hp);
     m_dirty = true;
     renderMap();
@@ -2473,10 +2559,11 @@ void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
     ln["reachdist"]  = mc.arrivalDistanceTolerance();
     ln["reachangle"] = mc.arrivalAngleToleranceDeg();
     ln["width"]      = mc.routeWidth();
-    ln["intrusion_stop_length"]         = 0.0;
-    ln["intrusion_stop_width"]          = 0.0;
-    ln["intrusion_deceleration_length"] = 0.0;
-    ln["intrusion_deceleration_width"]  = 0.0;
+    ln["intrusion_stop_length"]         = mc.defaultObsStopLength();
+    ln["intrusion_stop_width"]          = mc.defaultObsStopWidth();
+    ln["intrusion_deceleration_length"] = mc.defaultObsDecelLength();
+    ln["intrusion_deceleration_width"]  = mc.defaultObsDecelWidth();
+    ln["is_custom_obstacle"]            = false;
     m_lines.append(ln);
     m_dirty = true;
     renderMap();
@@ -2505,10 +2592,11 @@ void MapEditWidget::addCurve(const QPointF &a, const QPointF &b,
     cv["reachdist"]  = mc.arrivalDistanceTolerance();
     cv["reachangle"] = mc.arrivalAngleToleranceDeg();
     cv["width"]      = mc.routeWidth();
-    cv["intrusion_stop_length"]         = 0.0;
-    cv["intrusion_stop_width"]          = 0.0;
-    cv["intrusion_deceleration_length"] = 0.0;
-    cv["intrusion_deceleration_width"]  = 0.0;
+    cv["intrusion_stop_length"]         = mc.defaultObsStopLength();
+    cv["intrusion_stop_width"]          = mc.defaultObsStopWidth();
+    cv["intrusion_deceleration_length"] = mc.defaultObsDecelLength();
+    cv["intrusion_deceleration_width"]  = mc.defaultObsDecelWidth();
+    cv["is_custom_obstacle"]            = false;
     m_curves.append(cv);
     m_dirty = true;
     renderMap();
@@ -2578,10 +2666,11 @@ void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
     cv["reachdist"]  = mc.arrivalDistanceTolerance();
     cv["reachangle"] = mc.arrivalAngleToleranceDeg();
     cv["width"]      = mc.routeWidth();
-    cv["intrusion_stop_length"]         = 0.0;
-    cv["intrusion_stop_width"]          = 0.0;
-    cv["intrusion_deceleration_length"] = 0.0;
-    cv["intrusion_deceleration_width"]  = 0.0;
+    cv["intrusion_stop_length"]         = mc.defaultObsStopLength();
+    cv["intrusion_stop_width"]          = mc.defaultObsStopWidth();
+    cv["intrusion_deceleration_length"] = mc.defaultObsDecelLength();
+    cv["intrusion_deceleration_width"]  = mc.defaultObsDecelWidth();
+    cv["is_custom_obstacle"]            = false;
 
     // 控制点数组(世界坐标)
     QJsonArray ctrlArr;
@@ -2775,11 +2864,16 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
         m_lineReachAngleSpin->setValue(obj.value("reachangle").toDouble(mc.arrivalAngleToleranceDeg()));
         m_lineRoadWidthSpin->setValue(obj.value("width").toDouble(mc.routeWidth()));
 
-        // 实时避障范围定向膨胀参数 (m)
-        m_lineObsStopLenSpin->setValue(obj.value("intrusion_stop_length").toDouble(0.0));
-        m_lineObsStopWidSpin->setValue(obj.value("intrusion_stop_width").toDouble(0.0));
-        m_lineObsDecelLenSpin->setValue(obj.value("intrusion_deceleration_length").toDouble(0.0));
-        m_lineObsDecelWidSpin->setValue(obj.value("intrusion_deceleration_width").toDouble(0.0));
+        // 实时避障范围定向膨胀参数 (m，若已存在则直接加载真实值，不存在才使用默认值)
+        double sl = obj.contains("intrusion_stop_length") ? obj.value("intrusion_stop_length").toDouble(0.0) : mc.defaultObsStopLength();
+        double sw = obj.contains("intrusion_stop_width") ? obj.value("intrusion_stop_width").toDouble(0.0) : mc.defaultObsStopWidth();
+        double dl = obj.contains("intrusion_deceleration_length") ? obj.value("intrusion_deceleration_length").toDouble(0.0) : mc.defaultObsDecelLength();
+        double dw = obj.contains("intrusion_deceleration_width") ? obj.value("intrusion_deceleration_width").toDouble(0.0) : mc.defaultObsDecelWidth();
+
+        m_lineObsStopLenSpin->setValue(sl);
+        m_lineObsStopWidSpin->setValue(sw);
+        m_lineObsDecelLenSpin->setValue(dl);
+        m_lineObsDecelWidSpin->setValue(dw);
     }
 
     m_propsPanel->setVisible(true);
@@ -2797,96 +2891,202 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
 
 void MapEditWidget::syncLineObstaclesToEndpoints()
 {
-    // 汇总所有线路设置的实时避障范围 (取连接到该站点的各线路最大安全膨胀值)
+    // 1. 识别特殊工作站（充电桩）与工作站（高精度点）的 ID 集合
+    QSet<QString> specialIds;
+    for (const auto &v : m_charges) {
+        QJsonObject o = v.toObject();
+        QString id = o.value("id").toString();
+        if (!id.isEmpty()) specialIds.insert(id);
+    }
+    for (const auto &v : m_highPrecisionPoints) {
+        QJsonObject o = v.toObject();
+        QString id = o.value("id").toString();
+        if (!id.isEmpty()) specialIds.insert(id);
+    }
+    for (const auto &v : m_points) {
+        QJsonObject o = v.toObject();
+        if (isSpecialWorkstationPoint(o)) {
+            QString id = o.value("id").toString();
+            if (!id.isEmpty()) specialIds.insert(id);
+        }
+    }
+
+    // 2. 收集普通站点的避障参数 (如果线路连接了高精度点或充电桩点，另一端普通站点避障参数值和线保持一致)
     struct ObstacleParam {
         double stopLen = 0.0;
         double stopWid = 0.0;
         double decelLen = 0.0;
         double decelWid = 0.0;
-        bool hasValue = false;
+        bool isCustom = false;
     };
-    QMap<QString, ObstacleParam> nodeObsMap;
+    QMap<QString, ObstacleParam> normalStationObsMap;
+
+    auto isNodeSpecial = [&](const QString &nodeId) -> bool {
+        if (nodeId.isEmpty()) return false;
+        if (specialIds.contains(nodeId)) return true;
+        if (nodeId.startsWith("hp_", Qt::CaseInsensitive) || nodeId.startsWith("c_", Qt::CaseInsensitive) ||
+            nodeId.startsWith("ap_", Qt::CaseInsensitive) || nodeId.startsWith("cp_", Qt::CaseInsensitive)) return true;
+        return false;
+    };
 
     auto collectLineObstacle = [&](const QJsonArray &arr) {
         for (const auto &v : arr) {
             QJsonObject ln = v.toObject();
-            double sl = ln.value("intrusion_stop_length").toDouble(0.0);
-            double sw = ln.value("intrusion_stop_width").toDouble(0.0);
-            double dl = ln.value("intrusion_deceleration_length").toDouble(0.0);
-            double dw = ln.value("intrusion_deceleration_width").toDouble(0.0);
-            bool hasObstacle = (sl > 0.0 || sw > 0.0 || dl > 0.0 || dw > 0.0);
-            if (!hasObstacle) continue;
+            bool lnCustom = ln.value("is_custom_obstacle").toBool(ln.value("custom_obstacle").toBool(false));
+            const auto &mc = MotionConfigManager::instance();
+            double sl = ln.value("intrusion_stop_length").toDouble(lnCustom ? 0.0 : mc.defaultObsStopLength());
+            double sw = ln.value("intrusion_stop_width").toDouble(lnCustom ? 0.0 : mc.defaultObsStopWidth());
+            double dl = ln.value("intrusion_deceleration_length").toDouble(lnCustom ? 0.0 : mc.defaultObsDecelLength());
+            double dw = ln.value("intrusion_deceleration_width").toDouble(lnCustom ? 0.0 : mc.defaultObsDecelWidth());
+            if (!lnCustom && !ln.contains("intrusion_stop_length") && !ln.contains("intrusion_stop_width") &&
+                !ln.contains("intrusion_deceleration_length") && !ln.contains("intrusion_deceleration_width")) {
+                sl = mc.defaultObsStopLength();
+                sw = mc.defaultObsStopWidth();
+                dl = mc.defaultObsDecelLength();
+                dw = mc.defaultObsDecelWidth();
+            }
 
-            QString sId = ln.value("startid").toString();
-            QString eId = ln.value("endid").toString();
+            QString sId = ln.contains("startid") ? ln.value("startid").toString() : ln.value("sId").toString();
+            if (sId.isEmpty()) sId = ln.value("startId").toString();
+            QString eId = ln.contains("endid") ? ln.value("endid").toString() : ln.value("eId").toString();
+            if (eId.isEmpty()) eId = ln.value("endId").toString();
 
-            auto updateNode = [&](const QString &nodeId) {
-                if (nodeId.isEmpty()) return;
-                ObstacleParam &param = nodeObsMap[nodeId];
+            bool sIsSpecial = isNodeSpecial(sId);
+            bool eIsSpecial = isNodeSpecial(eId);
+
+            auto updateStation = [&](const QString &nodeId) {
+                if (nodeId.isEmpty() || isNodeSpecial(nodeId)) return;
+                ObstacleParam &param = normalStationObsMap[nodeId];
                 param.stopLen  = qMax(param.stopLen, sl);
                 param.stopWid  = qMax(param.stopWid, sw);
                 param.decelLen = qMax(param.decelLen, dl);
                 param.decelWid = qMax(param.decelWid, dw);
-                param.hasValue = true;
+                if (lnCustom) param.isCustom = true;
             };
-            updateNode(sId);
-            updateNode(eId);
+
+            if (sIsSpecial && !eIsSpecial) {
+                // 线的起点是高精度点/充电桩点，另一端是普通站点 -> 站点避障参数与线保持一致
+                updateStation(eId);
+            } else if (!sIsSpecial && eIsSpecial) {
+                // 线的终点是高精度点/充电桩点，另一端是普通站点 -> 站点避障参数与线保持一致
+                updateStation(sId);
+            } else if (!sIsSpecial && !eIsSpecial) {
+                // 线的两端都是普通站点 -> 普通站点避障参数与线保持一致
+                updateStation(sId);
+                updateStation(eId);
+            }
+            // 若两端都是特殊工作站/充电桩点，则都不更新
         }
     };
 
     collectLineObstacle(m_lines);
     collectLineObstacle(m_curves);
 
-    // 将避障参数同步赋给站点 (包含普通站点 m_points、充电桩 m_charges、高精度点 m_highPrecisionPoints)
-    // 格式与 Vue 中 base.json 及 task/edit.vue 的 actions 格式 100% 对齐，同时 properties 平铺兼容
-    auto syncToPointArray = [&](QJsonArray &ptArr) {
-        for (int i = 0; i < ptArr.size(); ++i) {
-            QJsonObject pt = ptArr[i].toObject();
-            QString ptId = pt.value("id").toString();
-            if (nodeObsMap.contains(ptId)) {
-                const auto &param = nodeObsMap.value(ptId);
-                // 1. properties 顶层平铺字段
-                pt["intrusion_stop_length"]         = param.stopLen;
-                pt["intrusion_stop_width"]          = param.stopWid;
-                pt["intrusion_deceleration_length"] = param.decelLen;
-                pt["intrusion_deceleration_width"]  = param.decelWid;
-
-                // 2. Vue actions 动作列表 (action_type: 21, name: "实时避障范围")
-                QJsonArray actions = pt.value("actions").toArray();
-                bool foundAction = false;
-                for (int j = 0; j < actions.size(); ++j) {
-                    QJsonObject act = actions[j].toObject();
-                    if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
-                        act["name"] = "实时避障范围";
-                        act["action_type"] = 21;
-                        act["intrusion_stop_length"]         = param.stopLen;
-                        act["intrusion_stop_width"]          = param.stopWid;
-                        act["intrusion_deceleration_length"] = param.decelLen;
-                        act["intrusion_deceleration_width"]  = param.decelWid;
-                        actions[j] = act;
-                        foundAction = true;
-                        break;
-                    }
-                }
-                if (!foundAction) {
-                    QJsonObject act;
-                    act["name"] = "实时避障范围";
-                    act["action_type"] = 21;
-                    act["intrusion_stop_length"]         = param.stopLen;
-                    act["intrusion_stop_width"]          = param.stopWid;
-                    act["intrusion_deceleration_length"] = param.decelLen;
-                    act["intrusion_deceleration_width"]  = param.decelWid;
-                    actions.append(act);
-                }
-                pt["actions"] = actions;
-                ptArr[i] = pt;
+    // 补齐线路的默认避障参数（仅在完全未配置字段时才赋默认值，0.0 是合法避障范围）
+    auto fillLineDefaults = [](QJsonArray &arr) {
+        const auto &mc = MotionConfigManager::instance();
+        for (int i = 0; i < arr.size(); ++i) {
+            QJsonObject o = arr[i].toObject();
+            bool isCustom = o.value("is_custom_obstacle").toBool(o.value("custom_obstacle").toBool(false));
+            if (!isCustom && !o.contains("intrusion_stop_length")) {
+                o["intrusion_stop_length"]         = mc.defaultObsStopLength();
+                o["intrusion_stop_width"]          = mc.defaultObsStopWidth();
+                o["intrusion_deceleration_length"] = mc.defaultObsDecelLength();
+                o["intrusion_deceleration_width"]  = mc.defaultObsDecelWidth();
+                o["is_custom_obstacle"]            = false;
+                arr[i] = o;
             }
         }
     };
+    fillLineDefaults(m_lines);
+    fillLineDefaults(m_curves);
 
-    syncToPointArray(m_points);
-    syncToPointArray(m_charges);
-    syncToPointArray(m_highPrecisionPoints);
+    // 3. 将避障参数同步赋给普通站点 (m_points)，若 m_points 中有特殊工作站，强制为 0
+    for (int i = 0; i < m_points.size(); ++i) {
+        QJsonObject pt = m_points[i].toObject();
+        QString ptId = pt.value("id").toString();
+        if (isSpecialWorkstationPoint(pt) || specialIds.contains(ptId)) {
+            // 特殊工作站(充电桩)与工作站(高精度点)避障参数永远为 0
+            forceZeroObstacleParams(pt);
+            m_points[i] = pt;
+            continue;
+        }
+
+        bool ptCustom = pt.value("is_custom_obstacle").toBool(pt.value("custom_obstacle").toBool(false));
+        if (ptCustom) {
+            // 用户单独修改过站点的避障参数，不被相连线或默认值覆盖
+            m_points[i] = pt;
+            continue;
+        }
+
+        const auto &mc = MotionConfigManager::instance();
+        double sl = mc.defaultObsStopLength(), sw = mc.defaultObsStopWidth(), dl = mc.defaultObsDecelLength(), dw = mc.defaultObsDecelWidth();
+        bool isCustom = false;
+        if (normalStationObsMap.contains(ptId)) {
+            const auto &param = normalStationObsMap.value(ptId);
+            sl = param.stopLen;
+            sw = param.stopWid;
+            dl = param.decelLen;
+            dw = param.decelWid;
+            isCustom = param.isCustom;
+        } else if (pt.contains("intrusion_stop_length")) {
+            sl = pt.value("intrusion_stop_length").toDouble(0.0);
+            sw = pt.value("intrusion_stop_width").toDouble(0.0);
+            dl = pt.value("intrusion_deceleration_length").toDouble(0.0);
+            dw = pt.value("intrusion_deceleration_width").toDouble(0.0);
+        }
+
+        // 1. properties 顶层平铺字段赋值
+        pt["intrusion_stop_length"]         = sl;
+        pt["intrusion_stop_width"]          = sw;
+        pt["intrusion_deceleration_length"] = dl;
+        pt["intrusion_deceleration_width"]  = dw;
+        pt["is_custom_obstacle"]            = isCustom;
+
+        // 2. Vue actions 动作列表 (action_type: 21, name: "实时避障范围")
+        QJsonArray actions = pt.value("actions").toArray();
+        bool foundAction = false;
+        for (int j = 0; j < actions.size(); ++j) {
+            QJsonObject act = actions[j].toObject();
+            if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
+                act["name"] = "实时避障范围";
+                act["action_type"] = 21;
+                act["intrusion_stop_length"]         = sl;
+                act["intrusion_stop_width"]          = sw;
+                act["intrusion_deceleration_length"] = dl;
+                act["intrusion_deceleration_width"]  = dw;
+                act["is_custom_obstacle"]            = isCustom;
+                actions[j] = act;
+                foundAction = true;
+                break;
+            }
+        }
+        if (!foundAction) {
+            QJsonObject act;
+            act["name"] = "实时避障范围";
+            act["action_type"] = 21;
+            act["intrusion_stop_length"]         = sl;
+            act["intrusion_stop_width"]          = sw;
+            act["intrusion_deceleration_length"] = dl;
+            act["intrusion_deceleration_width"]  = dw;
+            act["is_custom_obstacle"]            = isCustom;
+            actions.append(act);
+        }
+        pt["actions"] = actions;
+        m_points[i] = pt;
+    }
+
+    // 4. 把高精度点（工作站）或充电桩点（特殊工作站）的四个避障参数全部强制置为 0
+    auto resetSpecialPoints = [](QJsonArray &arr) {
+        for (int i = 0; i < arr.size(); ++i) {
+            QJsonObject pt = arr[i].toObject();
+            forceZeroObstacleParams(pt);
+            arr[i] = pt;
+        }
+    };
+
+    resetSpecialPoints(m_charges);
+    resetSpecialPoints(m_highPrecisionPoints);
 }
 
 void MapEditWidget::onSaveMap(std::function<void(bool success)> onFinished)
@@ -2941,19 +3141,35 @@ void MapEditWidget::onSaveMap(std::function<void(bool success)> onFinished)
     QJsonArray features;
 
     auto makePointFeat = [](const QJsonObject &obj) -> QJsonObject {
+        QJsonObject props = obj;
+        if (isSpecialWorkstationPoint(props)) {
+            // 保存路网时再次强制将高精度点/工作站与充电桩点/特殊工作站避障参数改为 0
+            forceZeroObstacleParams(props);
+        }
         QJsonArray coords;
-        coords.append(obj.value("x").toDouble());
-        coords.append(obj.value("y").toDouble());
+        coords.append(props.value("x").toDouble());
+        coords.append(props.value("y").toDouble());
         coords.append(0.0);
         QJsonObject geom; geom["type"] = "Point"; geom["coordinates"] = coords;
-        QJsonObject props = obj; props.remove("x"); props.remove("y");
+        props.remove("x"); props.remove("y");
         QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
         return f;
     };
 
-    for (const auto &v : m_points)              features.append(makePointFeat(v.toObject()));
-    for (const auto &v : m_charges)             features.append(makePointFeat(v.toObject()));
-    for (const auto &v : m_highPrecisionPoints) features.append(makePointFeat(v.toObject()));
+    for (const auto &v : m_points) {
+        QJsonObject o = v.toObject();
+        features.append(makePointFeat(o));
+    }
+    for (const auto &v : m_charges) {
+        QJsonObject o = v.toObject();
+        forceZeroObstacleParams(o);
+        features.append(makePointFeat(o));
+    }
+    for (const auto &v : m_highPrecisionPoints) {
+        QJsonObject o = v.toObject();
+        forceZeroObstacleParams(o);
+        features.append(makePointFeat(o));
+    }
 
     for (const auto &v : m_lines) {
         QJsonObject ln = v.toObject();
@@ -3252,6 +3468,7 @@ void MapEditWidget::applyPropsEdit()
                 o["intrusion_stop_width"]          = obsStopWid;
                 o["intrusion_deceleration_length"] = obsDecelLen;
                 o["intrusion_deceleration_width"]  = obsDecelWid;
+                o["is_custom_obstacle"]            = true;
                 arr[i] = o;
                 break;
             }
@@ -4032,23 +4249,14 @@ void MapEditWidget::initMqtt()
         updateRobotMarker();
     };
 
-    MqttService::instance().subscribeTopic("/info", 0, handleInfoPayload);
-    MqttService::instance().subscribeTopic("info", 0, handleInfoPayload);
-    MqttService::instance().subscribeTopic("/rob/info", 0, handleInfoPayload);
-
-    QString carId = m_currentCarId.trimmed().isEmpty() ? AppConfig::instance().agvId() : m_currentCarId.trimmed();
-    if (carId.isEmpty()) carId = "1";
-    m_currentCarId = carId;
-    MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, handleInfoPayload);
+    // 只有 "/rob/1/info"
+    m_currentCarId = QStringLiteral("1");
+    MqttService::instance().subscribeTopic(QStringLiteral("/rob/1/info"), 0, handleInfoPayload);
 }
 
 void MapEditWidget::disconnectMqtt()
 {
-    MqttService::instance().unsubscribeTopic("/info");
-    MqttService::instance().unsubscribeTopic("info");
-    MqttService::instance().unsubscribeTopic("/rob/info");
-    QString carId = m_currentCarId.trimmed().isEmpty() ? "1" : m_currentCarId.trimmed();
-    MqttService::instance().unsubscribeTopic(QString("/rob/%1/info").arg(carId));
+    MqttService::instance().unsubscribeTopic(QStringLiteral("/rob/1/info"));
     m_hasCarPose = false;
     m_hasEpcPose = false;
     m_devicePointPending = false;
@@ -4322,28 +4530,17 @@ void MapEditWidget::onTeleopClicked()
 void MapEditWidget::onTeleopActiveChanged(bool active)
 {
     if (!m_teleopBtn) return;
+    // 状态切换注意不要修改文字，保持“抢占控制权”，只修改逻辑与高亮样式
     if (active) {
-        m_teleopBtn->setText("恢复导航");
         m_teleopBtn->setStyleSheet(
             "QPushButton{color:white;border:none;border-radius:4px;"
             "padding:4px 12px;font-size:12px;background:#c0392b;}"
             "QPushButton:hover{background:#e74c3c;}");
         Toast::info(this, "已抢占控制权：WASD 移动 | Space 刹车 | Ctrl 加速 | P/L 升降");
-        ApiService::instance().suspendWork([](int code, const QJsonObject &) {
-            if (code != 200) {
-                qWarning("暂停导航失败 (HTTP %d)，遥控可能受影响", code);
-            }
-        });
     } else {
-        m_teleopBtn->setText("抢占控制权");
         m_teleopBtn->setStyleSheet(
             "QPushButton{color:white;border:none;border-radius:4px;"
             "padding:4px 12px;font-size:12px;background:#1e6fd4;}"
             "QPushButton:hover{background:#2980e8;}");
-        ApiService::instance().continueWork([](int code, const QJsonObject &) {
-            if (code != 200) {
-                qWarning("恢复导航失败 (HTTP %d)", code);
-            }
-        });
     }
 }

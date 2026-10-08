@@ -4,6 +4,7 @@
 #include "core/ApiService.h"
 #include "core/MotionConfigManager.h"
 #include "core/MqttService.h"
+#include "core/TaskChainManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -77,9 +78,9 @@ static constexpr double kMaxLiftLinearSpeed = 0.1;
 static constexpr double kMaxLiftHeight = 0.15;
 
 static const char *S_LIST_STYLE =
-    "QListWidget { background:#181d23; border:1px solid #2a3038; border-radius:4px; }"
+    "QListWidget { background:#181d23; border:1px solid #2a3038; border-radius:4px; outline:none; }"
     "QListWidget::item { color:#c0c8d0; padding:6px 10px; border-bottom:1px solid #22272d; }"
-    "QListWidget::item:selected { background:#2a5d8f; color:#fff; }"
+    "QListWidget::item:selected, QListWidget::item:selected:!active { background:#2a5d8f; color:#fff; }"
     "QListWidget::item:hover { background:rgba(42,93,143,0.3); }";
 
 static const char *S_BTN_STYLE =
@@ -108,7 +109,7 @@ static QString actionTypeFromName(const QString &name) {
 static QString actionDescFromType(const QString &type) {
     if (type == "99") return "路径导航";
     if (type == "3" ) return "顶升";     
-    if (type == "5" ) return "转动";     
+    if (type == "5" || type == "12") return "转动";     
     if (type == "6" ) return "平动";  
     if (type == "10") return "播放音频";
     if (type == "11") return "停止播放音频";
@@ -116,12 +117,12 @@ static QString actionDescFromType(const QString &type) {
 }
 
 // 旧版本动作编号归一化为当前编号, 导出与导入共用
-// 当前: 99 路径导航 / 3 顶升 / 5 转动 / 6 平动 / 10 播放音频 / 11 停止播放音频
+// 当前: 99 路径导航 / 3 顶升 / 5(兼容12) 转动 / 6 平动 / 10 播放音频 / 11 停止播放音频
 // 旧数据: 0 路径导航 / 1 平动 / 2 转动 / 4 顶升; 旧 3/5 为音频动作, 需按动作名称区分
 static QString normalizeActionType(const QString &type, const QString &name) {
     if (type == "0") return "99";
     if (type == "1") return "6";
-    if (type == "2") return "5";
+    if (type == "2" || type == "12") return "5";
     if (type == "4") return "3";
     if (type == "3" && name != "顶升") return "10";
     if (type == "5" && name == "停止播放音频") return "11";
@@ -357,12 +358,20 @@ public:
     explicit TaskChainLockOverlay(QWidget *parent = nullptr)
         : QWidget(parent)
     {
+        setAttribute(Qt::WA_StyledBackground, true);
         setAttribute(Qt::WA_Hover, true);
         setFocusPolicy(Qt::StrongFocus);
         setCursor(Qt::ForbiddenCursor);
     }
 
 protected:
+    void paintEvent(QPaintEvent *e) override
+    {
+        Q_UNUSED(e);
+        QPainter p(this);
+        // 轻柔通透的半透明锁定层，确保底层所有任务、组和参数清晰可辨
+        p.fillRect(rect(), QColor(10, 14, 20, 45));
+    }
     void mousePressEvent(QMouseEvent *e) override { e->accept(); }
     void mouseReleaseEvent(QMouseEvent *e) override { e->accept(); }
     void mouseDoubleClickEvent(QMouseEvent *e) override { e->accept(); }
@@ -372,6 +381,8 @@ protected:
     void dragEnterEvent(QDragEnterEvent *e) override { e->acceptProposedAction(); }
     void dragMoveEvent(QDragMoveEvent *e) override { e->acceptProposedAction(); }
     void dropEvent(QDropEvent *e) override { e->acceptProposedAction(); }
+    void keyPressEvent(QKeyEvent *e) override { e->accept(); }
+    void keyReleaseEvent(QKeyEvent *e) override { e->accept(); }
 };
 
 TaskChainWidget::TaskChainWidget(QWidget *parent)
@@ -418,6 +429,7 @@ void TaskChainWidget::setupUI()
 
     // ── 编辑区容器 (包含四面板分割器及半透明锁定遮罩) ──
     m_panelsContainer = new QWidget(this);
+    m_panelsContainer->installEventFilter(this);
     auto *containerLayout = new QVBoxLayout(m_panelsContainer);
     containerLayout->setContentsMargins(0, 0, 0, 0);
     containerLayout->setSpacing(0);
@@ -467,11 +479,7 @@ void TaskChainWidget::setupUI()
     // ── 创建覆盖在整个四面板编辑区之上的半透明锁定遮罩 ──
     auto *overlay = new TaskChainLockOverlay(m_panelsContainer);
     overlay->setObjectName("taskChainLockOverlay");
-    overlay->setStyleSheet(
-        "#taskChainLockOverlay {"
-        "  background-color: rgba(10, 14, 20, 0.65);"
-        "}"
-    );
+    overlay->setStyleSheet("background: transparent;");
 
     auto *overlayLayout = new QVBoxLayout(overlay);
     overlayLayout->setAlignment(Qt::AlignCenter);
@@ -479,13 +487,17 @@ void TaskChainWidget::setupUI()
 
     m_overlayTextLabel = new QLabel(QStringLiteral("任务执行中"), overlay);
     m_overlayTextLabel->setStyleSheet(
-        "color: #58a6ff; "
-        "font-size: 20px; "
+        "color: #38bdf8; "
+        "font-size: 15px; "
         "font-weight: bold; "
-        "letter-spacing: 2px; "
-        "background: transparent;"
+        "letter-spacing: 1px; "
+        "background: rgba(15, 23, 42, 0.85); "
+        "border: 1px solid rgba(56, 189, 248, 0.45); "
+        "border-radius: 18px; "
+        "padding: 6px 22px;"
     );
     m_overlayTextLabel->setAlignment(Qt::AlignCenter);
+    m_overlayTextLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     overlayLayout->addWidget(m_overlayTextLabel);
 
     overlay->setVisible(false);
@@ -498,6 +510,35 @@ void TaskChainWidget::setupUI()
 
     // 底部公共状态栏 (独立于编辑区容器之外，完全不被遮罩覆盖)
     setupBottomBar(root);
+
+    // 监听全局任务链状态管理器信号 (解决页面切换导致的状态断档与状态错误)
+    connect(&TaskChainManager::instance(), &TaskChainManager::chainStatusChanged, this, [this](bool working, bool paused) {
+        m_chainWorking = working;
+        m_chainPaused  = paused;
+        if (!working) {
+            m_execStatus = NotStarted;
+            setListsLocked(false);
+            updateStatus(QStringLiteral("任务链已结束, 编辑区域已解锁"));
+        } else if (paused) {
+            m_execStatus = Suspended;
+            setListsLocked(true);
+        } else {
+            m_execStatus = Running;
+            setListsLocked(true);
+        }
+
+        if (m_overlayTextLabel) {
+            m_overlayTextLabel->setText(m_chainPaused ? QStringLiteral("任务链已暂停") : QStringLiteral("任务执行中"));
+        }
+        updateBottomBar();
+    });
+
+    connect(&TaskChainManager::instance(), &TaskChainManager::currentTaskChanged, this, [this](const QString &task, const QString &group) {
+        m_currentTaskName  = task;
+        m_currentGroupName = group;
+        applyRuntimeSelection();
+        updateBottomBar();
+    });
 
     updateBottomBar();
 }
@@ -769,6 +810,9 @@ void TaskChainWidget::refreshChainList()
     }
     m_chainList->blockSignals(false);
     scheduleCacheWrite();
+    if (m_listLocked) {
+        installLockFilter(m_chainList, true);
+    }
 }
 
 void TaskChainWidget::createChainRowWidget(QListWidgetItem *item, int chainIndex)
@@ -880,9 +924,14 @@ void TaskChainWidget::selectChain(int index)
 
 int TaskChainWidget::currentChainIndex() const
 {
-    auto *item = m_chainList->currentItem();
-    if (!item) return -1;
-    return item->data(Qt::UserRole).toInt();
+    if (m_chainList) {
+        auto *item = m_chainList->currentItem();
+        if (item) return item->data(Qt::UserRole).toInt();
+        if (m_currentChainIndex >= 0 && m_currentChainIndex < m_chains.size()) {
+            return m_currentChainIndex;
+        }
+    }
+    return -1;
 }
 
 QJsonArray TaskChainWidget::currentTaskGroups() const
@@ -928,6 +977,8 @@ void TaskChainWidget::refreshTaskList()
             item->setData(Qt::UserRole, i);
 
             auto *row = new QWidget;
+            row->setObjectName("taskCardRoot");
+            row->setStyleSheet("#taskCardRoot { background: transparent; border: 1px solid transparent; border-radius: 4px; }");
             row->setAcceptDrops(true);
             row->installEventFilter(new CardLongPressDragFilter("application/x-taskchain-task-reorder", i, row));
             auto *vbox = new QVBoxLayout(row);
@@ -999,6 +1050,9 @@ void TaskChainWidget::refreshTaskList()
     m_taskList->blockSignals(false);
     updateTaskSelectBtn();
     scheduleCacheWrite();
+    if (m_listLocked) {
+        installLockFilter(m_taskList, true);
+    }
 }
 
 void TaskChainWidget::refreshGroupList()
@@ -1020,6 +1074,9 @@ void TaskChainWidget::refreshGroupList()
     updateGroupSelectBtn();
     updateBottomBar();
     scheduleCacheWrite();
+    if (m_listLocked) {
+        installLockFilter(m_groupList, true);
+    }
 }
 
 void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex, bool checked)
@@ -1036,6 +1093,8 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
     QJsonArray actions = group.value("actions").toArray();
 
     auto *container = new QWidget;
+    container->setObjectName("groupCardRoot");
+    container->setStyleSheet("#groupCardRoot { background: transparent; border: 1px solid transparent; border-radius: 4px; }");
     container->setAcceptDrops(true);
     container->installEventFilter(new CardLongPressDragFilter("application/x-taskchain-group-reorder", groupIndex, container));
     auto *vbox = new QVBoxLayout(container);
@@ -1569,10 +1628,49 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
 void TaskChainWidget::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
-    loadMapStations();
+
+    // 仅在非运行状态下重新拉取地图站点并刷新组，避免打乱正在执行的组列表
+    if (!m_listLocked && m_execStatus != Running && !m_chainWorking) {
+        loadMapStations();
+    }
     loadChainsFromCacheAndServer();
     subscribeChainStatus();
     subscribeChainCurrentTask();
+
+    // 从全局单例 TaskChainManager 获取最新缓存状态（彻底杜绝菜单切换导致状态错误与断档）
+    auto &mgr = TaskChainManager::instance();
+    m_chainWorking     = mgr.isWorking();
+    m_chainPaused      = mgr.isPaused();
+    m_currentTaskName  = mgr.currentTask();
+    m_currentGroupName = mgr.currentGroup();
+
+    if (m_chainWorking || mgr.isLocalExecutionActive()) {
+        m_execStatus = m_chainPaused ? Suspended : Running;
+        setListsLocked(true);
+    } else if (m_execStatus != Running && m_execStatus != Suspended) {
+        m_execStatus = NotStarted;
+        setListsLocked(false);
+    }
+
+    if (m_overlayTextLabel) {
+        m_overlayTextLabel->setText(m_chainPaused ? QStringLiteral("任务链已暂停") : QStringLiteral("任务执行中"));
+    }
+
+    applyRuntimeSelection();
+    updateBottomBar();
+
+    // 如果处于锁定或运行中，切回时必须强制恢复遮罩与控件锁定
+    if (m_listLocked || m_execStatus == Running || m_chainWorking) {
+        setListsLocked(true);
+        updateLockOverlayGeometry();
+        // 在事件循环下一轮再次校验并提升置顶，确保 QStackedWidget 切换后的最终布局严格生效
+        QTimer::singleShot(0, this, [this]() {
+            if (m_listLocked || m_execStatus == Running || m_chainWorking) {
+                updateLockOverlayGeometry();
+            }
+            applyRuntimeSelection();
+        });
+    }
 }
 
 // 订阅任务链运行状态: {"robotWorking":true,"robotPause":false}
@@ -1640,15 +1738,21 @@ void TaskChainWidget::onChainCurrentTaskMessage(const QByteArray &payload)
     updateBottomBar();
 }
 
-void TaskChainWidget::resizeEvent(QResizeEvent *event)
+void TaskChainWidget::updateLockOverlayGeometry()
 {
-    QWidget::resizeEvent(event);
     if (m_lockOverlay && m_panelsContainer) {
         m_lockOverlay->setGeometry(m_panelsContainer->rect());
-        if (m_lockOverlay->isVisible()) {
+        if (m_listLocked || m_execStatus == Running || m_chainWorking) {
+            m_lockOverlay->show();
             m_lockOverlay->raise();
         }
     }
+}
+
+void TaskChainWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    updateLockOverlayGeometry();
 }
 
 // 锁定/解锁 编辑区域 (四面板列表与全部操作按钮):
@@ -1671,9 +1775,14 @@ void TaskChainWidget::setListsLocked(bool locked)
         }
     }
 
-    installLockFilter(m_chainList, locked);
-    installLockFilter(m_taskList, locked);
-    installLockFilter(m_groupList, locked);
+    // 锁定/解锁 m_panelsContainer 下所有子控件
+    installLockFilter(m_panelsContainer, locked);
+    if (m_lockOverlay) {
+        m_lockOverlay->removeEventFilter(this);
+        if (m_overlayTextLabel) {
+            m_overlayTextLabel->removeEventFilter(this);
+        }
+    }
 
     // 锁定期间禁止键盘焦点切换, 避免方向键改变选中项
     if (m_chainList) m_chainList->setFocusPolicy(locked ? Qt::NoFocus : Qt::StrongFocus);
@@ -1686,6 +1795,7 @@ void TaskChainWidget::setListsLocked(bool locked)
     } else {
         m_currentTaskName.clear();
         m_currentGroupName.clear();
+        updateRuntimeCardHighlights(-1, -1);
         if (m_groupHintLabel)
             m_groupHintLabel->setText(QStringLiteral("拖拽标签到组中, 每组只能添加一种标签"));
     }
@@ -1707,51 +1817,141 @@ void TaskChainWidget::installLockFilter(QWidget *w, bool install)
 
 bool TaskChainWidget::eventFilter(QObject *obj, QEvent *event)
 {
+    if (obj == m_panelsContainer && event->type() == QEvent::Resize) {
+        updateLockOverlayGeometry();
+    }
+
     if (m_listLocked) {
-        switch (event->type()) {
-        case QEvent::MouseButtonPress:
-        case QEvent::MouseButtonRelease:
-        case QEvent::MouseButtonDblClick:
-        case QEvent::MouseMove:
-        case QEvent::Wheel:
-        case QEvent::KeyPress:
-        case QEvent::KeyRelease:
-        case QEvent::DragEnter:
-        case QEvent::DragMove:
-        case QEvent::DragLeave:
-        case QEvent::Drop:
-        case QEvent::ContextMenu:
-            return true;   // 锁定期间吞掉用户输入, 不可操作
-        default:
-            break;
+        // 遮罩自身不拦截，交由遮罩自己的事件处理函数
+        if (obj != m_lockOverlay && (!m_lockOverlay || !m_lockOverlay->isAncestorOf(qobject_cast<const QWidget*>(obj)))) {
+            switch (event->type()) {
+            case QEvent::MouseButtonPress:
+            case QEvent::MouseButtonRelease:
+            case QEvent::MouseButtonDblClick:
+            case QEvent::MouseMove:
+            case QEvent::Wheel:
+            case QEvent::KeyPress:
+            case QEvent::KeyRelease:
+            case QEvent::DragEnter:
+            case QEvent::DragMove:
+            case QEvent::DragLeave:
+            case QEvent::Drop:
+            case QEvent::ContextMenu:
+                return true;   // 锁定期间吞掉用户输入, 不可操作
+            default:
+                break;
+            }
         }
     }
     return QWidget::eventFilter(obj, event);
 }
 
-// 按 MQTT 上报的当前任务/组, 在列表中显示对应的选中状态
+// 按 MQTT 上报的当前任务/组, 在列表中显示对应的选中状态并高亮边框
 void TaskChainWidget::applyRuntimeSelection()
 {
+    int targetTaskIdx = -1;
     if (!m_currentTaskName.isEmpty() && m_taskList) {
         for (int i = 0; i < m_taskList->count(); ++i) {
             QListWidgetItem *item = m_taskList->item(i);
-            if (item && subTaskNameAt(item->data(Qt::UserRole).toInt()) == m_currentTaskName) {
+            if (!item) continue;
+            int taskIdx = item->data(Qt::UserRole).toInt();
+            if (matchSubTaskName(taskIdx, m_currentTaskName)) {
+                targetTaskIdx = taskIdx;
                 m_taskList->setCurrentItem(item);
                 m_taskList->scrollToItem(item);
                 break;
             }
         }
     }
+
+    // 确保当前任务索引与组列表同步
+    if (targetTaskIdx >= 0 && targetTaskIdx != m_currentTaskIndex) {
+        m_currentTaskIndex = targetTaskIdx;
+        refreshGroupList();
+    } else if (m_groupList && m_groupList->count() == 0 && targetTaskIdx >= 0) {
+        m_currentTaskIndex = targetTaskIdx;
+        refreshGroupList();
+    }
+
+    int targetGroupIdx = -1;
     if (!m_currentGroupName.isEmpty() && m_groupList) {
         for (int i = 0; i < m_groupList->count(); ++i) {
             QListWidgetItem *item = m_groupList->item(i);
-            if (item && groupNameAt(item->data(Qt::UserRole).toInt()) == m_currentGroupName) {
+            if (!item) continue;
+            int groupIdx = item->data(Qt::UserRole).toInt();
+            if (matchGroupName(groupIdx, m_currentGroupName)) {
+                targetGroupIdx = groupIdx;
                 m_groupList->setCurrentItem(item);
                 m_groupList->scrollToItem(item);
                 break;
             }
         }
     }
+
+    // 无论是否失焦，给当前正在执行的任务卡片和组卡片应用鲜明的高亮发光选中边框
+    updateRuntimeCardHighlights(targetTaskIdx, targetGroupIdx);
+}
+
+void TaskChainWidget::updateRuntimeCardHighlights(int currentTaskIdx, int currentGroupIdx)
+{
+    if (m_taskList) {
+        for (int i = 0; i < m_taskList->count(); ++i) {
+            QListWidgetItem *item = m_taskList->item(i);
+            if (!item) continue;
+            QWidget *w = m_taskList->itemWidget(item);
+            if (!w) continue;
+            int idx = item->data(Qt::UserRole).toInt();
+            if (idx == currentTaskIdx && currentTaskIdx >= 0) {
+                w->setStyleSheet("#taskCardRoot { background: rgba(0, 188, 212, 0.20); border: 2px solid #00bcd4; border-radius: 4px; }");
+            } else {
+                w->setStyleSheet("#taskCardRoot { background: transparent; border: 1px solid transparent; border-radius: 4px; }");
+            }
+        }
+    }
+
+    if (m_groupList) {
+        for (int i = 0; i < m_groupList->count(); ++i) {
+            QListWidgetItem *item = m_groupList->item(i);
+            if (!item) continue;
+            QWidget *w = m_groupList->itemWidget(item);
+            if (!w) continue;
+            int idx = item->data(Qt::UserRole).toInt();
+            if (idx == currentGroupIdx && currentGroupIdx >= 0) {
+                w->setStyleSheet("#groupCardRoot { background: rgba(56, 189, 248, 0.20); border: 2px solid #38bdf8; border-radius: 4px; }");
+            } else {
+                w->setStyleSheet("#groupCardRoot { background: transparent; border: 1px solid transparent; border-radius: 4px; }");
+            }
+        }
+    }
+}
+
+bool TaskChainWidget::matchSubTaskName(int taskIdx, const QString &targetName) const
+{
+    if (targetName.isEmpty()) return false;
+    const int idx = currentChainIndex();
+    if (idx < 0 || idx >= m_chains.size()) return false;
+    if (taskIdx < 0 || taskIdx >= m_chains[idx].tasks.size()) return false;
+
+    const QJsonObject task = m_chains[idx].tasks[taskIdx].toObject();
+    QString subTaskName = task.value("sub_task_name").toString();
+    QString name = task.value("name").toString();
+    QString defaultName = QString("sub_task_%1").arg(taskIdx + 1);
+
+    return (subTaskName == targetName || name == targetName || defaultName == targetName);
+}
+
+bool TaskChainWidget::matchGroupName(int groupIdx, const QString &targetName) const
+{
+    if (targetName.isEmpty()) return false;
+    const QJsonArray groups = currentTaskGroups();
+    if (groupIdx < 0 || groupIdx >= groups.size()) return false;
+
+    const QJsonObject group = groups[groupIdx].toObject();
+    QString groupName = group.value("group_name").toString();
+    QString name = group.value("name").toString();
+    QString defaultName = QString("group_%1").arg(groupIdx + 1);
+
+    return (groupName == targetName || name == targetName || defaultName == targetName);
 }
 
 QString TaskChainWidget::subTaskNameAt(int taskIdx) const
@@ -1921,7 +2121,9 @@ void TaskChainWidget::loadMapStations()
                     }
                 }
             }
-            refreshGroupList();
+            if (!m_listLocked && m_execStatus != Running && !m_chainWorking) {
+                refreshGroupList();
+            }
         });
     };
 
@@ -2253,6 +2455,7 @@ void TaskChainWidget::onGroupSendSelected()
 
     m_execStatus = Running;
     setListsLocked(true);   // 下发后锁定列表, 直至任务链结束
+    TaskChainManager::instance().setLocalExecutionActive(true);
     updateBottomBar();
     updateStatus(QStringLiteral("正在下发任务链 (勾选子任务, %1): %2")
         .arg(looped ? QStringLiteral("循环模式") : QStringLiteral("单次模式"))
@@ -2264,6 +2467,7 @@ void TaskChainWidget::onGroupSendSelected()
         } else {
             m_execStatus = NotStarted;
             setListsLocked(false);
+            TaskChainManager::instance().resetExecutionState();
             updateBottomBar();
             QString err = resp.value("msg").toString(QStringLiteral("请求失败"));
             updateStatus(QStringLiteral("任务链下发失败: %1").arg(err));
@@ -2294,6 +2498,7 @@ void TaskChainWidget::onGroupSendAll()
 
     m_execStatus = Running;
     setListsLocked(true);   // 下发后锁定列表, 直至任务链结束
+    TaskChainManager::instance().setLocalExecutionActive(true);
     updateBottomBar();
     updateStatus(QStringLiteral("正在下发任务链 (全部子任务, %1): %2")
         .arg(looped ? QStringLiteral("循环模式") : QStringLiteral("单次模式"))
@@ -2305,6 +2510,7 @@ void TaskChainWidget::onGroupSendAll()
         } else {
             m_execStatus = NotStarted;
             setListsLocked(false);
+            TaskChainManager::instance().resetExecutionState();
             updateBottomBar();
             QString err = resp.value("msg").toString(QStringLiteral("请求失败"));
             updateStatus(QStringLiteral("任务链下发失败: %1").arg(err));
@@ -2409,15 +2615,16 @@ void TaskChainWidget::updateBottomBar()
 
     m_bottomInfoLabel->setText(parts.join("  |  "));
 
-    // 暂停/继续任务链: 由 MQTT /taskchain/status 的车辆状态决定
-    // robotWorking=false 无任务运行 → 隐藏; 运行中未暂停 → “暂停任务链”; 已暂停 → “继续任务链”
-    m_suspendResumeBtn->setVisible(m_chainWorking);
-    m_suspendResumeBtn->setEnabled(m_chainWorking);
-    m_suspendResumeBtn->setText(m_chainPaused ? QStringLiteral("继续任务链")
-                                              : QStringLiteral("暂停任务链"));
+    // 暂停/继续任务链 & 取消任务链
+    // 无论从哪个页面切回或处于本地/网络执行阶段，只要任务处于运行、暂停或锁定状态，取消按钮和暂停按钮都必须绝对可用
+    bool isWorking = (m_chainWorking || m_execStatus == Running || m_execStatus == Suspended || m_listLocked ||
+                      TaskChainManager::instance().isWorking() || TaskChainManager::instance().isLocalExecutionActive());
+    m_suspendResumeBtn->setVisible(isWorking);
+    m_suspendResumeBtn->setEnabled(isWorking);
+    m_suspendResumeBtn->setText((m_chainPaused || m_execStatus == Suspended) ? QStringLiteral("继续任务链")
+                                                                            : QStringLiteral("暂停任务链"));
 
-    bool isWorking = (m_chainWorking || m_execStatus == Running);
-    m_cancelBtn->setEnabled(m_chainWorking);
+    m_cancelBtn->setEnabled(isWorking);
     m_executeNextBtn->setEnabled(isWorking && !chainName.isEmpty());
 }
 
@@ -2781,8 +2988,9 @@ void TaskChainWidget::executeSingleAction(const QJsonObject &action)
 
 void TaskChainWidget::onSuspendResume()
 {
-    if (m_execStatus == Running) {
+    if (m_execStatus == Running || (m_chainWorking && !m_chainPaused)) {
         m_execStatus = Suspended;
+        m_chainPaused = true;
         // PUT /task/chain/control?command=pause navigation
         ApiService::instance().controlTaskChain(QStringLiteral("pause navigation"), [this](int code, const QJsonObject &resp) {
             if (code != 200) {
@@ -2796,8 +3004,9 @@ void TaskChainWidget::onSuspendResume()
         if (m_overlayTextLabel) {
             m_overlayTextLabel->setText(QStringLiteral("任务链已暂停"));
         }
-    } else if (m_execStatus == Suspended) {
+    } else if (m_execStatus == Suspended || m_chainPaused) {
         m_execStatus = Running;
+        m_chainPaused = false;
         // PUT /task/chain/control?command=continue navigation
         ApiService::instance().controlTaskChain(QStringLiteral("continue navigation"), [this](int code, const QJsonObject &resp) {
             if (code != 200) {
@@ -2818,6 +3027,10 @@ void TaskChainWidget::onSuspendResume()
 void TaskChainWidget::onCancelChain()
 {
     m_execStatus = NotStarted;
+    m_chainWorking = false;
+    m_chainPaused = false;
+    TaskChainManager::instance().resetExecutionState();
+
     // 取消任务链，隐藏遮罩解锁编辑区域
     setListsLocked(false);
     // PUT /task/chain/control?command=stop navigation

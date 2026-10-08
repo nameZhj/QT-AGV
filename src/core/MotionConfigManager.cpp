@@ -2,6 +2,7 @@
 #include <QSettings>
 #include <QtGlobal>
 #include <QDebug>
+#include <QJsonArray>
 
 MotionConfigManager &MotionConfigManager::instance()
 {
@@ -26,6 +27,12 @@ void MotionConfigManager::loadFromSettings()
     m_arrivalAngleToleranceDeg = s.value(QStringLiteral("motion/arrival_angle_tolerance"), 0.5).toDouble();
     m_routeWidth               = s.value(QStringLiteral("motion/route_width"), 4.0).toDouble();
 
+    // 默认避障参数 (id_stop_range_threshold: [0.1, 0.1], id_deceleration_range_threshold: [0.5, 0.3])
+    m_defaultObsStopLength     = s.value(QStringLiteral("obstacle/id_stop_range_threshold_dx"), 0.1).toDouble();
+    m_defaultObsStopWidth      = s.value(QStringLiteral("obstacle/id_stop_range_threshold_dy"), 0.1).toDouble();
+    m_defaultObsDecelLength    = s.value(QStringLiteral("obstacle/id_deceleration_range_threshold_dx"), 0.5).toDouble();
+    m_defaultObsDecelWidth     = s.value(QStringLiteral("obstacle/id_deceleration_range_threshold_dy"), 0.3).toDouble();
+
     // 合理性校验
     if (m_maxSpeed <= 0.0)                 m_maxSpeed = 0.5;
     if (m_maxAcceleration <= 0.0)          m_maxAcceleration = 0.3;
@@ -34,6 +41,11 @@ void MotionConfigManager::loadFromSettings()
     if (m_arrivalDistanceTolerance <= 0.0) m_arrivalDistanceTolerance = 0.1;
     if (m_arrivalAngleToleranceDeg <= 0.0) m_arrivalAngleToleranceDeg = 0.5;
     if (m_routeWidth <= 0.0)               m_routeWidth = 4.0;
+
+    if (m_defaultObsStopLength < 0.0)      m_defaultObsStopLength = 0.1;
+    if (m_defaultObsStopWidth < 0.0)       m_defaultObsStopWidth = 0.1;
+    if (m_defaultObsDecelLength < 0.0)     m_defaultObsDecelLength = 0.5;
+    if (m_defaultObsDecelWidth < 0.0)      m_defaultObsDecelWidth = 0.3;
 }
 
 void MotionConfigManager::saveToSettings()
@@ -46,6 +58,11 @@ void MotionConfigManager::saveToSettings()
     s.setValue(QStringLiteral("motion/arrival_distance_tolerance"), m_arrivalDistanceTolerance);
     s.setValue(QStringLiteral("motion/arrival_angle_tolerance"), m_arrivalAngleToleranceDeg);
     s.setValue(QStringLiteral("motion/route_width"), m_routeWidth);
+
+    s.setValue(QStringLiteral("obstacle/id_stop_range_threshold_dx"), m_defaultObsStopLength);
+    s.setValue(QStringLiteral("obstacle/id_stop_range_threshold_dy"), m_defaultObsStopWidth);
+    s.setValue(QStringLiteral("obstacle/id_deceleration_range_threshold_dx"), m_defaultObsDecelLength);
+    s.setValue(QStringLiteral("obstacle/id_deceleration_range_threshold_dy"), m_defaultObsDecelWidth);
 }
 
 void MotionConfigManager::setMaxSpeed(double val)
@@ -111,6 +128,68 @@ void MotionConfigManager::setRouteWidth(double val)
     }
 }
 
+void MotionConfigManager::setDefaultObsStopRange(double dx, double dy)
+{
+    if (dx >= 0.0 && dy >= 0.0 && (!qFuzzyCompare(dx, m_defaultObsStopLength) || !qFuzzyCompare(dy, m_defaultObsStopWidth))) {
+        m_defaultObsStopLength = dx;
+        m_defaultObsStopWidth = dy;
+        saveToSettings();
+        emit configChanged();
+    }
+}
+
+void MotionConfigManager::setDefaultObsDecelRange(double dx, double dy)
+{
+    if (dx >= 0.0 && dy >= 0.0 && (!qFuzzyCompare(dx, m_defaultObsDecelLength) || !qFuzzyCompare(dy, m_defaultObsDecelWidth))) {
+        m_defaultObsDecelLength = dx;
+        m_defaultObsDecelWidth = dy;
+        saveToSettings();
+        emit configChanged();
+    }
+}
+
+void MotionConfigManager::updateObstacleConfig(const QJsonObject &params)
+{
+    bool changed = false;
+    if (params.contains(QStringLiteral("id_stop_range_threshold"))) {
+        QJsonValue val = params.value(QStringLiteral("id_stop_range_threshold"));
+        if (val.isArray()) {
+            QJsonArray arr = val.toArray();
+            if (arr.size() >= 2) {
+                double dx = arr.at(0).toDouble(m_defaultObsStopLength);
+                double dy = arr.at(1).toDouble(m_defaultObsStopWidth);
+                if (dx >= 0.0 && dy >= 0.0 && (!qFuzzyCompare(dx, m_defaultObsStopLength) || !qFuzzyCompare(dy, m_defaultObsStopWidth))) {
+                    m_defaultObsStopLength = dx;
+                    m_defaultObsStopWidth  = dy;
+                    changed = true;
+                }
+            }
+        }
+    }
+    if (params.contains(QStringLiteral("id_deceleration_range_threshold"))) {
+        QJsonValue val = params.value(QStringLiteral("id_deceleration_range_threshold"));
+        if (val.isArray()) {
+            QJsonArray arr = val.toArray();
+            if (arr.size() >= 2) {
+                double dx = arr.at(0).toDouble(m_defaultObsDecelLength);
+                double dy = arr.at(1).toDouble(m_defaultObsDecelWidth);
+                if (dx >= 0.0 && dy >= 0.0 && (!qFuzzyCompare(dx, m_defaultObsDecelLength) || !qFuzzyCompare(dy, m_defaultObsDecelWidth))) {
+                    m_defaultObsDecelLength = dx;
+                    m_defaultObsDecelWidth  = dy;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    if (changed) {
+        saveToSettings();
+        qDebug() << "[MotionConfigManager] Updated obstacle parameters: stopRange=[" << m_defaultObsStopLength << "," << m_defaultObsStopWidth
+                 << "] decelRange=[" << m_defaultObsDecelLength << "," << m_defaultObsDecelWidth << "]";
+        emit configChanged();
+    }
+}
+
 void MotionConfigManager::updateFromJsonObject(const QJsonObject &params)
 {
     bool changed = false;
@@ -149,6 +228,8 @@ void MotionConfigManager::updateFromJsonObject(const QJsonObject &params)
                  << "max_angular_speed=" << m_maxAngularSpeedDeg;
         emit configChanged();
     }
+
+    updateObstacleConfig(params);
 }
 
 QJsonObject MotionConfigManager::toJsonObject() const

@@ -267,11 +267,10 @@ bool MqttService::matchTopic(const QString &filter, const QString &topic)
         return true;
     }
 
-    // 针对 /info 的全局别名特判：如果订阅了 "/info"，天然匹配所有机器人的 "/rob/+/info" 话题
-    if (cleanFilter == QStringLiteral("/info")) {
-        if (cleanTopic.endsWith(cleanFilter)) {
-            return true;
-        }
+    // 不存在 "/rob/info" 和 "/info"，只有 "/rob/1/info"
+    // 若有遗留接口传入 "/info"、"info" 或 "/rob/info" 订阅过滤器，严格仅匹配真实唯一的 "/rob/1/info" 话题
+    if (cleanFilter == QStringLiteral("/info") || cleanFilter == QStringLiteral("info") || cleanFilter == QStringLiteral("/rob/info")) {
+        return cleanTopic == QStringLiteral("/rob/1/info");
     }
 
     // MQTT 标准分层通配符匹配 ('+' 匹配单级, '#' 匹配多级)

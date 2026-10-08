@@ -4,6 +4,8 @@
 #include "core/Toast.h"
 #include <QFile>
 #include <QFileDialog>
+#include <QDir>
+#include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QJsonDocument>
@@ -281,6 +283,40 @@ static void ensureAlignConfig(QJsonArray &configs) {
   }
 }
 
+static void ensureObstacleConfig(QJsonArray &configs) {
+  auto &mc = MotionConfigManager::instance();
+  for (int i = 0; i < configs.size(); ++i) {
+    QJsonObject entry = configs[i].toObject();
+    QString name = entry.value("name").toString().toLower();
+    QString path = entry.value("file_path").toString().toLower();
+    QJsonObject params = entry.value("params").toObject();
+    if (params.contains("id_stop_range_threshold") || params.contains("id_deceleration_range_threshold") ||
+        name.contains("obstacle") || path.contains("obstacle") || name.contains("config") || path.contains("config.yaml")) {
+      bool modified = false;
+      if (!params.contains("id_stop_range_threshold")) {
+        QJsonArray stopArr;
+        stopArr.append(mc.defaultObsStopLength());
+        stopArr.append(mc.defaultObsStopWidth());
+        params["id_stop_range_threshold"] = stopArr;
+        modified = true;
+      }
+      if (!params.contains("id_deceleration_range_threshold")) {
+        QJsonArray decelArr;
+        decelArr.append(mc.defaultObsDecelLength());
+        decelArr.append(mc.defaultObsDecelWidth());
+        params["id_deceleration_range_threshold"] = decelArr;
+        modified = true;
+      }
+      if (modified) {
+        entry["params"] = params;
+        configs[i] = entry;
+      }
+      mc.updateObstacleConfig(params);
+      break;
+    }
+  }
+}
+
 void EditConfigWidget::refreshData() { loadAll(); }
 
 void EditConfigWidget::loadAll() {
@@ -347,6 +383,7 @@ void EditConfigWidget::loadAll() {
         // 确保“运动控制”分组及对应的7项参数完备存在
         ensureMotionControlConfig(list);
         ensureAlignConfig(list);
+        ensureObstacleConfig(list);
 
         m_configs = list;
         refreshGroups();
@@ -524,6 +561,13 @@ QPair<QString, QString> EditConfigWidget::fieldMetaFor(const QString &key) {
       {"arrival_angle_tolerance", {"到达目标允许的角度误差", "单位 °；此处使用角度制"}},
       {"route_width", {"路线宽度配置值", "单位 m；全宽/半宽及控制用途尚未接入定义"}},
 
+      // 障碍物配置
+      {"id_stop_range_threshold",
+       {"停车区间扩展量",
+        "停车区间扩展量 [dx, dy]，分别为车体边界外纵向、横向的裕量，不是区域总长宽，单位 m"}},
+      {"id_deceleration_range_threshold",
+       {"减速区间基础扩展量",
+        "减速区间基础扩展量 [dx, dy]；实际减速边界还可能根据速度和制动距离扩大，单位 m"}},
   };
   return meta.value(key, {"", ""});
 }
@@ -731,6 +775,239 @@ QString EditConfigWidget::basename(const QString &path) const {
   return idx >= 0 ? path.mid(idx + 1) : path;
 }
 
+void EditConfigWidget::syncObstacleParamsToRouteNetwork(double stopDx, double stopDy,
+                                                       double decelDx, double decelDy,
+                                                       std::function<void(bool ok)> onDone) {
+  ApiService::instance().loadEditedMap([this, stopDx, stopDy, decelDx, decelDy, onDone](int code, const QJsonObject &resp) {
+    if (code != 200) {
+      qWarning() << "[EditConfigWidget] Failed to load route network for obstacle sync, code:" << code;
+      if (onDone) onDone(false);
+      return;
+    }
+
+    QString jsonStr = resp.value("json").toString();
+    if (jsonStr.isEmpty()) {
+      if (onDone) onDone(false);
+      return;
+    }
+
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+      if (onDone) onDone(false);
+      return;
+    }
+
+    QJsonObject geojson = doc.object();
+    QString mapId = geojson.value("mapId").toString();
+    QString mapName = geojson.value("mapName").toString();
+
+    auto isSpecialPoint = [](const QJsonObject &props) -> bool {
+      QString id = props.value("id").toString();
+      QString type = props.value("type").toString();
+      QString typeName = props.value("typeName").toString();
+      QString name = props.value("name").toString();
+
+      if (id.startsWith("c_", Qt::CaseInsensitive) || id.startsWith("hp_", Qt::CaseInsensitive) ||
+          id.startsWith("cp_", Qt::CaseInsensitive) || id.startsWith("ap_", Qt::CaseInsensitive)) {
+        return true;
+      }
+      if (type.compare("charge", Qt::CaseInsensitive) == 0 ||
+          type.compare("highPrecision", Qt::CaseInsensitive) == 0 ||
+          type.compare("chargeEpc", Qt::CaseInsensitive) == 0 ||
+          type.compare("highPrecisionEpc", Qt::CaseInsensitive) == 0) {
+        return true;
+      }
+      if (typeName.compare("ChargePoint", Qt::CaseInsensitive) == 0 ||
+          typeName.compare("ActionPoint", Qt::CaseInsensitive) == 0) {
+        return true;
+      }
+      if (name.startsWith("CP", Qt::CaseInsensitive) || name.startsWith("AP", Qt::CaseInsensitive) ||
+          name.contains("充电") || name.contains("工作站")) {
+        return true;
+      }
+      return false;
+    };
+
+    if (geojson.contains("features") && geojson.value("features").isArray()) {
+      QJsonArray features = geojson.value("features").toArray();
+      for (int i = 0; i < features.size(); ++i) {
+        QJsonObject feat = features[i].toObject();
+        QJsonObject props = feat.value("properties").toObject();
+        QJsonObject geom = feat.value("geometry").toObject();
+        QString gtype = geom.value("type").toString();
+
+        if (gtype == "Point") {
+          if (isSpecialPoint(props)) {
+            // 高精度点（工作站）或充电桩点（特殊工作站）的四个避障参数永远为零
+            props["intrusion_stop_length"]         = 0.0;
+            props["intrusion_stop_width"]          = 0.0;
+            props["intrusion_deceleration_length"] = 0.0;
+            props["intrusion_deceleration_width"]  = 0.0;
+            props["is_custom_obstacle"]            = false;
+            if (props.contains("actions") && props.value("actions").isArray()) {
+              QJsonArray acts = props.value("actions").toArray();
+              for (int a = 0; a < acts.size(); ++a) {
+                QJsonObject act = acts[a].toObject();
+                if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
+                  act["name"] = "实时避障范围";
+                  act["action_type"] = 21;
+                  act["intrusion_stop_length"]         = 0.0;
+                  act["intrusion_stop_width"]          = 0.0;
+                  act["intrusion_deceleration_length"] = 0.0;
+                  act["intrusion_deceleration_width"]  = 0.0;
+                  act["is_custom_obstacle"]            = false;
+                  acts[a] = act;
+                }
+              }
+              props["actions"] = acts;
+            }
+          } else {
+            // 普通站点：如果用户修改过避障参数，则不使用全局避障参数
+            bool isCustom = props.value("is_custom_obstacle").toBool(props.value("custom_obstacle").toBool(false));
+            if (!isCustom) {
+              props["intrusion_stop_length"]         = stopDx;
+              props["intrusion_stop_width"]          = stopDy;
+              props["intrusion_deceleration_length"] = decelDx;
+              props["intrusion_deceleration_width"]  = decelDy;
+              props["is_custom_obstacle"]            = false;
+
+              QJsonArray acts = props.value("actions").toArray();
+              bool foundAct = false;
+              for (int a = 0; a < acts.size(); ++a) {
+                QJsonObject act = acts[a].toObject();
+                if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
+                  act["name"] = "实时避障范围";
+                  act["action_type"] = 21;
+                  act["intrusion_stop_length"]         = stopDx;
+                  act["intrusion_stop_width"]          = stopDy;
+                  act["intrusion_deceleration_length"] = decelDx;
+                  act["intrusion_deceleration_width"]  = decelDy;
+                  act["is_custom_obstacle"]            = false;
+                  acts[a] = act;
+                  foundAct = true;
+                  break;
+                }
+              }
+              if (!foundAct && (stopDx > 0.0 || stopDy > 0.0 || decelDx > 0.0 || decelDy > 0.0)) {
+                QJsonObject act;
+                act["name"] = "实时避障范围";
+                act["action_type"] = 21;
+                act["intrusion_stop_length"]         = stopDx;
+                act["intrusion_stop_width"]          = stopDy;
+                act["intrusion_deceleration_length"] = decelDx;
+                act["intrusion_deceleration_width"]  = decelDy;
+                act["is_custom_obstacle"]            = false;
+                acts.append(act);
+              }
+              props["actions"] = acts;
+            }
+          }
+        } else if (gtype == "LineString" || gtype == "MultiPoint") {
+          // 线和曲线：如果用户修改过避障参数，则不使用全局避障参数
+          bool isCustom = props.value("is_custom_obstacle").toBool(props.value("custom_obstacle").toBool(false));
+          if (!isCustom) {
+            props["intrusion_stop_length"]         = stopDx;
+            props["intrusion_stop_width"]          = stopDy;
+            props["intrusion_deceleration_length"] = decelDx;
+            props["intrusion_deceleration_width"]  = decelDy;
+            props["is_custom_obstacle"]            = false;
+          }
+        }
+
+        feat["properties"] = props;
+        features[i] = feat;
+      }
+      geojson["features"] = features;
+    }
+
+    if (!geojson.contains("features") && (geojson.contains("points") || geojson.contains("lines") || geojson.contains("curves"))) {
+      auto updatePoints = [&](QJsonArray &arr, bool isSpecialArr) {
+        for (int i = 0; i < arr.size(); ++i) {
+          QJsonObject pt = arr[i].toObject();
+          if (isSpecialArr || isSpecialPoint(pt)) {
+            pt["intrusion_stop_length"]         = 0.0;
+            pt["intrusion_stop_width"]          = 0.0;
+            pt["intrusion_deceleration_length"] = 0.0;
+            pt["intrusion_deceleration_width"]  = 0.0;
+            pt["is_custom_obstacle"]            = false;
+          } else {
+            bool isCustom = pt.value("is_custom_obstacle").toBool(pt.value("custom_obstacle").toBool(false));
+            if (!isCustom) {
+              pt["intrusion_stop_length"]         = stopDx;
+              pt["intrusion_stop_width"]          = stopDy;
+              pt["intrusion_deceleration_length"] = decelDx;
+              pt["intrusion_deceleration_width"]  = decelDy;
+              pt["is_custom_obstacle"]            = false;
+            }
+          }
+          arr[i] = pt;
+        }
+      };
+      auto updateLines = [&](QJsonArray &arr) {
+        for (int i = 0; i < arr.size(); ++i) {
+          QJsonObject ln = arr[i].toObject();
+          bool isCustom = ln.value("is_custom_obstacle").toBool(ln.value("custom_obstacle").toBool(false));
+          if (!isCustom) {
+            ln["intrusion_stop_length"]         = stopDx;
+            ln["intrusion_stop_width"]          = stopDy;
+            ln["intrusion_deceleration_length"] = decelDx;
+            ln["intrusion_deceleration_width"]  = decelDy;
+            ln["is_custom_obstacle"]            = false;
+          }
+          arr[i] = ln;
+        }
+      };
+      if (geojson.contains("points")) {
+        QJsonArray pts = geojson.value("points").toArray();
+        updatePoints(pts, false);
+        geojson["points"] = pts;
+      }
+      if (geojson.contains("charges")) {
+        QJsonArray chs = geojson.value("charges").toArray();
+        updatePoints(chs, true);
+        geojson["charges"] = chs;
+      }
+      if (geojson.contains("highPrecisionPoints")) {
+        QJsonArray hps = geojson.value("highPrecisionPoints").toArray();
+        updatePoints(hps, true);
+        geojson["highPrecisionPoints"] = hps;
+      }
+      if (geojson.contains("lines")) {
+        QJsonArray lns = geojson.value("lines").toArray();
+        updateLines(lns);
+        geojson["lines"] = lns;
+      }
+      if (geojson.contains("curves")) {
+        QJsonArray cvs = geojson.value("curves").toArray();
+        updateLines(cvs);
+        geojson["curves"] = cvs;
+      }
+    }
+
+    ApiService::instance().saveEditedMap(geojson, [this, geojson, mapName, mapId, onDone](int saveCode, const QJsonObject &saveResp) {
+      if (saveCode == 200) {
+        if (!mapId.isEmpty() && !mapName.isEmpty()) {
+          QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + mapName + "_" + mapId;
+          QDir().mkpath(localDir);
+          QFile rf(localDir + "/route.json");
+          if (rf.open(QIODevice::WriteOnly)) {
+            rf.write(QJsonDocument(geojson).toJson());
+            rf.close();
+          }
+        }
+        qDebug() << "[EditConfigWidget] Route network obstacle parameters synchronized and saved successfully!";
+        emit routeNetworkUpdated();
+        if (onDone) onDone(true);
+      } else {
+        QString err = saveResp.value("msg").toString(saveResp.value("message").toString());
+        qWarning() << "[EditConfigWidget] Failed to save route network after obstacle sync, code:" << saveCode << "err:" << err;
+        if (onDone) onDone(false);
+      }
+    });
+  });
+}
+
 void EditConfigWidget::onSave() {
   // 强行使焦点离开输入框和表格，清除当前选中索引，促使 Qt 自动提交正在编辑的输入框数据
   if (QWidget *fw = focusWidget()) {
@@ -754,6 +1031,7 @@ void EditConfigWidget::onSave() {
         path.contains("motion_control") || name == "运动控制") {
       MotionConfigManager::instance().updateFromJsonObject(entry.value("params").toObject());
     }
+    MotionConfigManager::instance().updateObstacleConfig(entry.value("params").toObject());
     QString key =
         entry.value("file_path").toString(entry.value("name").toString());
     QJsonObject val;
@@ -768,8 +1046,13 @@ void EditConfigWidget::onSave() {
   QSettings settings;
   settings.setValue("editConfig/cachedConfigs", QJsonDocument(m_configs).toJson(QJsonDocument::Compact));
 
+  // 同步执行修改路网接口，把路网中的普通点（站点）和线的避障参数修改并保存
+  const auto &mc = MotionConfigManager::instance();
+  syncObstacleParamsToRouteNetwork(mc.defaultObsStopLength(), mc.defaultObsStopWidth(),
+                                   mc.defaultObsDecelLength(), mc.defaultObsDecelWidth());
+
   m_saveBtn->setEnabled(false);
-  auto *loading = new LoadingDialog("正在保存配置参数...", this);
+  auto *loading = new LoadingDialog("正在保存配置参数并同步路网...", this);
   loading->show();
   ApiService::instance().modifyParam(
       payload, [this, loading](int code, const QJsonObject &) {
@@ -777,9 +1060,9 @@ void EditConfigWidget::onSave() {
         loading->deleteLater();
         m_saveBtn->setEnabled(true);
         if (code == 200) {
-          Toast::success(this, "保存成功");
+          Toast::success(this, "配置参数与路网避障参数已保存");
         } else {
-          QMessageBox::warning(this, "错误", "保存失败 (已在本地缓存最新配置)");
+          QMessageBox::warning(this, "错误", "保存配置参数失败 (已在本地缓存最新配置)");
         }
       });
 }
@@ -947,6 +1230,11 @@ void EditConfigWidget::onParamCellChanged(int row, int col) {
       AlignConfigManager::instance().setAntiAlignDepth(newLeaf.toDouble(AlignConfigManager::instance().antiAlignDepth()));
     } else if (lastKey == "cylinder_length") {
       AlignConfigManager::instance().setCylinderLength(newLeaf.toDouble(AlignConfigManager::instance().cylinderLength()));
+    } else if (lastKey == "id_stop_range_threshold" || lastKey == "id_deceleration_range_threshold") {
+      MotionConfigManager::instance().updateObstacleConfig(entry.value("params").toObject());
+      const auto &mc = MotionConfigManager::instance();
+      syncObstacleParamsToRouteNetwork(mc.defaultObsStopLength(), mc.defaultObsStopWidth(),
+                                       mc.defaultObsDecelLength(), mc.defaultObsDecelWidth());
     }
   }
 }

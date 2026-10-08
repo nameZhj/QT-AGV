@@ -149,6 +149,7 @@ private:
     void setRightTab(int tab);            // 切换 属性/图元/图层
     void switchPropsView(int view);       // 切换属性页显示的内容
     void updateDeviceMonitor(const RobotInfo &info);   // 设备数据监视 (MQTT /rob/{id}/info)
+    void updateDeviceStatusDisplay(const RobotInfo &info); // 统一设备与导航运行状态显示
     void updateMapPropsView();                         // 地图属性 (点击空白)
 
     void refreshElementList();                          // 图元列表载入

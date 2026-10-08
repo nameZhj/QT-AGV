@@ -907,17 +907,15 @@ void MapShowWidget::initMqtt()
         onMqttMessage(t, p);
     };
 
-    // 订阅标准 /info 话题
-    MqttService::instance().subscribeTopic("/info", 0, infoCb);
-    MqttService::instance().subscribeTopic("info", 0, infoCb);
-    MqttService::instance().subscribeTopic("/rob/info", 0, infoCb);
-
-    // 订阅所有设备位置信息 (对应 Vue: /rob/{carId}/info)
+    // 订阅设备位置信息 (对应 Vue: /rob/1/info)
+    MqttService::instance().subscribeTopic(QStringLiteral("/rob/1/info"), 0, infoCb);
     for (const auto &item : m_carList) {
         QJsonObject car = item.toObject();
         QString carId = jsonIdStr(car.value("carId"));
-        QString topic = QString("/rob/%1/info").arg(carId);
-        MqttService::instance().subscribeTopic(topic, 0, infoCb);
+        if (!carId.isEmpty() && carId != QStringLiteral("1")) {
+            QString topic = QString("/rob/%1/info").arg(carId);
+            MqttService::instance().subscribeTopic(topic, 0, infoCb);
+        }
     }
 
     // 订阅设备在线状态 (对应 Vue: /rob/online)
@@ -940,13 +938,13 @@ void MapShowWidget::initMqtt()
 
 void MapShowWidget::disconnectMqtt()
 {
-    MqttService::instance().unsubscribeTopic("/info");
-    MqttService::instance().unsubscribeTopic("info");
-    MqttService::instance().unsubscribeTopic("/rob/info");
+    MqttService::instance().unsubscribeTopic(QStringLiteral("/rob/1/info"));
     for (const auto &item : m_carList) {
         QJsonObject car = item.toObject();
         QString carId = jsonIdStr(car.value("carId"));
-        MqttService::instance().unsubscribeTopic(QString("/rob/%1/info").arg(carId));
+        if (!carId.isEmpty() && carId != QStringLiteral("1")) {
+            MqttService::instance().unsubscribeTopic(QString("/rob/%1/info").arg(carId));
+        }
     }
     MqttService::instance().unsubscribeTopic("/rob/online");
 }

@@ -1,5 +1,6 @@
 #include "TeleopController.h"
 #include "core/AppConfig.h"
+#include "core/ApiService.h"
 #include "core/MqttService.h"
 #include "core/MotionConfigManager.h"
 
@@ -63,10 +64,19 @@ void TeleopController::setMaxBoostMultiplier(double mult)
     m_maxBoostMultiplier = qMax(1.0, mult);
 }
 
+void TeleopController::setUserPreempted(bool preempted)
+{
+    if (m_userPreempted != preempted) {
+        m_userPreempted = preempted;
+        emit userPreemptedChanged(m_userPreempted);
+    }
+}
+
 void TeleopController::setActive(bool on)
 {
     if (m_active == on) return;
     m_active = on;
+    setUserPreempted(on);
 
     if (on) {
         // 启用：安装全局事件过滤器拦截遥控键、启动定时器、发布启用状态
@@ -76,6 +86,14 @@ void TeleopController::setActive(bool on)
         resetKeyStates();
         m_timer->start();
         publishTeleopEnable(true);
+
+        // 抢占控制权：统一使用 PUT /robot/navigation/control?command=pause navigation
+        ApiService::instance().controlNavigation(QStringLiteral("pause navigation"), [](int code, const QJsonObject &resp) {
+            qDebug() << "[TeleopController] 抢占控制权 pause navigation code:" << code << resp;
+            if (code != 200) {
+                qWarning("抢占控制权暂停导航失败 (HTTP %d)", code);
+            }
+        });
     } else {
         // 停用：安全停止定时器、复位按键、下发零速急停指令、移除事件过滤器
         m_timer->stop();
@@ -89,6 +107,14 @@ void TeleopController::setActive(bool on)
         emit motionChanged(0.0, 0.0);
         emit brakeChanged(false);
         emit hoistChanged(0);
+
+        // 释放控制权恢复导航：统一使用 PUT /robot/navigation/control?command=continue navigation
+        ApiService::instance().controlNavigation(QStringLiteral("continue navigation"), [](int code, const QJsonObject &resp) {
+            qDebug() << "[TeleopController] 恢复导航 continue navigation code:" << code << resp;
+            if (code != 200) {
+                qWarning("恢复导航失败 (HTTP %d)", code);
+            }
+        });
     }
 
     emit activeChanged(m_active);

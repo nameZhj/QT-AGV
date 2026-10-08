@@ -112,8 +112,12 @@ private:
 
     // 执行期间锁定任务链/任务/组列表 (robotWorking=false 时解锁)
     void setListsLocked(bool locked);
+    void updateLockOverlayGeometry();
     void installLockFilter(QWidget *w, bool install);
     void applyRuntimeSelection();          // 按 MQTT 上报的当前任务/组设置选中项
+    void updateRuntimeCardHighlights(int currentTaskIdx, int currentGroupIdx);
+    bool matchSubTaskName(int taskIdx, const QString &targetName) const;
+    bool matchGroupName(int groupIdx, const QString &targetName) const;
     QString subTaskNameAt(int taskIdx) const;
     QString groupNameAt(int groupIdx) const;
 

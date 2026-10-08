@@ -1,12 +1,46 @@
 #include "RouteNetworkApi.h"
 #include "ApiService.h"
 #include "MapPgmUtil.h"
+#include "MotionConfigManager.h"
 #include <cmath>
 #include <QDebug>
 
 // ============================================================================
 //  RoutePoint 序列化与反序列化
 // ============================================================================
+
+bool RoutePoint::isSpecial() const
+{
+    if (id.startsWith("hp_", Qt::CaseInsensitive) || id.startsWith("c_", Qt::CaseInsensitive) ||
+        id.startsWith("ap_", Qt::CaseInsensitive) || id.startsWith("cp_", Qt::CaseInsensitive)) {
+        return true;
+    }
+    if (typeName.compare("ActionPoint", Qt::CaseInsensitive) == 0 ||
+        typeName.compare("ChargePoint", Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    if (type.compare("highPrecision", Qt::CaseInsensitive) == 0 ||
+        type.compare("charge", Qt::CaseInsensitive) == 0 ||
+        type.compare("highPrecisionEpc", Qt::CaseInsensitive) == 0 ||
+        type.compare("chargeEpc", Qt::CaseInsensitive) == 0 ||
+        type.compare("ActionPoint", Qt::CaseInsensitive) == 0 ||
+        type.compare("ChargePoint", Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    if (name.startsWith("AP", Qt::CaseInsensitive) ||
+        name.startsWith("CP", Qt::CaseInsensitive) ||
+        name.startsWith("TL", Qt::CaseInsensitive)) {
+        return true;
+    }
+    if (name.contains("工作站") || name.contains("充电") ||
+        label.contains("工作站") || label.contains("充电")) {
+        return true;
+    }
+    if (epc_x != 0.0 || epc_y != 0.0 || epc_theta != 0.0) {
+        return true;
+    }
+    return false;
+}
 
 QJsonObject RoutePoint::toJson() const
 {
@@ -32,7 +66,7 @@ QJsonObject RoutePoint::toJson() const
     if (waitTimeout > 0.0) obj["waitTimeout"] = waitTimeout;
 
     // 工作站与特殊工作站相对定位参数
-    if (epc_x != 0.0 || epc_y != 0.0 || epc_theta != 0.0 || type == "charge" || type == "highPrecision") {
+    if (epc_x != 0.0 || epc_y != 0.0 || epc_theta != 0.0 || type == "charge" || type == "highPrecision" || isSpecial()) {
         obj["epc_x"]     = epc_x;
         obj["epc_y"]     = epc_y;
         obj["epc_theta"] = epc_theta;
@@ -44,42 +78,46 @@ QJsonObject RoutePoint::toJson() const
     }
     if (!typeName.isEmpty()) obj["typeName"] = typeName;
 
-    // 实时避障参数 (与 Vue actions / properties 格式 100% 对齐)
-    if (intrusionStopLength > 0.0 || intrusionStopWidth > 0.0 ||
-        intrusionDecelLength > 0.0 || intrusionDecelWidth > 0.0) {
-        obj["intrusion_stop_length"]         = intrusionStopLength;
-        obj["intrusion_stop_width"]          = intrusionStopWidth;
-        obj["intrusion_deceleration_length"] = intrusionDecelLength;
-        obj["intrusion_deceleration_width"]  = intrusionDecelWidth;
-    }
+    // 实时避障参数 (高精度点/工作站或充电桩点/特殊工作站永久强制为 0)
+    bool special = isSpecial();
+    double sl = special ? 0.0 : intrusionStopLength;
+    double sw = special ? 0.0 : intrusionStopWidth;
+    double dl = special ? 0.0 : intrusionDecelLength;
+    double dw = special ? 0.0 : intrusionDecelWidth;
+
+    obj["intrusion_stop_length"]         = sl;
+    obj["intrusion_stop_width"]          = sw;
+    obj["intrusion_deceleration_length"] = dl;
+    obj["intrusion_deceleration_width"]  = dw;
+    obj["is_custom_obstacle"]            = special ? false : isCustomObstacle;
+
     QJsonArray outActions = actions;
-    if (intrusionStopLength > 0.0 || intrusionStopWidth > 0.0 ||
-        intrusionDecelLength > 0.0 || intrusionDecelWidth > 0.0) {
-        bool foundAction = false;
-        for (int i = 0; i < outActions.size(); ++i) {
-            QJsonObject act = outActions[i].toObject();
-            if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
-                act["name"] = "实时避障范围";
-                act["action_type"] = 21;
-                act["intrusion_stop_length"]         = intrusionStopLength;
-                act["intrusion_stop_width"]          = intrusionStopWidth;
-                act["intrusion_deceleration_length"] = intrusionDecelLength;
-                act["intrusion_deceleration_width"]  = intrusionDecelWidth;
-                outActions[i] = act;
-                foundAction = true;
-                break;
-            }
-        }
-        if (!foundAction) {
-            QJsonObject act;
+    bool foundAction = false;
+    for (int i = 0; i < outActions.size(); ++i) {
+        QJsonObject act = outActions[i].toObject();
+        if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
             act["name"] = "实时避障范围";
             act["action_type"] = 21;
-            act["intrusion_stop_length"]         = intrusionStopLength;
-            act["intrusion_stop_width"]          = intrusionStopWidth;
-            act["intrusion_deceleration_length"] = intrusionDecelLength;
-            act["intrusion_deceleration_width"]  = intrusionDecelWidth;
-            outActions.append(act);
+            act["intrusion_stop_length"]         = sl;
+            act["intrusion_stop_width"]          = sw;
+            act["intrusion_deceleration_length"] = dl;
+            act["intrusion_deceleration_width"]  = dw;
+            act["is_custom_obstacle"]            = special ? false : isCustomObstacle;
+            outActions[i] = act;
+            foundAction = true;
+            break;
         }
+    }
+    if (!foundAction && !special) {
+        QJsonObject act;
+        act["name"] = "实时避障范围";
+        act["action_type"] = 21;
+        act["intrusion_stop_length"]         = sl;
+        act["intrusion_stop_width"]          = sw;
+        act["intrusion_deceleration_length"] = dl;
+        act["intrusion_deceleration_width"]  = dw;
+        act["is_custom_obstacle"]            = isCustomObstacle;
+        outActions.append(act);
     }
     if (!outActions.isEmpty()) {
         obj["actions"] = outActions;
@@ -122,6 +160,7 @@ RoutePoint RoutePoint::fromJson(const QJsonObject &obj)
     pt.intrusionStopWidth   = obj.value("intrusion_stop_width").toDouble(0.0);
     pt.intrusionDecelLength = obj.value("intrusion_deceleration_length").toDouble(0.0);
     pt.intrusionDecelWidth  = obj.value("intrusion_deceleration_width").toDouble(0.0);
+    pt.isCustomObstacle     = obj.value("is_custom_obstacle").toBool(obj.value("custom_obstacle").toBool(false));
     pt.actions              = obj.value("actions").toArray();
     if (pt.intrusionStopLength == 0.0 && pt.intrusionStopWidth == 0.0 &&
         pt.intrusionDecelLength == 0.0 && pt.intrusionDecelWidth == 0.0) {
@@ -132,8 +171,28 @@ RoutePoint RoutePoint::fromJson(const QJsonObject &obj)
                 pt.intrusionStopWidth   = act.value("intrusion_stop_width").toDouble(0.0);
                 pt.intrusionDecelLength = act.value("intrusion_deceleration_length").toDouble(0.0);
                 pt.intrusionDecelWidth  = act.value("intrusion_deceleration_width").toDouble(0.0);
+                if (act.contains("is_custom_obstacle")) {
+                    pt.isCustomObstacle = act.value("is_custom_obstacle").toBool(false);
+                }
                 break;
             }
+        }
+    }
+    if (pt.isSpecial()) {
+        pt.intrusionStopLength  = 0.0;
+        pt.intrusionStopWidth   = 0.0;
+        pt.intrusionDecelLength = 0.0;
+        pt.intrusionDecelWidth  = 0.0;
+        pt.isCustomObstacle     = false;
+    } else {
+        if (!pt.isCustomObstacle && !obj.contains("intrusion_stop_length") &&
+            pt.intrusionStopLength <= 0.0 && pt.intrusionStopWidth <= 0.0 &&
+            pt.intrusionDecelLength <= 0.0 && pt.intrusionDecelWidth <= 0.0) {
+            const auto &mc = MotionConfigManager::instance();
+            pt.intrusionStopLength  = mc.defaultObsStopLength();
+            pt.intrusionStopWidth   = mc.defaultObsStopWidth();
+            pt.intrusionDecelLength = mc.defaultObsDecelLength();
+            pt.intrusionDecelWidth  = mc.defaultObsDecelWidth();
         }
     }
 
@@ -208,6 +267,7 @@ QJsonObject RouteSegment::toJson() const
     obj["intrusion_stop_width"]          = intrusionStopWidth;
     obj["intrusion_deceleration_length"] = intrusionDecelLength;
     obj["intrusion_deceleration_width"]  = intrusionDecelWidth;
+    obj["is_custom_obstacle"]            = isCustomObstacle;
 
     return obj;
 }
@@ -254,10 +314,20 @@ RouteSegment RouteSegment::fromJson(const QJsonObject &obj)
     seg.spinTurn      = obj.value("spinTurn").toBool(true);
     seg.avoidObstacle = obj.value("avoidObstacle").toBool(true);
 
-    seg.intrusionStopLength  = obj.value("intrusion_stop_length").toDouble(0.0);
-    seg.intrusionStopWidth   = obj.value("intrusion_stop_width").toDouble(0.0);
-    seg.intrusionDecelLength = obj.value("intrusion_deceleration_length").toDouble(0.0);
-    seg.intrusionDecelWidth  = obj.value("intrusion_deceleration_width").toDouble(0.0);
+    seg.isCustomObstacle     = obj.value("is_custom_obstacle").toBool(obj.value("custom_obstacle").toBool(false));
+    const auto &mc = MotionConfigManager::instance();
+    seg.intrusionStopLength  = obj.value("intrusion_stop_length").toDouble(seg.isCustomObstacle ? 0.0 : mc.defaultObsStopLength());
+    seg.intrusionStopWidth   = obj.value("intrusion_stop_width").toDouble(seg.isCustomObstacle ? 0.0 : mc.defaultObsStopWidth());
+    seg.intrusionDecelLength = obj.value("intrusion_deceleration_length").toDouble(seg.isCustomObstacle ? 0.0 : mc.defaultObsDecelLength());
+    seg.intrusionDecelWidth  = obj.value("intrusion_deceleration_width").toDouble(seg.isCustomObstacle ? 0.0 : mc.defaultObsDecelWidth());
+    if (!seg.isCustomObstacle && !obj.contains("intrusion_stop_length") &&
+        seg.intrusionStopLength <= 0.0 && seg.intrusionStopWidth <= 0.0 &&
+        seg.intrusionDecelLength <= 0.0 && seg.intrusionDecelWidth <= 0.0) {
+        seg.intrusionStopLength  = mc.defaultObsStopLength();
+        seg.intrusionStopWidth   = mc.defaultObsStopWidth();
+        seg.intrusionDecelLength = mc.defaultObsDecelLength();
+        seg.intrusionDecelWidth  = mc.defaultObsDecelWidth();
+    }
 
     return seg;
 }
@@ -299,9 +369,9 @@ RouteNetwork RouteNetworkApi::fromGeoJson(const QJsonObject &root)
             fullObj["x"] = x; fullObj["y"] = y;
             RoutePoint pt = RoutePoint::fromJson(fullObj);
 
-            if (id.startsWith("c_") || pt.type == "charge")
+            if (id.startsWith("c_", Qt::CaseInsensitive) || pt.type == "charge" || pt.typeName == "ChargePoint" || pt.name.startsWith("CP", Qt::CaseInsensitive) || pt.name.contains("充电"))
                 net.charges.append(pt);
-            else if (id.startsWith("hp_") || pt.type == "highPrecision")
+            else if (id.startsWith("hp_", Qt::CaseInsensitive) || pt.type == "highPrecision" || pt.typeName == "ActionPoint" || pt.name.startsWith("AP", Qt::CaseInsensitive) || pt.name.startsWith("TL", Qt::CaseInsensitive) || pt.isSpecial())
                 net.highPrecisionPoints.append(pt);
             else
                 net.points.append(pt);
@@ -339,22 +409,52 @@ RouteNetwork RouteNetworkApi::fromGeoJson(const QJsonObject &root)
 
 QJsonObject RouteNetworkApi::toGeoJson(const RouteNetwork &network)
 {
-    // 汇总线路避障参数同步赋给两端端点
+    // 1. 识别特殊工作站（充电桩）与工作站（高精度点）的 ID 集合
+    QSet<QString> specialIds;
+    for (const auto &pt : network.charges)             specialIds.insert(pt.id);
+    for (const auto &pt : network.highPrecisionPoints) specialIds.insert(pt.id);
+    for (const auto &pt : network.points) {
+        if (pt.isSpecial()) specialIds.insert(pt.id);
+    }
+
+    // 2. 汇总线路避障参数赋给普通站点 (如果线路连接了高精度点或充电桩点，另一端普通站点避障参数值和线保持一致)
     struct ObsTuple { double sl = 0, sw = 0, dl = 0, dw = 0; };
-    QMap<QString, ObsTuple> nodeObs;
+    QMap<QString, ObsTuple> normalNodeObs;
     auto collect = [&](const RouteSegment &seg) {
-        if (seg.intrusionStopLength > 0.0 || seg.intrusionStopWidth > 0.0 ||
-            seg.intrusionDecelLength > 0.0 || seg.intrusionDecelWidth > 0.0) {
-            auto update = [&](const QString &id) {
-                if (id.isEmpty()) return;
-                auto &t = nodeObs[id];
-                t.sl = qMax(t.sl, seg.intrusionStopLength);
-                t.sw = qMax(t.sw, seg.intrusionStopWidth);
-                t.dl = qMax(t.dl, seg.intrusionDecelLength);
-                t.dw = qMax(t.dw, seg.intrusionDecelWidth);
-            };
-            update(seg.startId);
-            update(seg.endId);
+        bool sIsSpecial = specialIds.contains(seg.startId) || seg.startId.startsWith("hp_", Qt::CaseInsensitive) || seg.startId.startsWith("c_", Qt::CaseInsensitive) || seg.startId.startsWith("ap_", Qt::CaseInsensitive) || seg.startId.startsWith("cp_", Qt::CaseInsensitive);
+        bool eIsSpecial = specialIds.contains(seg.endId) || seg.endId.startsWith("hp_", Qt::CaseInsensitive) || seg.endId.startsWith("c_", Qt::CaseInsensitive) || seg.endId.startsWith("ap_", Qt::CaseInsensitive) || seg.endId.startsWith("cp_", Qt::CaseInsensitive);
+
+        const auto &mc = MotionConfigManager::instance();
+        double segSl = seg.intrusionStopLength;
+        double segSw = seg.intrusionStopWidth;
+        double segDl = seg.intrusionDecelLength;
+        double segDw = seg.intrusionDecelWidth;
+        if (!seg.isCustomObstacle && segSl <= 0.0 && segSw <= 0.0 && segDl <= 0.0 && segDw <= 0.0) {
+            segSl = mc.defaultObsStopLength();
+            segSw = mc.defaultObsStopWidth();
+            segDl = mc.defaultObsDecelLength();
+            segDw = mc.defaultObsDecelWidth();
+        }
+
+        auto updateStation = [&](const QString &id) {
+            if (id.isEmpty() || specialIds.contains(id)) return;
+            auto &t = normalNodeObs[id];
+            t.sl = qMax(t.sl, segSl);
+            t.sw = qMax(t.sw, segSw);
+            t.dl = qMax(t.dl, segDl);
+            t.dw = qMax(t.dw, segDw);
+        };
+
+        if (sIsSpecial && !eIsSpecial) {
+            // 线的起点是高精度点/充电桩点，另一端是普通站点 -> 站点避障参数与线保持一致
+            updateStation(seg.endId);
+        } else if (!sIsSpecial && eIsSpecial) {
+            // 线的终点是高精度点/充电桩点，另一端是普通站点 -> 站点避障参数与线保持一致
+            updateStation(seg.startId);
+        } else if (!sIsSpecial && !eIsSpecial) {
+            // 线的两端都是普通站点 -> 普通站点避障参数与线保持一致
+            updateStation(seg.startId);
+            updateStation(seg.endId);
         }
     };
     for (const auto &ln : network.lines)  collect(ln);
@@ -362,13 +462,31 @@ QJsonObject RouteNetworkApi::toGeoJson(const RouteNetwork &network)
 
     QJsonArray features;
 
-    auto makePointFeat = [&](RoutePoint pt) {
-        if (nodeObs.contains(pt.id)) {
-            const auto &t = nodeObs[pt.id];
-            pt.intrusionStopLength  = qMax(pt.intrusionStopLength, t.sl);
-            pt.intrusionStopWidth   = qMax(pt.intrusionStopWidth, t.sw);
-            pt.intrusionDecelLength = qMax(pt.intrusionDecelLength, t.dl);
-            pt.intrusionDecelWidth  = qMax(pt.intrusionDecelWidth, t.dw);
+    auto makePointFeat = [&](RoutePoint pt, bool isSpecial) {
+        if (isSpecial || pt.isSpecial() || specialIds.contains(pt.id)) {
+            isSpecial = true;
+            pt.intrusionStopLength  = 0.0;
+            pt.intrusionStopWidth   = 0.0;
+            pt.intrusionDecelLength = 0.0;
+            pt.intrusionDecelWidth  = 0.0;
+            pt.isCustomObstacle     = false;
+        } else if (pt.isCustomObstacle) {
+            // 用户单独修改过避障参数，严格保留自身避障参数，不被相连线或全局参数覆盖
+        } else if (normalNodeObs.contains(pt.id)) {
+            const auto &t = normalNodeObs[pt.id];
+            pt.intrusionStopLength  = t.sl;
+            pt.intrusionStopWidth   = t.sw;
+            pt.intrusionDecelLength = t.dl;
+            pt.intrusionDecelWidth  = t.dw;
+        } else {
+            const auto &mc = MotionConfigManager::instance();
+            if (pt.intrusionStopLength <= 0.0 && pt.intrusionStopWidth <= 0.0 &&
+                pt.intrusionDecelLength <= 0.0 && pt.intrusionDecelWidth <= 0.0) {
+                pt.intrusionStopLength  = mc.defaultObsStopLength();
+                pt.intrusionStopWidth   = mc.defaultObsStopWidth();
+                pt.intrusionDecelLength = mc.defaultObsDecelLength();
+                pt.intrusionDecelWidth  = mc.defaultObsDecelWidth();
+            }
         }
         QJsonArray coords;
         coords.append(pt.x); coords.append(pt.y); coords.append(0.0);
@@ -379,6 +497,32 @@ QJsonObject RouteNetworkApi::toGeoJson(const RouteNetwork &network)
         QJsonObject props = pt.toJson();
         props.remove("x"); props.remove("y");
 
+        // 最终双重保障：如果是特殊工作站或充电桩，强制 properties 里的四个避障参数及 action 21 全部为 0
+        if (isSpecial) {
+            props["intrusion_stop_length"]         = 0.0;
+            props["intrusion_stop_width"]          = 0.0;
+            props["intrusion_deceleration_length"] = 0.0;
+            props["intrusion_deceleration_width"]  = 0.0;
+            props["is_custom_obstacle"]            = false;
+            if (props.contains("actions") && props.value("actions").isArray()) {
+                QJsonArray acts = props.value("actions").toArray();
+                for (int i = 0; i < acts.size(); ++i) {
+                    QJsonObject act = acts[i].toObject();
+                    if (act.value("action_type").toInt() == 21 || act.value("name").toString() == "实时避障范围") {
+                        act["name"] = "实时避障范围";
+                        act["action_type"] = 21;
+                        act["intrusion_stop_length"]         = 0.0;
+                        act["intrusion_stop_width"]          = 0.0;
+                        act["intrusion_deceleration_length"] = 0.0;
+                        act["intrusion_deceleration_width"]  = 0.0;
+                        act["is_custom_obstacle"]            = false;
+                        acts[i] = act;
+                    }
+                }
+                props["actions"] = acts;
+            }
+        }
+
         QJsonObject f;
         f["type"] = "Feature";
         f["geometry"] = geom;
@@ -386,11 +530,21 @@ QJsonObject RouteNetworkApi::toGeoJson(const RouteNetwork &network)
         return f;
     };
 
-    for (const auto &pt : network.points)              features.append(makePointFeat(pt));
-    for (const auto &pt : network.charges)             features.append(makePointFeat(pt));
-    for (const auto &pt : network.highPrecisionPoints) features.append(makePointFeat(pt));
+    for (const auto &pt : network.points)              features.append(makePointFeat(pt, pt.isSpecial()));
+    for (const auto &pt : network.charges)             features.append(makePointFeat(pt, true));
+    for (const auto &pt : network.highPrecisionPoints) features.append(makePointFeat(pt, true));
 
-    for (const auto &ln : network.lines) {
+    for (const auto &rawLn : network.lines) {
+        RouteSegment ln = rawLn;
+        if (!ln.isCustomObstacle &&
+            ln.intrusionStopLength <= 0.0 && ln.intrusionStopWidth <= 0.0 &&
+            ln.intrusionDecelLength <= 0.0 && ln.intrusionDecelWidth <= 0.0) {
+            const auto &mc = MotionConfigManager::instance();
+            ln.intrusionStopLength  = mc.defaultObsStopLength();
+            ln.intrusionStopWidth   = mc.defaultObsStopWidth();
+            ln.intrusionDecelLength = mc.defaultObsDecelLength();
+            ln.intrusionDecelWidth  = mc.defaultObsDecelWidth();
+        }
         QJsonArray ca, cb;
         ca.append(ln.startPos.x()); ca.append(ln.startPos.y()); ca.append(0.0);
         cb.append(ln.endPos.x());   cb.append(ln.endPos.y());   cb.append(0.0);
@@ -410,7 +564,17 @@ QJsonObject RouteNetworkApi::toGeoJson(const RouteNetwork &network)
         features.append(f);
     }
 
-    for (const auto &cv : network.curves) {
+    for (const auto &rawCv : network.curves) {
+        RouteSegment cv = rawCv;
+        if (!cv.isCustomObstacle &&
+            cv.intrusionStopLength <= 0.0 && cv.intrusionStopWidth <= 0.0 &&
+            cv.intrusionDecelLength <= 0.0 && cv.intrusionDecelWidth <= 0.0) {
+            const auto &mc = MotionConfigManager::instance();
+            cv.intrusionStopLength  = mc.defaultObsStopLength();
+            cv.intrusionStopWidth   = mc.defaultObsStopWidth();
+            cv.intrusionDecelLength = mc.defaultObsDecelLength();
+            cv.intrusionDecelWidth  = mc.defaultObsDecelWidth();
+        }
         QJsonArray coords;
         if (!cv.controlPts.isEmpty()) {
             for (const auto &p : cv.controlPts) {

@@ -71,7 +71,8 @@ struct RobotInfo {
     double car_yaw  = 0.0;           ///< 弧度制
 
     // 状态与任务
-    // "0"正常未开机（离线）"2"正常开机（在线未执行任务） "3"正在导航 "4"停止导航，作业中 "5"中止暂停 "6"故障
+    // MQTT Topic: /rob/navigate/status -> {"status":"0"} 就绪, {"status":"1"} 导航中, {"status":"2"} 暂停导航
+    // 刚开机默认初始化为 "0" (就绪)
     QString status  = "0";
     int     task_id = -1;            ///< 小车正在执行的任务id，若无则为 -1
 
@@ -108,37 +109,40 @@ struct RobotInfo {
     }
 
     bool isOnline() const {
-        return !status.isEmpty() && status != "0";
+        return !status.isEmpty();
+    }
+
+    bool isNavigating() const {
+        return status == "1" || status == "2" || status == "3" || status == "5";
     }
 
     QString statusText() const {
-        if (status == "0") return "正常未开机（离线）";
-        if (status == "2") return "正常开机（在线未执行任务）";
-        if (status == "3") return "正在导航";
+        if (status == "0") return "就绪";
+        if (status == "1") return "导航中";
+        if (status == "2") return "暂停导航";
+        if (status == "3") return "导航中";
         if (status == "4") return "停止导航，作业中";
-        if (status == "5") return "中止暂停";
+        if (status == "5") return "暂停导航";
         if (status == "6") return "故障";
-        return status.isEmpty() ? "未知" : QString("状态[%1]").arg(status);
+        return status.isEmpty() ? "就绪" : QString("状态[%1]").arg(status);
     }
 
     QString navStatusText() const {
-        if (status == "3") return "正在导航";
+        if (status == "1" || status == "3") return "导航中";
+        if (status == "2" || status == "5") return "暂停导航";
         if (status == "4") return "停止导航，作业中";
-        if (status == "5") return "中止暂停";
-        if (status == "2") return "未导航";
-        if (status == "0") return "离线";
+        if (status == "0") return "就绪";
         if (status == "6") return "故障";
-        return status.isEmpty() ? "--" : "未导航";
+        return "就绪";
     }
 
     QString statusColor() const {
-        if (status == "0") return "#64748b"; // 灰
-        if (status == "2") return "#22c55e"; // 绿
-        if (status == "3") return "#3b82f6"; // 蓝
-        if (status == "4") return "#06b6d4"; // 青
-        if (status == "5") return "#eab308"; // 黄
-        if (status == "6") return "#ef4444"; // 红
-        return "#94a3b8";
+        if (status == "0") return "#22c55e"; // 绿色 (就绪)
+        if (status == "1" || status == "3") return "#3b82f6"; // 蓝色 (导航中)
+        if (status == "2" || status == "5") return "#f59e0b"; // 黄色 (暂停导航)
+        if (status == "4") return "#06b6d4"; // 青色
+        if (status == "6") return "#ef4444"; // 红色 (故障)
+        return "#22c55e";
     }
 
     double actualLinearSpeed() const {
@@ -181,6 +185,8 @@ public:
 
     // 核心解析与分发 (外部亦可直接喂入特定设备 MQTT 收到的 payload)
     bool updateFromPayload(const QString &topic, const QByteArray &payload, QString *outCarId = nullptr);
+    // 处理 /rob/navigate/status MQTT 状态消息 {"status":"0"就绪, "status":"1"导航中}
+    bool updateNavigateStatus(const QByteArray &payload);
 
     // 静态工具：复用解析单个 JSON 对象到目标 RobotInfo 中
     static bool parseInfoJson(const QJsonObject &d, RobotInfo *outInfo);

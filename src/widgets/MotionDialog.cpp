@@ -2,8 +2,11 @@
 #include "core/ApiService.h"
 #include "core/RobotInfoManager.h"
 #include "core/MotionConfigManager.h"
+#include "core/TaskChainManager.h"
+#include "core/TeleopController.h"
 #include "core/Toast.h"
 
+#include <QPointer>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -41,7 +44,11 @@ MotionDialog::MotionDialog(QWidget *parent)
     connect(&m_motionWatchdog, &QTimer::timeout, this, &MotionDialog::onMotionTimeout);
 
     refreshSpeedLimits();
-    setCanceledState();
+    connect(&TeleopController::instance(), &TeleopController::activeChanged,
+            this, [this](bool) { onCurrentRobotInfoUpdated(RobotInfoManager::instance().currentInfo()); });
+    connect(&TeleopController::instance(), &TeleopController::userPreemptedChanged,
+            this, [this](bool) { onCurrentRobotInfoUpdated(RobotInfoManager::instance().currentInfo()); });
+    onCurrentRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
 }
 
 MotionDialog::~MotionDialog()
@@ -80,6 +87,7 @@ void MotionDialog::showEvent(QShowEvent *event)
 {
     QDialog::showEvent(event);
     refreshSpeedLimits();
+    onCurrentRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
 }
 
 void MotionDialog::refreshSpeedLimits()
@@ -269,8 +277,10 @@ void MotionDialog::setupUi()
     bottomLayout->setContentsMargins(4, 2, 4, 2);
     bottomLayout->setSpacing(10);
 
-    m_statusLabel = new QLabel("取消导航", this);
-    m_statusLabel->setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 14px;");
+    const RobotInfo &initInfo = RobotInfoManager::instance().currentInfo();
+    m_statusLabel = new QLabel(initInfo.status == "1" ? "导航中" : "就绪", this);
+    m_statusLabel->setStyleSheet(QString("color: %1; font-weight: bold; font-size: 14px;")
+                                     .arg(initInfo.status == "1" ? "#0ea5e9" : "#22c55e"));
     bottomLayout->addWidget(m_statusLabel);
 
     bottomLayout->addStretch();
@@ -463,16 +473,14 @@ void MotionDialog::setRunningState(bool running, bool paused)
             m_pauseBtn->setText("继续导航");
             m_pauseBtn->setEnabled(true);
         } else {
-            m_statusLabel->setText("运行中...");
+            m_statusLabel->setText("导航中");
             m_statusLabel->setStyleSheet("color: #0ea5e9; font-weight: bold; font-size: 14px;");
             m_cancelBtn->setEnabled(true);
             m_pauseBtn->setText("暂停导航");
             m_pauseBtn->setEnabled(true);
         }
     } else {
-        m_cancelBtn->setEnabled(false);
-        m_pauseBtn->setText("暂无");
-        m_pauseBtn->setEnabled(false);
+        onCurrentRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
     }
 }
 
@@ -482,12 +490,8 @@ void MotionDialog::setCompletedState()
     m_isPaused = false;
     m_motionWatchdog.stop();
 
-    m_statusLabel->setText("导航已完成");
-    m_statusLabel->setStyleSheet("color: #22c55e; font-weight: bold; font-size: 14px;");
-
-    m_cancelBtn->setEnabled(false);
-    m_pauseBtn->setText("暂无");
-    m_pauseBtn->setEnabled(false);
+    if (m_sendBtn) m_sendBtn->setEnabled(true);
+    onCurrentRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
 }
 
 void MotionDialog::setCanceledState()
@@ -496,87 +500,106 @@ void MotionDialog::setCanceledState()
     m_isPaused = false;
     m_motionWatchdog.stop();
 
-    m_statusLabel->setText("取消导航");
-    m_statusLabel->setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 14px;");
-
-    m_cancelBtn->setEnabled(false);
-    m_pauseBtn->setText("暂无");
-    m_pauseBtn->setEnabled(false);
+    if (m_sendBtn) m_sendBtn->setEnabled(true);
+    onCurrentRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
 }
 
 void MotionDialog::onSendClicked()
 {
+    // 注意通过 MQTT 的状态判断，执行任务链期间不可执行移动
+    if (TaskChainManager::instance().isWorking()) {
+        Toast::error(this, "当前正在执行任务链任务，不可下发移动指令！");
+        return;
+    }
+
     const RobotInfo &info = RobotInfoManager::instance().currentInfo();
     m_startX = info.car_x;
     m_startY = info.car_y;
     m_startAngle = info.car_yaw * 180.0 / M_PI;
     m_hasStartPose = info.hasPose;
 
-    int currentTab = m_tabWidget->currentIndex();
-    double durationSec = 3.0;
+    // 发送前前置禁用发送按钮，避免重复点击，状态更新为发送中
+    m_sendBtn->setEnabled(false);
+    m_statusLabel->setText("正在下发移动指令...");
+    m_statusLabel->setStyleSheet("color: #3b82f6; font-weight: bold; font-size: 14px;");
+
+    const int currentTab = m_tabWidget->currentIndex();
+    QPointer<MotionDialog> self = this;
 
     if (currentTab == 0) {
-        // 平动: 按照规范调用控制器 set_action_control 接口 (action_type: 6)
-        m_motionType = 1;
-        double dist = m_transDistSpin->value();
-        double rawVx = m_transVxSpin->value();
-        double rawVy = m_transVySpin->value();
-        double vx   = MotionConfigManager::instance().clampSignedLinearSpeed(rawVx);
-        double vy   = MotionConfigManager::instance().clampSignedLinearSpeed(rawVy);
-
-        m_targetDistance = std::abs(dist);
-
-        // 调用 8061 控制器平动动作控制接口 (action_type: 6)
-        // 仅此一路下发, 不再额外走 MQTT, 避免同一指令被执行两次
-        int actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
-        ApiService::instance().setLinearMotion(vx, vy, dist, actionId, [this](int code, const QJsonObject &resp) {
-            qDebug() << "[MotionDialog] 平动指令回执 code:" << code << resp;
-        });
+        // 平动: 按照规范统一调用 POST 8048 /robot/navigation/move (actionType=6)
+        // Query 参数: actionType, vx, vy, distance (平动不给转动参数赋值)
+        self->m_motionType = 1;
+        const double dist = m_transDistSpin->value();
+        const double rawVx = m_transVxSpin->value();
+        const double rawVy = m_transVySpin->value();
+        double vx = MotionConfigManager::instance().clampSignedLinearSpeed(rawVx);
+        double vy = MotionConfigManager::instance().clampSignedLinearSpeed(rawVy);
+        self->m_targetDistance = std::abs(dist);
 
         double maxV = std::max(std::abs(vx), std::abs(vy));
-        if (maxV > 1e-3) {
-            durationSec = (std::abs(dist) / maxV) + 1.5;
-        } else {
-            durationSec = 4.0;
-        }
-    } else {
-        // 转动: 按照规范调用控制器 set_action_control 接口 (action_type: 5)
-        m_motionType = 2;
-        double angle = m_rotAngleSpin->value();
-        double rawSpeed = m_rotSpeedSpin->value();
-        double speed = MotionConfigManager::instance().clampSignedAngularSpeedDeg(rawSpeed);
+        double durationSec = (maxV > 1e-3) ? ((std::abs(dist) / maxV) + 1.5) : 4.0;
 
-        m_targetAngle = std::abs(angle);
+        ApiService::instance().robotNavigationMoveLinear(vx, vy, dist, [self, durationSec](int code, const QJsonObject &resp) {
+            if (!self) return;
+            qDebug() << "[MotionDialog] 平动指令响应:" << code << resp;
 
-        // 旋转角度转弧度 (rad)
-        double angleRad = angle * M_PI / 180.0;
-        int actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
-        // 仅此一路下发, 不再额外走 MQTT, 避免同一指令被执行两次
-        ApiService::instance().setRotateMotion(angleRad, speed, actionId, [this](int code, const QJsonObject &resp) {
-            qDebug() << "[MotionDialog] 转动指令回执 code:" << code << resp;
+            const QString msg = resp.value("msg").toString();
+            const bool ok = (code == 200 || msg.compare("ok", Qt::CaseInsensitive) == 0 || resp.value("code").toInt() == 200);
+            if (!ok) {
+                qWarning() << "[MotionDialog] 平动指令下发失败, code:" << code << resp;
+                self->m_sendBtn->setEnabled(true);
+                self->m_statusLabel->setText("就绪");
+                self->m_statusLabel->setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 14px;");
+                QString errMsg = msg.isEmpty() ? QString("错误码 %1").arg(code) : msg;
+                Toast::error(self.data(), QString("平动指令失败(%1): %2").arg(code).arg(errMsg));
+                return;
+            }
+
+            self->setRunningState(true, false);
+            int watchdogMs = static_cast<int>(std::clamp(durationSec, 2.0, 120.0) * 1000.0);
+            self->m_motionWatchdog.start(watchdogMs);
+            Toast::success(self.data(), "平动指令已下发");
         });
+    } else {
+        // 转动: 按照规范统一调用 POST 8048 /robot/navigation/move (actionType=12)
+        // Query 参数: actionType, rotateAngle, rotateSpeed (转动不给平动参数赋值)
+        self->m_motionType = 2;
+        const double angle = m_rotAngleSpin->value();
+        const double rawSpeed = m_rotSpeedSpin->value();
+        double speed = MotionConfigManager::instance().clampSignedAngularSpeedDeg(rawSpeed);
+        self->m_targetAngle = std::abs(angle);
 
-        if (std::abs(speed) > 1e-3) {
-            durationSec = (std::abs(angle) / std::abs(speed)) + 1.5;
-        } else {
-            durationSec = 4.0;
-        }
+        double durationSec = (std::abs(speed) > 1e-3) ? ((std::abs(angle) / std::abs(speed)) + 1.5) : 4.0;
+
+        ApiService::instance().robotNavigationMoveRotate(angle, speed, [self, durationSec](int code, const QJsonObject &resp) {
+            if (!self) return;
+            qDebug() << "[MotionDialog] 转动指令响应:" << code << resp;
+
+            const QString msg = resp.value("msg").toString();
+            const bool ok = (code == 200 || msg.compare("ok", Qt::CaseInsensitive) == 0 || resp.value("code").toInt() == 200);
+            if (!ok) {
+                qWarning() << "[MotionDialog] 转动指令下发失败, code:" << code << resp;
+                self->m_sendBtn->setEnabled(true);
+                self->m_statusLabel->setText("就绪");
+                self->m_statusLabel->setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 14px;");
+                QString errMsg = msg.isEmpty() ? QString("错误码 %1").arg(code) : msg;
+                Toast::error(self.data(), QString("转动指令失败(%1): %2").arg(code).arg(errMsg));
+                return;
+            }
+
+            self->setRunningState(true, false);
+            int watchdogMs = static_cast<int>(std::clamp(durationSec, 2.0, 120.0) * 1000.0);
+            self->m_motionWatchdog.start(watchdogMs);
+            Toast::success(self.data(), "转动指令已下发");
+        });
     }
-
-    // 切换至运行中状态
-    setRunningState(true, false);
-
-    // 启动看门狗超时定时器
-    int watchdogMs = static_cast<int>(std::clamp(durationSec, 2.0, 120.0) * 1000.0);
-    m_motionWatchdog.start(watchdogMs);
-
-    Toast::success(this, (m_motionType == 1) ? "平动指令已下发" : "转动指令已下发");
 }
 
 void MotionDialog::onCancelNavClicked()
 {
-    ApiService::instance().suspendWork([](int, const QJsonObject &) {});
-    ApiService::instance().stopRobotTask(false, [](int, const QJsonObject &) {});
+    // 统一使用 /robot/navigation/control?command=stop navigation 结束/取消导航
+    ApiService::instance().controlNavigation(QStringLiteral("stop navigation"), [](int, const QJsonObject &) {});
 
     setCanceledState();
     Toast::info(this, "已取消导航");
@@ -584,16 +607,17 @@ void MotionDialog::onCancelNavClicked()
 
 void MotionDialog::onPauseNavClicked()
 {
-    if (m_isPaused) {
-        // 继续导航 (仅走 HTTP 通道, 避免同一指令重复下发)
-        ApiService::instance().continueWork([](int, const QJsonObject &) {});
-        ApiService::instance().continueRobot([](int, const QJsonObject &) {});
+    const RobotInfo &info = RobotInfoManager::instance().currentInfo();
+    const bool isCurrentlyPaused = (m_isPaused || info.status == "2" || info.status == "5");
+
+    if (isCurrentlyPaused) {
+        // 恢复导航统一使用 /robot/navigation/control?command=continue navigation
+        ApiService::instance().controlNavigation(QStringLiteral("continue navigation"), [](int, const QJsonObject &) {});
         setRunningState(true, false);
         Toast::success(this, "已继续导航");
     } else {
-        // 暂停导航 (仅走 HTTP 通道, 避免同一指令重复下发)
-        ApiService::instance().suspendWork([](int, const QJsonObject &) {});
-        ApiService::instance().suspendRobot([](int, const QJsonObject &) {});
+        // 暂停导航统一使用 /robot/navigation/control?command=pause navigation
+        ApiService::instance().controlNavigation(QStringLiteral("pause navigation"), [](int, const QJsonObject &) {});
         setRunningState(true, true);
         Toast::info(this, "导航已暂停");
     }
@@ -601,13 +625,65 @@ void MotionDialog::onPauseNavClicked()
 
 void MotionDialog::onCurrentRobotInfoUpdated(const RobotInfo &info)
 {
-    if (!m_isRunning || m_isPaused) return;
+    // 1. 移动弹窗底部的导航状态文字通过 /rob/navigate/status 获取并更新
+    const QString st = info.status;
+    const bool isPaused = (st == "2" || st == "5" || (st != "0" && st != "1" && m_isPaused));
 
-    // 判定依据 1: 后端显式上报到达状态 (status == "4" 停止导航，作业中 / status == "2" 在线未执行任务)
-    if (info.status == "4") {
-        setCompletedState();
-        return;
+    if (m_statusLabel) {
+        if (st == "2" || st == "5") {
+            m_statusLabel->setText("暂停导航");
+            m_statusLabel->setStyleSheet("color: #f59e0b; font-weight: bold; font-size: 14px;");
+        } else if (st == "1") {
+            m_statusLabel->setText("导航中");
+            m_statusLabel->setStyleSheet("color: #0ea5e9; font-weight: bold; font-size: 14px;");
+        } else if (st == "0") {
+            m_statusLabel->setText("就绪");
+            m_statusLabel->setStyleSheet("color: #22c55e; font-weight: bold; font-size: 14px;");
+        } else {
+            m_statusLabel->setText(info.statusText());
+            m_statusLabel->setStyleSheet(QString("color: %1; font-weight: bold; font-size: 14px;").arg(info.statusColor()));
+        }
     }
+
+    // 2. 根据 /rob/navigate/status 状态控制取消和暂停按钮状态
+    // status == "1" 导航中, status == "2" 暂停导航，两者都属于正在进行导航流程
+    // 用户标记：当用户点击抢占控制权时，不要让取消导航和暂停导航按钮可点击
+    const bool isNav = (st == "1" || st == "2" || st == "5" || st == "3");
+    const bool isUserPreempted = TeleopController::instance().isUserPreempted() || TeleopController::instance().isActive();
+    const bool canControlNav = isNav && !isUserPreempted;
+
+    if (m_cancelBtn) {
+        m_cancelBtn->setEnabled(canControlNav);
+    }
+    if (m_pauseBtn) {
+        m_pauseBtn->setEnabled(canControlNav);
+        if (isPaused) {
+            m_pauseBtn->setText("继续导航");
+        } else if (isNav) {
+            m_pauseBtn->setText("暂停导航");
+        } else {
+            m_pauseBtn->setText("暂无");
+        }
+    }
+
+    if (st == "2" || st == "5") {
+        m_isPaused = true;
+    } else if (st == "1") {
+        m_isPaused = false;
+    }
+
+    if (!isNav && st == "0") {
+        if (m_isRunning) {
+            m_isRunning = false;
+            m_isPaused = false;
+            m_motionWatchdog.stop();
+        }
+        if (m_sendBtn) {
+            m_sendBtn->setEnabled(true);
+        }
+    }
+
+    if (!m_isRunning || m_isPaused) return;
 
     // 判定依据 2: 位移或旋转角度已达成且速度归零
     if (m_hasStartPose && info.hasPose) {

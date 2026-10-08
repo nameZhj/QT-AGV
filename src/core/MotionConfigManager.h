@@ -41,6 +41,14 @@ public:
     double arrivalAngleToleranceRad() const { return m_arrivalAngleToleranceDeg * M_PI / 180.0; }
     double routeWidth() const { return m_routeWidth; }
 
+    // --- 默认避障参数读取接口 (来自“配置参数”中的“障碍物配置”) ---
+    // id_stop_range_threshold [dx, dy] 默认 [0.1, 0.1]
+    double defaultObsStopLength() const { return m_defaultObsStopLength; }
+    double defaultObsStopWidth() const { return m_defaultObsStopWidth; }
+    // id_deceleration_range_threshold [dx, dy] 默认 [0.5, 0.3]
+    double defaultObsDecelLength() const { return m_defaultObsDecelLength; }
+    double defaultObsDecelWidth() const { return m_defaultObsDecelWidth; }
+
     // --- 写入与同步接口 (自动持久化到本地 QSettings 并发射信号) ---
     void setMaxSpeed(double val);
     void setMaxAcceleration(double val);
@@ -49,9 +57,12 @@ public:
     void setArrivalDistanceTolerance(double val);
     void setArrivalAngleToleranceDeg(double val);
     void setRouteWidth(double val);
+    void setDefaultObsStopRange(double dx, double dy);
+    void setDefaultObsDecelRange(double dx, double dy);
 
     // 批量从 QJsonObject (如配置参数中的 params) 更新
     void updateFromJsonObject(const QJsonObject &params);
+    void updateObstacleConfig(const QJsonObject &params);
     QJsonObject toJsonObject() const;
 
     // --- 安全限速约束辅助方法 (Clamp) ---
@@ -91,4 +102,10 @@ private:
     double m_arrivalDistanceTolerance  = 0.1;   // m
     double m_arrivalAngleToleranceDeg  = 0.5;   // °
     double m_routeWidth                = 4.0;   // m
+
+    // 默认避障参数 (来自“配置参数”中“障碍物配置”的 id_stop_range_threshold 与 id_deceleration_range_threshold)
+    double m_defaultObsStopLength      = 0.1;   // m (纵向停车扩展量 dx)
+    double m_defaultObsStopWidth       = 0.1;   // m (横向停车扩展量 dy)
+    double m_defaultObsDecelLength     = 0.5;   // m (纵向减速扩展量 dx)
+    double m_defaultObsDecelWidth      = 0.3;   // m (横向减速扩展量 dy)
 };
