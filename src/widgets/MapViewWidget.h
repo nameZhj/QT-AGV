@@ -118,9 +118,6 @@ private:
                            const QString &preferredYamlName = QString(),
                            const QString &preferredPgmName = QString());
     bool loadMapFromLocalFiles(const QString &yamlPath, const QString &pgmPath);
-    void applyMapData(const QJsonObject &mapInfo);
-    void loadMapImage();
-    void loadMapFromPgm(double apiOriginX, double apiOriginY, double apiPhysW, double apiPhysH);
     void installMapPixmap(const QPixmap &pix);
     void loadRoute();
 

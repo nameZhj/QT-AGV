@@ -661,9 +661,9 @@ void MapViewWidget::setupToolbar(QWidget *parent)
     m_uploadMapBtn = addBtn("map-upload", "推送地图", SLOT(onUploadMap()));
     m_uploadMapBtn->setToolTip("将当前地图推送到设备/服务端");
 
-    // 10. 拉取地图 (原 下载原文件)
+    // 10. 拉取地图 (直接打开本地缓存文件夹)
     m_downloadMapBtn = addBtn("file-download", "拉取地图", SLOT(onDownloadSource()));
-    m_downloadMapBtn->setToolTip("从设备/服务端拉取下载地图原文件 (.pcd/.smap)");
+    m_downloadMapBtn->setToolTip("打开当前地图的本地缓存文件夹");
 
     // 11. 地图管理 (原 切换地图)
     m_switchMapBtn = addBtn("swap", "地图管理", SLOT(onSwitchMap()));
@@ -2172,148 +2172,6 @@ void MapViewWidget::loadMapById(const QString &mapId, const QString &mapName)
     } else {
         doLoadOrDownload(metaMapName, metaYamlName, metaPgmName);
     }
-}
-
-void MapViewWidget::applyMapData(const QJsonObject &mapInfo)
-{
-    m_mapName      = mapInfo.value("mapName").toString();
-    m_tilemapPath  = mapInfo.value("tilemapPath").toString("tilemap");
-
-    auto tryDbl = [&](const QStringList &keys, double def) -> double {
-        for (const QString &k : keys) {
-            QJsonValue v = mapInfo.value(k);
-            if (!v.isUndefined() && !v.isNull()) return v.toDouble(def);
-        }
-        return def;
-    };
-    // Physical map size in metres
-    double physW = tryDbl({"mapWidth","map_width","width"}, 0.0);
-    double physH = tryDbl({"mapHeight","map_height","height"}, 0.0);
-
-    // World origin = bottom-left corner of map in world coords.
-    // 与 Vue edit.vue/show.vue 完全一致：永远用 -offsetX/-offsetY 计算零点，
-    // 不读取/优先采用任何 originX 字段（Vue 的 getMap 流程里从不存在该字段，
-    // 之前误信任它会在 API 偶然带有该字段时取到错误的零点）。
-    auto tryOrigin = [&](const QStringList &negate) -> double {
-        for (const QString &k : negate) {
-            QJsonValue v = mapInfo.value(k);
-            if (!v.isUndefined() && !v.isNull()) return -v.toDouble();
-        }
-        return 0.0;
-    };
-    double apiOriginX = tryOrigin({"offsetX","mapOffsetX","offset_x"});
-    double apiOriginY = tryOrigin({"offsetY","mapOffsetY","offset_y"});
-
-    if (m_mapNameLabel) m_mapNameLabel->setText(m_mapName);
-    m_mapReady = false;
-
-    loadMapFromPgm(apiOriginX, apiOriginY, physW, physH);
-    loadRoute();
-}
-
-// 主路径：直接拉取并解析原始 carto_map.pgm + carto_map.yaml（与 MapEditWidget 一致）。
-// 后端生成瓦片金字塔时会把图片 padding 成 512*2^n 的正方形，getMap() 返回的
-// mapWidth/mapHeight/offsetX/offsetY 是基于 padding 后画布派生的，并不是地图的真实物理
-// 尺寸与零点（见 PcdToImgImpl.pgmToImg）。yaml 的 resolution/origin 才是 ROS map_server
-// 标准、无歧义的定义，pgm 本身也未经 padding，可彻底避免这个偏差。
-void MapViewWidget::loadMapFromPgm(double apiOriginX, double apiOriginY, double apiPhysW, double apiPhysH)
-{
-    if (m_mapName.isEmpty() || m_mapId.isEmpty()) {
-        setStatus("无地图名称或ID", "#f0a060"); return;
-    }
-
-    auto useThumbnailFallback = [this, apiOriginX, apiOriginY, apiPhysW, apiPhysH]() {
-        m_worldL = apiOriginX;
-        m_worldB = apiOriginY;
-        m_worldR = apiOriginX + apiPhysW;
-        m_worldT = apiOriginY + apiPhysH;
-        loadMapImage();
-    };
-
-    QString resBase = AppConfig::instance().agvMapResourceHost() + m_mapName + "_" + m_mapId + "/";
-    QString yamlUrl = resBase + "carto_map.yaml";
-    QString pgmUrl  = resBase + "carto_map.pgm";
-
-    ApiService::instance().downloadFile(yamlUrl,
-        [this, pgmUrl, useThumbnailFallback](bool yamlOk, const QByteArray &yamlRaw) {
-            if (!yamlOk) { useThumbnailFallback(); return; }
-            double resolution = 0, originX = 0, originY = 0; bool negate = false;
-            if (!MapPgmUtil::parseMapYaml(QString::fromUtf8(yamlRaw), resolution, originX, originY, negate)
-                || resolution <= 0) {
-                useThumbnailFallback(); return;
-            }
-            // 下载并保存 yaml 到本地缓存目录
-            QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + m_mapName + "_" + m_mapId;
-            QDir().mkpath(localDir);
-            QFile yf(localDir + "/carto_map.yaml");
-            if (yf.open(QIODevice::WriteOnly)) {
-                yf.write(yamlRaw);
-                yf.close();
-            }
-
-            ApiService::instance().downloadFile(pgmUrl,
-                [this, resolution, originX, originY, negate, useThumbnailFallback, localDir]
-                (bool pgmOk, const QByteArray &pgmRaw) {
-                    if (!pgmOk) { useThumbnailFallback(); return; }
-                    QImage img = MapPgmUtil::pgmToImage(pgmRaw, negate);
-                    if (img.isNull()) { useThumbnailFallback(); return; }
-
-                    // 下载并保存 pgm 到本地缓存目录
-                    QFile pf(localDir + "/carto_map.pgm");
-                    if (pf.open(QIODevice::WriteOnly)) {
-                        pf.write(pgmRaw);
-                        pf.close();
-                    }
-
-                    QPixmap pix = QPixmap::fromImage(img);
-                    // ROS map_server 标准：yaml 的 origin 本身就是 pgm 左下角像素对应的
-                    // 世界坐标，不需要再取负——那是 API 的 offsetX/Y 字段才需要的换算。
-                    m_worldL = originX;
-                    m_worldB = originY;
-                    m_worldR = m_worldL + pix.width()  * resolution;
-                    m_worldT = m_worldB + pix.height() * resolution;
-                    installMapPixmap(pix);
-                });
-        });
-}
-
-void MapViewWidget::loadMapImage()
-{
-    if (m_mapName.isEmpty() || m_mapId.isEmpty()) {
-        setStatus("无地图名称或ID", "#f0a060"); return;
-    }
-
-    // URL: mapHost + mapName_mapId / tilemapPath / thumbnail.png
-    // tilemapPath comes from the API response (e.g. "tilemap"); fallback to "tilemap"
-    QString url = AppConfig::instance().mapHost()
-                  + m_mapName + "_" + m_mapId + "/"
-                  + m_tilemapPath + "/thumbnail.png";
-
-    ApiService::instance().downloadFile(url, [this](bool ok, const QByteArray &imgData) {
-        if (!ok || imgData.isEmpty()) {
-            m_mapLoadFailed = true;
-            emit mapStatusChanged();
-            setStatus("地图图像下载失败", "#e05555");
-            return;
-        }
-
-        QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + m_mapName + "_" + m_mapId;
-        QDir().mkpath(localDir);
-        QFile f(localDir + "/thumbnail.png");
-        if (f.open(QIODevice::WriteOnly)) {
-            f.write(imgData);
-            f.close();
-        }
-
-        QPixmap pix;
-        if (!pix.loadFromData(imgData)) {
-            m_mapLoadFailed = true;
-            emit mapStatusChanged();
-            setStatus("地图图像解析失败", "#e05555");
-            return;
-        }
-        installMapPixmap(pix);
-    });
 }
 
 void MapViewWidget::clearScene()
@@ -4280,19 +4138,29 @@ void MapViewWidget::onRenameMap()
 
 void MapViewWidget::onDownloadSource()
 {
-    if (m_mapId.isEmpty()) return;
-    ApiService::instance().downloadPcd(
-        QJsonObject{{"mapId", m_mapId}},
-        [this](int code, const QJsonObject &data) {
-            if (code == 200) {
-                QString path = data.value("pcdPath").toString();
-                if (!path.isEmpty())
-                    QDesktopServices::openUrl(QUrl(AppConfig::instance().pcdHost() + path));
-            } else {
-                QDesktopServices::openUrl(QUrl(
-                    AppConfig::instance().mapHost() + m_mapName + "_" + m_mapId));
-            }
-        });
+    QString localDir;
+    if (!m_mapId.isEmpty()) {
+        QString dirById = QCoreApplication::applicationDirPath() + "/maps/" + m_mapId;
+        QString dirByName = QCoreApplication::applicationDirPath() + "/maps/" + m_mapName + "_" + m_mapId;
+        if (QDir(dirById).exists()) {
+            localDir = dirById;
+        } else if (QDir(dirByName).exists()) {
+            localDir = dirByName;
+        } else {
+            localDir = dirById;
+            QDir().mkpath(localDir);
+        }
+    } else {
+        localDir = QCoreApplication::applicationDirPath() + "/maps";
+        QDir().mkpath(localDir);
+    }
+
+    QUrl url = QUrl::fromLocalFile(localDir);
+    if (!QDesktopServices::openUrl(url)) {
+        Toast::error(this, QString("无法打开缓存文件夹: %1").arg(QDir::toNativeSeparators(localDir)));
+    } else {
+        Toast::info(this, QString("已打开地图缓存目录: %1").arg(QDir::toNativeSeparators(localDir)));
+    }
 }
 
 void MapViewWidget::onDeleteMap()
