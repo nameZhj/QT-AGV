@@ -17,6 +17,7 @@
 #include "AudioManagerDialog.h"
 #include "DirectionPadWidget.h"
 #include "MotionDialog.h"
+#include "EditConfigWidget.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -307,6 +308,16 @@ QPixmap drawMapToolIcon(const QString &name, const QColor &col, int sz = 20)
         p.setPen(Qt::NoPen); p.setBrush(col);
         p.drawEllipse(QPointF(sz*0.68, sz*0.44), sz*0.05, sz*0.05);
         p.drawEllipse(QPointF(sz*0.60, sz*0.54), sz*0.05, sz*0.05);
+    } else if (name == "config" || name == "settings") {
+        // 参数/配置图标：三条滑轨 + 滑块 (Sliders)
+        p.setPen(QPen(col, 1.4, Qt::SolidLine, Qt::RoundCap)); p.setBrush(Qt::NoBrush);
+        p.drawLine(QPointF(sz*0.16, sz*0.28), QPointF(sz*0.84, sz*0.28));
+        p.drawLine(QPointF(sz*0.16, sz*0.50), QPointF(sz*0.84, sz*0.50));
+        p.drawLine(QPointF(sz*0.16, sz*0.72), QPointF(sz*0.84, sz*0.72));
+        p.setPen(Qt::NoPen); p.setBrush(col);
+        p.drawRoundedRect(QRectF(sz*0.32, sz*0.20, sz*0.14, sz*0.16), 1.5, 1.5);
+        p.drawRoundedRect(QRectF(sz*0.58, sz*0.42, sz*0.14, sz*0.16), 1.5, 1.5);
+        p.drawRoundedRect(QRectF(sz*0.26, sz*0.64, sz*0.14, sz*0.16), 1.5, 1.5);
     }
 
     p.end();
@@ -665,7 +676,11 @@ void MapViewWidget::setupToolbar(QWidget *parent)
         "点击抢占控制权（暂停导航并接管键盘控制），再次点击恢复导航\n"
         "键盘: W A S D 移动 | Space 刹车 | Ctrl 加速 | P 升降上 | L 升降下");
 
-    // 13. 状态
+    // 13. 参数 (从顶栏迁移，弹窗展示)
+    m_configBtn = addBtn("config", "参数", SLOT(onShowConfigDialog()));
+    m_configBtn->setToolTip("参数配置：查看与修改机器人各项配置参数");
+
+    // 14. 状态
     m_statusBtn = addBtn("status", "状态", SLOT(onShowRobotStatus()));
     m_statusBtn->setToolTip("查看机器人运行状态与详细诊断信息");
 
@@ -1661,12 +1676,22 @@ void MapViewWidget::showRouteDetails(const QJsonObject &obj, const QString &type
         double sw = obj.value("intrusion_stop_width").toDouble(0.0);
         double dl = obj.value("intrusion_deceleration_length").toDouble(0.0);
         double dw = obj.value("intrusion_deceleration_width").toDouble(0.0);
-        if (sl == 0.0 && sw == 0.0 && dl == 0.0 && dw == 0.0) {
-            m_routeObsRangeVal->setText("默认");
-        } else {
-            m_routeObsRangeVal->setText(QString("停[%1,%2] 减[%3,%4] m").arg(sl, 0, 'f', 2).arg(sw, 0, 'f', 2).arg(dl, 0, 'f', 2).arg(dw, 0, 'f', 2));
-            m_routeObsRangeVal->setToolTip(QString("正向停止: %1m, 侧向停止: %2m\n正向减速: %3m, 侧向减速: %4m").arg(sl).arg(sw).arg(dl).arg(dw));
-        }
+        auto fmtVal = [](double v) -> QString {
+            if (qFuzzyIsNull(v)) return "0";
+            QString s = QString::number(v, 'f', 2);
+            while (s.contains('.') && (s.endsWith('0') || s.endsWith('.'))) {
+                if (s.endsWith('.')) { s.chop(1); break; }
+                s.chop(1);
+            }
+            return s;
+        };
+        m_routeObsRangeVal->setText(QString("[%1,%2,%3,%4]")
+                                    .arg(fmtVal(sl))
+                                    .arg(fmtVal(sw))
+                                    .arg(fmtVal(dl))
+                                    .arg(fmtVal(dw)));
+        m_routeObsRangeVal->setToolTip(QString("正向停止: %1m, 侧向停止: %2m\n正向减速: %3m, 侧向减速: %4m")
+                                       .arg(sl).arg(sw).arg(dl).arg(dw));
     }
 
     if (m_routeEmptyHint)     m_routeEmptyHint->setVisible(false);
@@ -2894,13 +2919,14 @@ void MapViewWidget::onRobotInfoUpdated(const RobotInfo &info)
     updateInfoPanel();
     updateDeviceMonitor(info);
 
-    const bool isRobotNavigating = (info.status == "1" || info.status == "2" || info.status == "3" || info.status == "5");
+    const QString newStatus = info.status;
+    const bool isRobotNavigating = (newStatus == "1" || newStatus == "2" || newStatus == "3" || newStatus == "5");
     if (m_navActive) {
         if (isRobotNavigating) {
             m_navEnteredRunning = true;
-            if (info.status == "2" || info.status == "5") {
+            if (newStatus == "2" || newStatus == "5") {
                 m_navPaused = true;
-            } else if (info.status == "1") {
+            } else if (newStatus == "1") {
                 m_navPaused = false;
             }
         } else {
@@ -2920,13 +2946,58 @@ void MapViewWidget::onRobotInfoUpdated(const RobotInfo &info)
         if (isRobotNavigating) {
             m_navActive = true;
             m_navEnteredRunning = true;
-            if (info.status == "2" || info.status == "5") {
+            if (newStatus == "2" || newStatus == "5") {
                 m_navPaused = true;
-            } else if (info.status == "1") {
+            } else if (newStatus == "1") {
                 m_navPaused = false;
             }
         }
     }
+
+    // --- 参考 /rob/navigate/status MQTT 状态更新菜单左下角/地图左上角状态栏 ---
+    if (m_lastRobotNavStatus != newStatus) {
+        const QString oldStatus = m_lastRobotNavStatus;
+        m_lastRobotNavStatus = newStatus;
+
+        if (newStatus == "0") {
+            // 从运行态/暂停态转为就绪态 -> 判定为导航或移动已完成
+            if (oldStatus == "1" || oldStatus == "2" || oldStatus == "3" || oldStatus == "5") {
+                if (m_currentOpType == OpNavigation) {
+                    setStatus(m_currentNavTargetName.isEmpty() ? "导航已完成，设备就绪" : QString("已到达点位 \"%1\"，导航完成").arg(m_currentNavTargetName), "#00e676");
+                } else if (m_currentOpType == OpMotion) {
+                    setStatus(m_currentMotionDesc.isEmpty() ? "移动已完成，设备就绪" : QString("%1 已完成，设备就绪").arg(m_currentMotionDesc), "#00e676");
+                } else {
+                    setStatus("设备移动/导航已完成，就绪", "#00e676");
+                }
+                m_currentOpType = OpNone;
+                m_currentNavTargetName.clear();
+                m_currentMotionDesc.clear();
+            }
+        } else if (newStatus == "1" || newStatus == "3") {
+            // 进入运行态 (导航中 / 移动中)
+            if (oldStatus == "0" || oldStatus.isEmpty()) {
+                if (m_currentOpType == OpNavigation) {
+                    setStatus(QString("正在导航至点位 \"%1\"...").arg(m_currentNavTargetName.isEmpty() ? "目标点" : m_currentNavTargetName), "#00e676");
+                } else if (m_currentOpType == OpMotion) {
+                    setStatus(QString("正在移动中 (%1)...").arg(m_currentMotionDesc.isEmpty() ? "移动" : m_currentMotionDesc), "#00e676");
+                } else {
+                    setStatus("设备正在导航/移动中...", "#00e676");
+                }
+            } else if (oldStatus == "2" || oldStatus == "5") {
+                setStatus(m_currentOpType == OpNavigation ? "已继续导航" : (m_currentOpType == OpMotion ? "已恢复移动" : "已继续运行"), "#00e676");
+            }
+        } else if (newStatus == "2" || newStatus == "5") {
+            // 暂停态
+            setStatus(m_currentOpType == OpNavigation ? "导航已暂停" : (m_currentOpType == OpMotion ? "移动已暂停" : "设备运行已暂停"), "#f59e0b");
+        } else if (newStatus == "4") {
+            // 停止导航，作业中
+            setStatus("停止导航，作业中", "#06b6d4");
+        } else if (newStatus == "6") {
+            // 故障
+            setStatus("设备故障，请检查设备状态", "#ef4444");
+        }
+    }
+
     updateNavButtonsState();
 }
 
@@ -3176,7 +3247,9 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
         QPushButton *cancelBtn = navBox.addButton("取消", QMessageBox::RejectRole);
         navBox.setDefaultButton(startBtn);
 
+        if (m_canvas) m_canvas->resetPanState();
         navBox.exec();
+        if (m_canvas) m_canvas->resetPanState();
         if (navBox.clickedButton() == startBtn) {
             QString carId = AppConfig::instance().currentDevice().carId;
             if (carId.isEmpty()) carId = AppConfig::instance().agvId();
@@ -3189,20 +3262,29 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
 
             // POST 8048 /robot/navigation/navigate/to?locationId=ptId
             setStatus(QString("正在下发导航指令至点位 \"%1\"...").arg(ptName), "#00bcd4");
+            m_navActive = true;
+            m_navStartTime = QDateTime::currentMSecsSinceEpoch();
+            m_currentOpType = OpNavigation;
+            m_currentNavTargetName = ptName;
+            updateNavButtonsState();
             ApiService::instance().navigateTo(ptId, [this, ptName](int code, const QJsonObject &resp) {
                 QString msg = resp.value("msg").toString();
                 // 收到 http 返回的 ok 后应该亮起"取消导航"和"暂停导航"
                 if (code == 200 || msg.compare("ok", Qt::CaseInsensitive) == 0 || resp.value("code").toInt() == 200) {
-                    Toast::success(this, QString("已开始导航至点位 \"%1\"").arg(ptName));
                     m_navActive = true;
                     m_navPaused = false;
                     m_navEnteredRunning = false;
                     m_navStartTime = QDateTime::currentMSecsSinceEpoch();
+                    m_currentOpType = OpNavigation;
+                    m_currentNavTargetName = ptName;
                     updateNavButtonsState();
-                    setStatus(QString("正在导航至点位 \"%1\"").arg(ptName), "#00e676");
+                    setStatus(QString("正在导航至点位 \"%1\"...").arg(ptName), "#00e676");
                 } else {
                     QString errMsg = msg.isEmpty() ? "请求失败" : msg;
-                    Toast::error(this, QString("导航请求失败(%1): %2").arg(code).arg(errMsg));
+                    m_navActive = false;
+                    m_currentOpType = OpNone;
+                    m_currentNavTargetName.clear();
+                    updateNavButtonsState();
                     setStatus(QString("导航下发失败: %1").arg(errMsg), "#ef4444");
                 }
             });
@@ -3219,7 +3301,9 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
         QPushButton *startBtn = moveBox.addButton("开始移动", QMessageBox::AcceptRole);
         QPushButton *cancelBtn = moveBox.addButton("取消", QMessageBox::RejectRole);
         moveBox.setDefaultButton(startBtn);
+        if (m_canvas) m_canvas->resetPanState();
         moveBox.exec();
+        if (m_canvas) m_canvas->resetPanState();
 
         if (moveBox.clickedButton() == startBtn) {
             int actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
@@ -3229,26 +3313,39 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
 
             // 控制器 8061 端口三方固定路径点导航 (Table 4 set_third_fix_path)
             // 仅此一路下发, 不再额外走 MQTT, 避免同一指令被执行两次
+            const QString targetDesc = QString("自由移动至 (%1, %2)").arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2);
             setStatus(QString("正在下发移动指令至 (%1, %2)...").arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2), "#00bcd4");
-            ApiService::instance().navigateToPose(m_robot.wx, m_robot.wy, world.x(), world.y(), speed, actionId, [this, world](int code, const QJsonObject &resp) {
+            m_navActive = true;
+            m_navStartTime = QDateTime::currentMSecsSinceEpoch();
+            m_currentOpType = OpMotion;
+            m_currentMotionDesc = targetDesc;
+            updateNavButtonsState();
+            ApiService::instance().navigateToPose(m_robot.wx, m_robot.wy, world.x(), world.y(), speed, actionId, [this, world, targetDesc](int code, const QJsonObject &resp) {
                 if (code == 200) {
                     QString msg = resp.value("data").toObject().value("msg").toString("ok");
                     if (msg == "failed") {
                         QString err = resp.value("data").toObject().value("error_info").toString();
-                        Toast::error(this, QString("控制器拒绝移动: %1").arg(err.isEmpty() ? "执行中或格式错误" : err));
+                        m_navActive = false;
+                        m_currentOpType = OpNone;
+                        m_currentMotionDesc.clear();
+                        updateNavButtonsState();
                         setStatus(QString("控制器拒绝移动: %1").arg(err), "#ef4444");
                     } else {
-                        Toast::success(this, QString("已开始移动至 (%1, %2)").arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2));
                         m_navActive = true;
                         m_navPaused = false;
                         m_navEnteredRunning = false;
                         m_navStartTime = QDateTime::currentMSecsSinceEpoch();
+                        m_currentOpType = OpMotion;
+                        m_currentMotionDesc = targetDesc;
                         updateNavButtonsState();
-                        setStatus(QString("正在移动至 (%1, %2)").arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2), "#00e676");
+                        setStatus(QString("正在移动至 (%1, %2)...").arg(world.x(), 0, 'f', 2).arg(world.y(), 0, 'f', 2), "#00e676");
                     }
                 } else {
                     QString msg = resp.value("msg").toString("控制器未响应");
-                    Toast::error(this, QString("移动请求失败(%1): %2").arg(code).arg(msg));
+                    m_navActive = false;
+                    m_currentOpType = OpNone;
+                    m_currentMotionDesc.clear();
+                    updateNavButtonsState();
                     setStatus(QString("移动请求失败: %1").arg(msg), "#ef4444");
                 }
             });
@@ -3926,6 +4023,35 @@ void MapViewWidget::onToggleMoveMode()
 {
     if (!m_motionDialog) {
         m_motionDialog = new MotionDialog(this);
+        connect(m_motionDialog, &MotionDialog::statusHintRequested, this, [this](const QString &msg, const QString &color) {
+            setStatus(msg, color);
+        });
+        connect(m_motionDialog, &MotionDialog::motionStarted, this, [this](int, double, const QString &desc) {
+            m_currentOpType = OpMotion;
+            m_currentMotionDesc = desc;
+            m_navActive = true;
+            m_navStartTime = QDateTime::currentMSecsSinceEpoch();
+            updateNavButtonsState();
+        });
+        connect(m_motionDialog, &MotionDialog::motionCompleted, this, [this]() {
+            setStatus(m_currentMotionDesc.isEmpty() ? "移动已完成，设备就绪" : QString("%1 已完成，设备就绪").arg(m_currentMotionDesc), "#00e676");
+            m_currentOpType = OpNone;
+            m_currentMotionDesc.clear();
+            m_navActive = false;
+            updateNavButtonsState();
+        });
+        connect(m_motionDialog, &MotionDialog::motionCanceled, this, [this]() {
+            setStatus("移动已取消", "#f59e0b");
+            m_currentOpType = OpNone;
+            m_currentMotionDesc.clear();
+            m_navActive = false;
+            updateNavButtonsState();
+        });
+        connect(m_motionDialog, &MotionDialog::motionPaused, this, [this](bool paused) {
+            m_navPaused = paused;
+            setStatus(paused ? "移动已暂停" : "已恢复移动", paused ? "#f59e0b" : "#00e676");
+            updateNavButtonsState();
+        });
     }
     m_motionDialog->show();
     m_motionDialog->raise();
@@ -3943,8 +4069,14 @@ void MapViewWidget::onCancelNavigation()
     m_navPaused = false;
     m_navEnteredRunning = false;
     updateNavButtonsState();
-    setStatus("已取消导航", "#f59e0b");
-    Toast::info(this, "已下发取消导航指令");
+    if (m_currentOpType == OpMotion) {
+        setStatus("移动已取消", "#f59e0b");
+    } else {
+        setStatus("已取消导航", "#f59e0b");
+    }
+    m_currentOpType = OpNone;
+    m_currentNavTargetName.clear();
+    m_currentMotionDesc.clear();
 }
 
 void MapViewWidget::onPauseNavigation()
@@ -3960,8 +4092,11 @@ void MapViewWidget::onPauseNavigation()
 
         m_navPaused = false;
         updateNavButtonsState();
-        setStatus("已继续导航", "#00e676");
-        Toast::success(this, "已继续导航");
+        if (m_currentOpType == OpMotion) {
+            setStatus("已恢复移动", "#00e676");
+        } else {
+            setStatus("已继续导航", "#00e676");
+        }
     } else {
         // 暂停导航统一使用 /robot/navigation/control?command=pause navigation
         ApiService::instance().controlNavigation(QStringLiteral("pause navigation"), [](int code, const QJsonObject &resp) {
@@ -3970,16 +4105,20 @@ void MapViewWidget::onPauseNavigation()
 
         m_navPaused = true;
         updateNavButtonsState();
-        setStatus("导航已暂停", "#f59e0b");
-        Toast::info(this, "导航已暂停");
+        if (m_currentOpType == OpMotion) {
+            setStatus("移动已暂停", "#f59e0b");
+        } else {
+            setStatus("导航已暂停", "#f59e0b");
+        }
     }
 }
 
 void MapViewWidget::updateNavButtonsState()
 {
     const RobotInfo &info = RobotInfoManager::instance().currentInfo();
-    // 严格根据 /rob/navigate/status 控制: status == "1" 导航中, status == "2" 暂停导航，两者均为导航进行态；status == "0" 就绪（置灰不可点击）
-    const bool isNav = (info.status == "1" || info.status == "2" || info.status == "5" || info.status == "3");
+    // 严格根据 /rob/navigate/status 控制: status == "1" 导航中, status == "2" 暂停导航，两者均为导航进行态；status == "0" 就绪
+    const bool isRobotNav = (info.status == "1" || info.status == "2" || info.status == "5" || info.status == "3");
+    const bool isNav = (isRobotNav || m_navActive);
     // 用户标记：当用户点击抢占控制权时，不要让取消导航和暂停导航按钮可点击
     const bool isUserPreempted = TeleopController::instance().isUserPreempted() || TeleopController::instance().isActive();
     const bool canControlNav = isNav && !isUserPreempted;
@@ -3996,6 +4135,29 @@ void MapViewWidget::updateNavButtonsState()
         } else {
             m_pauseNavBtn->setText("暂停导航");
             m_pauseNavBtn->setIcon(makeMapToolIcon("pause"));
+        }
+    }
+
+    // 路径导航按钮状态：导航过程中变暗且不可被再次点击，直到导航完成
+    if (m_navModeBtn) {
+        if (isNav) {
+            if (m_navMode || m_navModeBtn->isChecked()) {
+                m_navMode = false;
+                m_navModeBtn->setChecked(false);
+                if (m_canvas) {
+                    m_canvas->setPanWithLeftButton(!m_relocMode && !m_moveMode);
+                    m_canvas->setCursor(Qt::CrossCursor);
+                }
+            }
+            m_navModeBtn->setEnabled(false);
+            m_navModeBtn->setStyleSheet(kToolBtnStyle);
+        } else {
+            m_navModeBtn->setEnabled(true);
+            if (m_navModeBtn->isChecked()) {
+                m_navModeBtn->setStyleSheet(kToolBtnPrimary);
+            } else {
+                m_navModeBtn->setStyleSheet(kToolBtnStyle);
+            }
         }
     }
 }
@@ -4033,6 +4195,35 @@ void MapViewWidget::onShowRobotStatus()
     m_statusDialog->show();
     m_statusDialog->raise();
     m_statusDialog->activateWindow();
+}
+
+void MapViewWidget::onShowConfigDialog()
+{
+    if (!m_configDialog) {
+        m_configDialog = new QDialog(this);
+        m_configDialog->setWindowTitle("参数配置");
+        m_configDialog->resize(1100, 700);
+        m_configDialog->setMinimumSize(850, 520);
+        m_configDialog->setStyleSheet("QDialog { background-color: #1e2125; color: #c8d0d8; }");
+        auto *dialogLayout = new QVBoxLayout(m_configDialog);
+        dialogLayout->setContentsMargins(10, 10, 10, 10);
+        dialogLayout->setSpacing(6);
+
+        m_editConfigWidget = new EditConfigWidget(m_configDialog);
+        dialogLayout->addWidget(m_editConfigWidget);
+
+        // 原有信号联动：路网参数更新后刷新地图视图
+        connect(m_editConfigWidget, &EditConfigWidget::routeNetworkUpdated,
+                this, &MapViewWidget::refreshData);
+    }
+
+    if (m_editConfigWidget) {
+        m_editConfigWidget->refreshData();
+    }
+
+    m_configDialog->show();
+    m_configDialog->raise();
+    m_configDialog->activateWindow();
 }
 
 void MapViewWidget::onShowMoreMenu()

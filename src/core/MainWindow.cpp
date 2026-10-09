@@ -428,13 +428,12 @@ void MainWindow::setupHeaderBar()
 
     // text + the QStackedWidget page index each tab activates.
     // "创建地图" is no longer a top-level tab — it now lives as a secondary
-    // entry inside "地图管理" (see MapViewWidget's toolbar / onCreateMap()).
     struct SectionDef { QString text; int pageIndex; };
     const QList<SectionDef> sections = {
         {"  地图与控制", 0},
         // {"  任务管理  ", 2},  // 暂不需要任务管理功能，已隐藏
         {"  任务链  ", 5},
-        {"  参数配置  ", 4},
+        // {"  参数配置  ", 4},  // 已迁移至“地图与控制”工具栏中的“参数”弹窗
         {"  任务日志  ", 3},
     };
 
@@ -636,12 +635,20 @@ void MainWindow::refreshCurrentPage(int index)
 
 void MainWindow::switchToPage(const QString &pageKey)
 {
+    if (pageKey == "edit_config") {
+        m_stack->setCurrentWidget(m_mapPage);
+        highlightTabForPageIndex(0);
+        if (m_mapPage) {
+            m_mapPage->onShowConfigDialog();
+        }
+        return;
+    }
+
     static const QMap<QString, int> pageMap = {
         {"map",         0},
         {"create_map",  1},
         {"task",        2},
         {"tasklog",     3},
-        {"edit_config", 4},
         {"taskchain",   5},
     };
     auto it = pageMap.find(pageKey);

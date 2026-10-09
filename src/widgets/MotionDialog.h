@@ -36,6 +36,13 @@ protected:
 public slots:
     void refreshSpeedLimits();
 
+signals:
+    void motionStarted(int motionType, double param, const QString &desc);
+    void motionCompleted();
+    void motionCanceled();
+    void motionPaused(bool paused);
+    void statusHintRequested(const QString &msg, const QString &color = "#00e676");
+
 private slots:
     void onSendClicked();
     void onCancelNavClicked();
@@ -47,6 +54,7 @@ private:
     void setupUi();
     QWidget* createTranslationTab();
     QWidget* createRotationTab();
+    void updateParamToolTips();
     void setRunningState(bool running, bool paused = false);
     void setCompletedState();
     void setCanceledState();
@@ -59,14 +67,19 @@ private:
     QTabWidget *m_tabWidget = nullptr;
 
     // 平动控件
+    QLabel         *m_transDistLbl  = nullptr;
     QDoubleSpinBox *m_transDistSpin = nullptr;
+    QLabel         *m_transVxLbl    = nullptr;
     QDoubleSpinBox *m_transVxSpin   = nullptr;
+    QLabel         *m_transVyLbl    = nullptr;
     QDoubleSpinBox *m_transVySpin   = nullptr;
     QRadioButton   *m_odomModeRadio = nullptr;
     QRadioButton   *m_locModeRadio  = nullptr;
 
     // 转动控件
+    QLabel         *m_rotAngleLbl  = nullptr;
     QDoubleSpinBox *m_rotAngleSpin = nullptr;
+    QLabel         *m_rotSpeedLbl  = nullptr;
     QDoubleSpinBox *m_rotSpeedSpin = nullptr;
 
     // 底部控制与状态

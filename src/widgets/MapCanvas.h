@@ -27,6 +27,7 @@ public:
     ~MapCanvas() override;
 
     void setPanWithLeftButton(bool enabled);
+    void resetPanState();
     
     // Coordinate transformation setup
     void setWorldInfo(double left, double bottom, double right, double top, double width, double height);
@@ -49,6 +50,8 @@ protected:
     void mouseMoveEvent(QMouseEvent *e) override;
     void mouseReleaseEvent(QMouseEvent *e) override;
     void resizeEvent(QResizeEvent *e) override;
+    void leaveEvent(QEvent *e) override;
+    void focusOutEvent(QFocusEvent *e) override;
     bool viewportEvent(QEvent *event) override;
     bool event(QEvent *e) override;   // 处理 QNativeGestureEvent (捏合缩放/旋转)
 

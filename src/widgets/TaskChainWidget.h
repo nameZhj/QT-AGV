@@ -75,6 +75,7 @@ private slots:
 protected:
     void showEvent(QShowEvent *event) override;
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     void executeSingleAction(const QJsonObject &action);
@@ -87,6 +88,11 @@ private:
     void updateBottomBar();
     void updateTaskSelectBtn();   // 全选任务/取消选中 互斥切换
     void updateGroupSelectBtn();  // 全选组/取消选中 互斥切换
+
+    // 组复制与粘贴 (Ctrl+C / Ctrl+V)
+    void copySelectedGroup();
+    void pasteGroup();
+    void updateGroupCardSelectionHighlight();
 
     // 路网站点
     struct StationItem {
@@ -192,6 +198,7 @@ private:
     QList<ChainData> m_chains;
     int m_currentChainIndex = -1;
     int m_currentTaskIndex = -1;    // 当前选中的任务
+    QJsonArray m_copiedGroups;      // 复制的组数据缓存
 
     // 缓存状态: m_cacheLoaded 保证每个运行周期只从缓存+服务器载入一次
     // m_didSave 标记本次运行是否点击过“保存”, 未保存则退出时清理本地缓存

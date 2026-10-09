@@ -15,6 +15,7 @@
 #include <QTimer>
 #include <QSvgRenderer>
 #include <QPainter>
+#include <QApplication>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -56,6 +57,13 @@ MapCanvas::~MapCanvas()
 void MapCanvas::setPanWithLeftButton(bool enabled)
 {
     m_panWithLeftButton = enabled;
+}
+
+void MapCanvas::resetPanState()
+{
+    m_panning = false;
+    m_rotating = false;
+    setCursor(Qt::CrossCursor);
 }
 
 void MapCanvas::setWorldInfo(double left, double bottom, double right, double top, double width, double height)
@@ -289,6 +297,12 @@ void MapCanvas::mousePressEvent(QMouseEvent *e)
     QPointF sp = mapToScene(e->pos());
     emit sceneClicked(sp, e->button());
 
+    // 弹窗可能在 sceneClicked 槽函数中模态运行，返回时物理按键已在弹窗释放
+    if (!(QApplication::mouseButtons() & e->button())) {
+        resetPanState();
+        return;
+    }
+
     if (e->button() == Qt::LeftButton && (e->modifiers() & Qt::ControlModifier)) {
         m_rotating = true;
         // 记录按下时的鼠标位置(用于计算相对中心的极角)
@@ -320,6 +334,16 @@ void MapCanvas::mouseDoubleClickEvent(QMouseEvent *e)
 
 void MapCanvas::mouseMoveEvent(QMouseEvent *e)
 {
+    // 防御：若标记了旋转但当前物理按键没有按住左键，立即退出旋转
+    if (m_rotating && !(e->buttons() & Qt::LeftButton)) {
+        resetPanState();
+    }
+
+    // 防御：若标记了平移但当前物理按键没有按住左键或中键，立即退出平移
+    if (m_panning && !(e->buttons() & (Qt::LeftButton | Qt::MiddleButton))) {
+        resetPanState();
+    }
+
     if (m_rotating) {
         // 以视图中心为圆心的拖拽旋转。
         // 使用鼠标相对中心的极角变化驱动旋转，任意方向移动都能响应：
@@ -391,6 +415,20 @@ void MapCanvas::resizeEvent(QResizeEvent *e)
 {
     QGraphicsView::resizeEvent(e);
     emit canvasResized(e->size());
+}
+
+void MapCanvas::leaveEvent(QEvent *e)
+{
+    if ((m_panning || m_rotating) && !(QApplication::mouseButtons() & (Qt::LeftButton | Qt::MiddleButton))) {
+        resetPanState();
+    }
+    QGraphicsView::leaveEvent(e);
+}
+
+void MapCanvas::focusOutEvent(QFocusEvent *e)
+{
+    resetPanState();
+    QGraphicsView::focusOutEvent(e);
 }
 
 void MapCanvas::initMqtt()

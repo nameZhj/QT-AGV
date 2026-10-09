@@ -72,6 +72,9 @@ protected:
     void showEvent(QShowEvent *) override;
     void hideEvent(QHideEvent *) override;
 
+public slots:
+    void onShowConfigDialog();
+
 private slots:
     void onCreateMap();
     void onUploadMap();
@@ -287,9 +290,10 @@ private:
     QToolButton *m_uploadMapBtn   = nullptr; // 9. 推送地图 (原 地图上传)
     QToolButton *m_downloadMapBtn = nullptr; // 10. 拉取地图 (原 下载原文件)
     QToolButton *m_switchMapBtn   = nullptr; // 11. 地图管理 (原 切换地图)
-    QToolButton *m_teleopBtn      = nullptr; // 12. 抢占控制权
-    QToolButton *m_statusBtn      = nullptr; // 13. 状态
-    QToolButton *m_moreBtn        = nullptr; // 14. 其它 (弹出工具列表)
+    QToolButton *m_configBtn      = nullptr; // 12. 参数 (参数配置弹窗)
+    QToolButton *m_teleopBtn      = nullptr; // 13. 抢占控制权
+    QToolButton *m_statusBtn      = nullptr; // 14. 状态
+    QToolButton *m_moreBtn        = nullptr; // 15. 其它 (弹出工具列表)
     class QMenu *m_moreMenu       = nullptr;
     QToolButton *m_resetViewBtn   = nullptr;
     QToolButton *m_refreshBtn     = nullptr;
@@ -297,6 +301,8 @@ private:
     class DirectionPadWidget *m_directionPad = nullptr;
     RobotStatusDialog *m_statusDialog = nullptr;
     class MotionDialog *m_motionDialog = nullptr;
+    class EditConfigWidget *m_editConfigWidget = nullptr;
+    class QDialog *m_configDialog = nullptr;
 
     // Navigation & Move modes
     bool        m_navMode          = false;
@@ -305,6 +311,16 @@ private:
     bool        m_navPaused        = false;
     bool        m_navEnteredRunning= false;
     qint64      m_navStartTime     = 0;
+
+    enum CurrentOperationType {
+        OpNone,
+        OpNavigation,
+        OpMotion
+    };
+    CurrentOperationType m_currentOpType = OpNone;
+    QString     m_currentNavTargetName;
+    QString     m_currentMotionDesc;
+    QString     m_lastRobotNavStatus = "0";
 
     // Relocalization mode (click+drag to set position and heading)
     bool        m_relocMode        = false;

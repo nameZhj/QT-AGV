@@ -26,6 +26,12 @@
 #include <QPainter>
 #include <QDateTime>
 #include <QCoreApplication>
+#include <QApplication>
+#include <QShortcut>
+#include <QClipboard>
+#include <QKeyEvent>
+#include <QContextMenuEvent>
+#include <QPlainTextEdit>
 
 // ── 音频名称下拉支持 ────────────────────────────────────────────────────────
 
@@ -253,12 +259,35 @@ protected:
 class CardLongPressDragFilter : public QObject
 {
 public:
-    CardLongPressDragFilter(const QString &mimeType, int index, QWidget *container)
-        : QObject(container), m_mimeType(mimeType), m_index(index), m_container(container)
+    CardLongPressDragFilter(const QString &mimeType, int index, QWidget *container, QListWidget *parentList = nullptr)
+        : QObject(container), m_mimeType(mimeType), m_index(index), m_container(container), m_parentList(parentList)
     {
         m_timer = new QTimer(this);
         m_timer->setSingleShot(true);
         connect(m_timer, &QTimer::timeout, this, &CardLongPressDragFilter::onLongPressTimeout);
+    }
+
+    std::function<void(int index)> onSelected;
+
+    void selectInParentList()
+    {
+        QListWidget *list = m_parentList;
+        if (!list && m_container) {
+            QWidget *p = m_container->parentWidget();
+            while (p && !qobject_cast<QListWidget*>(p)) {
+                p = p->parentWidget();
+            }
+            list = qobject_cast<QListWidget*>(p);
+        }
+        if (list) {
+            if (list->currentRow() != m_index) {
+                list->setCurrentRow(m_index);
+            }
+            list->setFocus();
+        }
+        if (onSelected) {
+            onSelected(m_index);
+        }
     }
 
 protected:
@@ -267,6 +296,7 @@ protected:
         if (event->type() == QEvent::MouseButtonPress) {
             auto *me = static_cast<QMouseEvent*>(event);
             if (me->button() == Qt::LeftButton) {
+                selectInParentList();
                 // 点击在可交互控件上时，正常响应交互，不触发长按拖拽
                 QWidget *child = m_container->childAt(me->pos());
                 if (child && (qobject_cast<QAbstractButton*>(child) || qobject_cast<QTextEdit*>(child))) {
@@ -276,6 +306,19 @@ protected:
                 m_longPressed = false;
                 m_dragStarted = false;
                 m_timer->start(300); // 300ms 判定为长按
+            } else if (me->button() == Qt::RightButton) {
+                selectInParentList();
+            }
+        } else if (event->type() == QEvent::ContextMenu) {
+            auto *ce = static_cast<QContextMenuEvent*>(event);
+            selectInParentList();
+            QWidget *p = m_container->parentWidget();
+            while (p && !qobject_cast<QListWidget*>(p)) {
+                p = p->parentWidget();
+            }
+            if (auto *list = qobject_cast<QListWidget*>(p)) {
+                emit list->customContextMenuRequested(list->mapFromGlobal(ce->globalPos()));
+                return true;
             }
         } else if (event->type() == QEvent::MouseMove) {
             auto *me = static_cast<QMouseEvent*>(event);
@@ -344,6 +387,7 @@ private:
     QString m_mimeType;
     int m_index = 0;
     QWidget *m_container = nullptr;
+    QPointer<QListWidget> m_parentList;
     QTimer *m_timer = nullptr;
     QPoint m_pressPos;
     bool m_dragStarted = false;
@@ -538,6 +582,27 @@ void TaskChainWidget::setupUI()
         m_currentGroupName = group;
         applyRuntimeSelection();
         updateBottomBar();
+    });
+
+    // 注册全局快捷键 Ctrl+C / Ctrl+V (复制粘贴组)
+    auto *copyShortcut = new QShortcut(QKeySequence::Copy, this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+    connect(copyShortcut, &QShortcut::activated, this, [this]() {
+        if (!isVisible() || m_listLocked || m_execStatus == Running) return;
+        QWidget *fw = QApplication::focusWidget();
+        if (fw && (qobject_cast<QLineEdit*>(fw) || qobject_cast<QTextEdit*>(fw) || qobject_cast<QPlainTextEdit*>(fw))) {
+            return;
+        }
+        copySelectedGroup();
+    });
+
+    auto *pasteShortcut = new QShortcut(QKeySequence::Paste, this, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+    connect(pasteShortcut, &QShortcut::activated, this, [this]() {
+        if (!isVisible() || m_listLocked || m_execStatus == Running) return;
+        QWidget *fw = QApplication::focusWidget();
+        if (fw && (qobject_cast<QLineEdit*>(fw) || qobject_cast<QTextEdit*>(fw) || qobject_cast<QPlainTextEdit*>(fw))) {
+            return;
+        }
+        pasteGroup();
     });
 
     updateBottomBar();
@@ -759,7 +824,7 @@ void TaskChainWidget::setupPanel3Group(QVBoxLayout *layout)
     btnRow2->addWidget(m_groupSendAllBtn);
     layout->addLayout(btnRow2);
 
-    m_groupHintLabel = new QLabel(QStringLiteral("拖拽标签到组中添加动作；长按组卡片可直接拖动重新排序"));
+    m_groupHintLabel = new QLabel(QStringLiteral("拖拽标签到组中添加动作；长按组卡片可重新排序；选中组支持 Ctrl+C / Ctrl+V 复制粘贴"));
     m_groupHintLabel->setStyleSheet("color:#666; font-size:11px; padding:2px;");
     layout->addWidget(m_groupHintLabel);
 
@@ -770,9 +835,48 @@ void TaskChainWidget::setupPanel3Group(QVBoxLayout *layout)
     connect(m_groupSelectAllBtn, &QPushButton::clicked, this, &TaskChainWidget::onGroupSelectAll);
     connect(m_groupSendSelBtn, &QPushButton::clicked, this, &TaskChainWidget::onGroupSendSelected);
     connect(m_groupSendAllBtn,  &QPushButton::clicked, this, &TaskChainWidget::onGroupSendAll);
-    // 选择变化时更新底部状态栏
+    // 选择变化时更新底部状态栏与卡片高亮
     connect(m_groupList, &QListWidget::currentItemChanged,
-            this, [this](QListWidgetItem*, QListWidgetItem*) { updateBottomBar(); });
+            this, [this](QListWidgetItem*, QListWidgetItem*) {
+        updateBottomBar();
+        updateGroupCardSelectionHighlight();
+    });
+
+    // 组列表右键菜单
+    m_groupList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_groupList, &QListWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        if (m_listLocked || m_execStatus == Running) return;
+        auto *item = m_groupList->itemAt(pos);
+        if (item) {
+            m_groupList->setCurrentItem(item);
+        }
+
+        QMenu menu(this);
+        menu.setStyleSheet(
+            "QMenu { background:#1f232b; border:1px solid #2d3340; color:#c0c8d0; padding:4px; }"
+            "QMenu::item { padding:6px 20px; border-radius:3px; }"
+            "QMenu::item:selected { background:#2a5d8f; color:#fff; }"
+            "QMenu::item:disabled { color:#555d6b; }");
+
+        auto *copyAct = menu.addAction(QStringLiteral("复制组 (Ctrl+C)"));
+        copyAct->setEnabled(m_groupList->count() > 0 && (item != nullptr || m_groupList->currentRow() >= 0));
+        connect(copyAct, &QAction::triggered, this, &TaskChainWidget::copySelectedGroup);
+
+        auto *pasteAct = menu.addAction(QStringLiteral("粘贴组 (Ctrl+V)"));
+        pasteAct->setEnabled(!m_copiedGroups.isEmpty() || (QApplication::clipboard()->mimeData() && QApplication::clipboard()->mimeData()->hasFormat("application/x-taskchain-groups")));
+        connect(pasteAct, &QAction::triggered, this, &TaskChainWidget::pasteGroup);
+
+        menu.addSeparator();
+
+        auto *insertAct = menu.addAction(QStringLiteral("插入新组"));
+        connect(insertAct, &QAction::triggered, this, &TaskChainWidget::onGroupInsert);
+
+        auto *delAct = menu.addAction(QStringLiteral("删除选中组"));
+        delAct->setEnabled(item != nullptr || m_groupList->currentRow() >= 0);
+        connect(delAct, &QAction::triggered, this, &TaskChainWidget::onGroupDelete);
+
+        menu.exec(m_groupList->mapToGlobal(pos));
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1073,6 +1177,7 @@ void TaskChainWidget::refreshGroupList()
     m_groupList->blockSignals(false);
     updateGroupSelectBtn();
     updateBottomBar();
+    updateGroupCardSelectionHighlight();
     scheduleCacheWrite();
     if (m_listLocked) {
         installLockFilter(m_groupList, true);
@@ -1096,7 +1201,15 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
     container->setObjectName("groupCardRoot");
     container->setStyleSheet("#groupCardRoot { background: transparent; border: 1px solid transparent; border-radius: 4px; }");
     container->setAcceptDrops(true);
-    container->installEventFilter(new CardLongPressDragFilter("application/x-taskchain-group-reorder", groupIndex, container));
+    auto *filter = new CardLongPressDragFilter("application/x-taskchain-group-reorder", groupIndex, container, m_groupList);
+    filter->onSelected = [this](int idx) {
+        if (m_groupList && m_groupList->currentRow() != idx) {
+            m_groupList->setCurrentRow(idx);
+        }
+        updateBottomBar();
+        updateGroupCardSelectionHighlight();
+    };
+    container->installEventFilter(filter);
     auto *vbox = new QVBoxLayout(container);
     vbox->setContentsMargins(4, 4, 4, 4);
     vbox->setSpacing(3);
@@ -1131,7 +1244,14 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
     headerRow->addWidget(delBtn);
     vbox->addLayout(headerRow);
 
-    // 勾选框变化时同步 enable 与 checked 状态
+    // 勾选框点击时同步鼠标选中行
+    connect(checkBox, &QCheckBox::clicked, this, [this, groupIndex]() {
+        if (m_groupList && m_groupList->currentRow() != groupIndex) {
+            m_groupList->setCurrentRow(groupIndex);
+        }
+    });
+
+    // 勾选框变化时同步 enable 与 checked 状态 (仅作为勾选开关，不改变鼠标选中的组)
     connect(checkBox, &QCheckBox::toggled, this,
         [this, groupIndex](bool state) {
             QJsonArray groups = currentTaskGroups();
@@ -1248,7 +1368,15 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
             }
             paramBtn->setMinimumHeight(32);
 
-            // 参数按钮 → 打开参数定义对话框
+            // 参数按钮 → 打开参数定义对话框 (点击时同时将当前组设为鼠标选中)
+            connect(paramBtn, &QPushButton::pressed, this, [this, groupIndex]() {
+                if (m_groupList) {
+                    m_groupList->setCurrentRow(groupIndex);
+                }
+                updateBottomBar();
+                updateGroupCardSelectionHighlight();
+            });
+
             if (!isNoParam) {
                 connect(paramBtn, &QPushButton::clicked, this,
                     [this, groupIndex, a, actionName]() {
@@ -3104,4 +3232,209 @@ void TaskChainWidget::reorderTask(int fromIdx, int toIdx)
         m_taskList->setCurrentRow(toIdx);
     }
     updateStatus(QStringLiteral("任务已重新排序: 第 %1 项 -> 第 %2 项").arg(fromIdx + 1).arg(toIdx + 1));
+}
+
+void TaskChainWidget::copySelectedGroup()
+{
+    if (m_listLocked || m_execStatus == Running) return;
+
+    if (m_currentTaskIndex < 0) {
+        Toast::info(this, QStringLiteral("请先选择任务"));
+        return;
+    }
+
+    QJsonArray groups = currentTaskGroups();
+    if (groups.isEmpty()) {
+        Toast::info(this, QStringLiteral("当前任务没有可复制的组"));
+        return;
+    }
+
+    // 仅按鼠标选中的组进行复制（不按复选框 check 状态）
+    QList<int> targetIndices;
+
+    if (m_groupList) {
+        // 如果有按住 Ctrl/Shift 鼠标多选的项
+        auto selItems = m_groupList->selectedItems();
+        if (selItems.size() > 1) {
+            for (auto *item : selItems) {
+                int row = m_groupList->row(item);
+                if (row >= 0 && row < groups.size() && !targetIndices.contains(row)) {
+                    targetIndices.append(row);
+                }
+            }
+        }
+
+        // 默认按鼠标当前点击选中的行 currentRow()
+        if (targetIndices.isEmpty()) {
+            int curRow = m_groupList->currentRow();
+            if (curRow >= 0 && curRow < groups.size()) {
+                targetIndices.append(curRow);
+            }
+        }
+    }
+
+    if (targetIndices.isEmpty()) {
+        Toast::info(this, QStringLiteral("请先用鼠标点击选中要复制的组"));
+        return;
+    }
+
+    std::sort(targetIndices.begin(), targetIndices.end());
+
+    QJsonArray copiedArray;
+    QStringList copiedNames;
+    for (int idx : targetIndices) {
+        QJsonObject gObj = groups[idx].toObject();
+        copiedArray.append(gObj);
+        QString gName = gObj.value("group_name").toString();
+        if (gName.isEmpty()) gName = gObj.value("name").toString();
+        if (gName.isEmpty()) gName = QString("group_%1").arg(idx + 1);
+        copiedNames.append(gName);
+    }
+
+    m_copiedGroups = copiedArray;
+
+    // 存入系统剪贴板 (JSON 格式)
+    QJsonObject clipObj;
+    clipObj["type"] = "taskchain_groups";
+    clipObj["groups"] = copiedArray;
+    QByteArray clipData = QJsonDocument(clipObj).toJson(QJsonDocument::Compact);
+
+    auto *mime = new QMimeData;
+    mime->setData("application/x-taskchain-groups", clipData);
+    mime->setText(QString::fromUtf8(clipData));
+    QApplication::clipboard()->setMimeData(mime);
+
+    Toast::success(this, QStringLiteral("已复制选中的组: %1").arg(copiedNames.join(", ")));
+    updateStatus(QStringLiteral("已复制组: %1 (可按 Ctrl+V 粘贴)").arg(copiedNames.join(", ")));
+}
+
+void TaskChainWidget::pasteGroup()
+{
+    if (m_listLocked || m_execStatus == Running) return;
+
+    if (m_currentTaskIndex < 0) {
+        Toast::info(this, QStringLiteral("请先选择要粘贴到的任务"));
+        return;
+    }
+
+    QJsonArray groupsToPaste = m_copiedGroups;
+
+    // 如果内存缓存为空，尝试从系统剪贴板中读取
+    if (groupsToPaste.isEmpty()) {
+        const QMimeData *mime = QApplication::clipboard()->mimeData();
+        if (mime) {
+            QByteArray data;
+            if (mime->hasFormat("application/x-taskchain-groups")) {
+                data = mime->data("application/x-taskchain-groups");
+            } else if (mime->hasText()) {
+                data = mime->text().toUtf8();
+            }
+            if (!data.isEmpty()) {
+                QJsonDocument doc = QJsonDocument::fromJson(data);
+                if (doc.isObject() && doc.object().value("type").toString() == "taskchain_groups") {
+                    groupsToPaste = doc.object().value("groups").toArray();
+                } else if (doc.isArray()) {
+                    groupsToPaste = doc.array();
+                }
+            }
+        }
+    }
+
+    if (groupsToPaste.isEmpty()) {
+        Toast::info(this, QStringLiteral("剪贴板中没有可粘贴的组，请先按 Ctrl+C 复制组"));
+        return;
+    }
+
+    QJsonArray curGroups = currentTaskGroups();
+    int insertPos = curGroups.size(); // 默认追加到末尾
+
+    if (m_groupList) {
+        int curRow = m_groupList->currentRow();
+        if (curRow >= 0 && curRow < curGroups.size()) {
+            insertPos = curRow + 1; // 粘贴在当前选中组的下方
+        }
+    }
+
+    // 找出当前已存在的 group_X 中的最大编号，保证新组名连续且唯一
+    int maxGroupNum = 0;
+    for (const auto &gVal : curGroups) {
+        QString n = gVal.toObject().value("group_name").toString();
+        if (n.isEmpty()) n = gVal.toObject().value("name").toString();
+        if (n.startsWith("group_")) {
+            bool ok = false;
+            int num = n.mid(6).toInt(&ok);
+            if (ok && num > maxGroupNum) maxGroupNum = num;
+        }
+    }
+    if (maxGroupNum < curGroups.size()) {
+        maxGroupNum = curGroups.size();
+    }
+
+    QStringList pastedNames;
+    int firstPastedRow = insertPos;
+
+    for (int i = 0; i < groupsToPaste.size(); ++i) {
+        QJsonObject g = groupsToPaste[i].toObject();
+        maxGroupNum++;
+        QString newName = QString("group_%1").arg(maxGroupNum);
+        g["group_name"] = newName;
+        g["name"]       = newName;
+        g["enable"]     = false;
+        g["checked"]    = false;
+
+        curGroups.insert(insertPos + i, g);
+        pastedNames.append(newName);
+    }
+
+    setCurrentTaskGroups(curGroups);
+    refreshGroupList();
+
+    // 将光标聚焦到粘贴后的第一个新组，并高亮滚动到该位置
+    if (m_groupList && firstPastedRow >= 0 && firstPastedRow < m_groupList->count()) {
+        m_groupList->setCurrentRow(firstPastedRow);
+        m_groupList->scrollToItem(m_groupList->item(firstPastedRow));
+    }
+    updateGroupCardSelectionHighlight();
+
+    Toast::success(this, QStringLiteral("已粘贴组: %1").arg(pastedNames.join(", ")));
+    updateStatus(QStringLiteral("已粘贴 %1 个组: %2").arg(pastedNames.size()).arg(pastedNames.join(", ")));
+}
+
+void TaskChainWidget::updateGroupCardSelectionHighlight()
+{
+    if (!m_groupList || m_execStatus == Running || m_chainWorking || m_listLocked) return;
+    int curRow = m_groupList->currentRow();
+    for (int i = 0; i < m_groupList->count(); ++i) {
+        auto *item = m_groupList->item(i);
+        if (!item) continue;
+        QWidget *w = m_groupList->itemWidget(item);
+        if (!w) continue;
+        if (i == curRow && curRow >= 0) {
+            w->setStyleSheet("#groupCardRoot { background: rgba(0, 188, 212, 0.15); border: 2px solid #00bcd4; border-radius: 4px; }");
+        } else {
+            w->setStyleSheet("#groupCardRoot { background: transparent; border: 1px solid transparent; border-radius: 4px; }");
+        }
+    }
+}
+
+void TaskChainWidget::keyPressEvent(QKeyEvent *event)
+{
+    if (!m_listLocked && m_execStatus != Running) {
+        if (event->matches(QKeySequence::Copy) || (event->modifiers() == Qt::ControlModifier && event->key() == Qt::Key_C)) {
+            QWidget *fw = QApplication::focusWidget();
+            if (!fw || (!qobject_cast<QLineEdit*>(fw) && !qobject_cast<QTextEdit*>(fw) && !qobject_cast<QPlainTextEdit*>(fw))) {
+                copySelectedGroup();
+                event->accept();
+                return;
+            }
+        } else if (event->matches(QKeySequence::Paste) || (event->modifiers() == Qt::ControlModifier && event->key() == Qt::Key_V)) {
+            QWidget *fw = QApplication::focusWidget();
+            if (!fw || (!qobject_cast<QLineEdit*>(fw) && !qobject_cast<QTextEdit*>(fw) && !qobject_cast<QPlainTextEdit*>(fw))) {
+                pasteGroup();
+                event->accept();
+                return;
+            }
+        }
+    }
+    QWidget::keyPressEvent(event);
 }

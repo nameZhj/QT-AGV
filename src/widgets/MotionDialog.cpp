@@ -4,7 +4,6 @@
 #include "core/MotionConfigManager.h"
 #include "core/TaskChainManager.h"
 #include "core/TeleopController.h"
-#include "core/Toast.h"
 
 #include <QPointer>
 #include <QVBoxLayout>
@@ -110,6 +109,37 @@ void MotionDialog::refreshSpeedLimits()
         if (m_rotSpeedSpin->value() > maxAngular) m_rotSpeedSpin->setValue(maxAngular);
         if (m_rotSpeedSpin->value() < -maxAngular) m_rotSpeedSpin->setValue(-maxAngular);
     }
+
+    updateParamToolTips();
+}
+
+void MotionDialog::updateParamToolTips()
+{
+    const double maxLinear = MotionConfigManager::instance().maxSpeed();
+    const double maxAngular = MotionConfigManager::instance().maxAngularSpeedDeg();
+
+    const QString distTip = QStringLiteral("平动距离\n范围: 0.001 ~ 100.000 m (距离应大于 0m)");
+    if (m_transDistSpin) m_transDistSpin->setToolTip(distTip);
+    if (m_transDistLbl) m_transDistLbl->setToolTip(distTip);
+
+    const QString vxTip = QStringLiteral("前后线速度 vx\n范围: -%1 ~ %1 m/s (平动时速度绝对值应大于 0m/s，正数前进，负数后退)").arg(maxLinear, 0, 'f', 2);
+    if (m_transVxSpin) m_transVxSpin->setToolTip(vxTip);
+    if (m_transVxLbl) m_transVxLbl->setToolTip(vxTip);
+
+    const QString vyTip = QStringLiteral("左右横移速度 vy\n范围: -%1 ~ %1 m/s (全向轮机型支持，正数向左，负数向右)").arg(maxLinear, 0, 'f', 2);
+    if (m_transVySpin) m_transVySpin->setToolTip(vyTip);
+    if (m_transVyLbl) m_transVyLbl->setToolTip(vyTip);
+
+    const QString angleTip = QStringLiteral("旋转角度\n范围: -360.000° ~ 360.000° (角度绝对值应大于 0°，正数逆时针，负数顺时针)");
+    if (m_rotAngleSpin) m_rotAngleSpin->setToolTip(angleTip);
+    if (m_rotAngleLbl) m_rotAngleLbl->setToolTip(angleTip);
+
+    const QString speedTip = QStringLiteral("旋转角速度\n范围: -%1°/s ~ %1°/s (旋转时角速度绝对值应大于 0°/s)").arg(maxAngular, 0, 'f', 1);
+    if (m_rotSpeedSpin) m_rotSpeedSpin->setToolTip(speedTip);
+    if (m_rotSpeedLbl) m_rotSpeedLbl->setToolTip(speedTip);
+
+    if (m_odomModeRadio) m_odomModeRadio->setToolTip(QStringLiteral("里程模式：根据轮式编码器累积计算移动距离"));
+    if (m_locModeRadio) m_locModeRadio->setToolTip(QStringLiteral("定位模式：根据激光SLAM/全局定位坐标计算移动距离"));
 }
 
 void MotionDialog::setupUi()
@@ -326,8 +356,8 @@ QWidget* MotionDialog::createTranslationTab()
     formLayout->setVerticalSpacing(8);
 
     // 1. 设置距离
-    auto *distLbl = new QLabel("设置距离：", panel);
-    distLbl->setStyleSheet("border: none; color: #c5cbd5;");
+    m_transDistLbl = new QLabel("设置距离：", panel);
+    m_transDistLbl->setStyleSheet("border: none; color: #c5cbd5;");
     m_transDistSpin = new QDoubleSpinBox(panel);
     m_transDistSpin->setRange(0.0, 100.0);
     m_transDistSpin->setDecimals(3);
@@ -335,13 +365,13 @@ QWidget* MotionDialog::createTranslationTab()
     m_transDistSpin->setValue(0.000);
     auto *distUnitLbl = new QLabel("m", panel);
     distUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
-    formLayout->addWidget(distLbl, 0, 0);
+    formLayout->addWidget(m_transDistLbl, 0, 0);
     formLayout->addWidget(m_transDistSpin, 0, 1);
     formLayout->addWidget(distUnitLbl, 0, 2);
 
     // 2. 设置 vx 速度
-    auto *vxLbl = new QLabel("设置 vx 速度：", panel);
-    vxLbl->setStyleSheet("border: none; color: #c5cbd5;");
+    m_transVxLbl = new QLabel("设置 vx 速度：", panel);
+    m_transVxLbl->setStyleSheet("border: none; color: #c5cbd5;");
     const double maxLinear = MotionConfigManager::instance().maxSpeed();
     m_transVxSpin = new QDoubleSpinBox(panel);
     m_transVxSpin->setRange(-maxLinear, maxLinear);
@@ -350,13 +380,13 @@ QWidget* MotionDialog::createTranslationTab()
     m_transVxSpin->setValue(0.000);
     auto *vxUnitLbl = new QLabel("m/s", panel);
     vxUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
-    formLayout->addWidget(vxLbl, 1, 0);
+    formLayout->addWidget(m_transVxLbl, 1, 0);
     formLayout->addWidget(m_transVxSpin, 1, 1);
     formLayout->addWidget(vxUnitLbl, 1, 2);
 
     // 3. 设置 vy 速度
-    auto *vyLbl = new QLabel("设置 vy 速度：", panel);
-    vyLbl->setStyleSheet("border: none; color: #c5cbd5;");
+    m_transVyLbl = new QLabel("设置 vy 速度：", panel);
+    m_transVyLbl->setStyleSheet("border: none; color: #c5cbd5;");
     m_transVySpin = new QDoubleSpinBox(panel);
     m_transVySpin->setRange(-maxLinear, maxLinear);
     m_transVySpin->setDecimals(3);
@@ -364,7 +394,7 @@ QWidget* MotionDialog::createTranslationTab()
     m_transVySpin->setValue(0.000);
     auto *vyUnitLbl = new QLabel("m/s", panel);
     vyUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
-    formLayout->addWidget(vyLbl, 2, 0);
+    formLayout->addWidget(m_transVyLbl, 2, 0);
     formLayout->addWidget(m_transVySpin, 2, 1);
     formLayout->addWidget(vyUnitLbl, 2, 2);
 
@@ -398,6 +428,8 @@ QWidget* MotionDialog::createTranslationTab()
     panelLayout->addLayout(formLayout);
     layout->addWidget(panel);
 
+    updateParamToolTips();
+
     return tab;
 }
 
@@ -423,8 +455,8 @@ QWidget* MotionDialog::createRotationTab()
     formLayout->setVerticalSpacing(10);
 
     // 1. 设置旋转角度
-    auto *angleLbl = new QLabel("设置旋转角度：", panel);
-    angleLbl->setStyleSheet("border: none; color: #c5cbd5;");
+    m_rotAngleLbl = new QLabel("设置旋转角度：", panel);
+    m_rotAngleLbl->setStyleSheet("border: none; color: #c5cbd5;");
     m_rotAngleSpin = new QDoubleSpinBox(panel);
     m_rotAngleSpin->setRange(-360.0, 360.0);
     m_rotAngleSpin->setDecimals(3);
@@ -432,13 +464,13 @@ QWidget* MotionDialog::createRotationTab()
     m_rotAngleSpin->setValue(0.000);
     auto *angleUnitLbl = new QLabel("°", panel);
     angleUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
-    formLayout->addWidget(angleLbl, 0, 0);
+    formLayout->addWidget(m_rotAngleLbl, 0, 0);
     formLayout->addWidget(m_rotAngleSpin, 0, 1);
     formLayout->addWidget(angleUnitLbl, 0, 2);
 
     // 2. 设置角速度
-    auto *speedLbl = new QLabel("设置角速度：", panel);
-    speedLbl->setStyleSheet("border: none; color: #c5cbd5;");
+    m_rotSpeedLbl = new QLabel("设置角速度：", panel);
+    m_rotSpeedLbl->setStyleSheet("border: none; color: #c5cbd5;");
     const double maxAngular = MotionConfigManager::instance().maxAngularSpeedDeg();
     m_rotSpeedSpin = new QDoubleSpinBox(panel);
     m_rotSpeedSpin->setRange(-maxAngular, maxAngular);
@@ -447,7 +479,7 @@ QWidget* MotionDialog::createRotationTab()
     m_rotSpeedSpin->setValue(0.000);
     auto *speedUnitLbl = new QLabel("°/s", panel);
     speedUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
-    formLayout->addWidget(speedLbl, 1, 0);
+    formLayout->addWidget(m_rotSpeedLbl, 1, 0);
     formLayout->addWidget(m_rotSpeedSpin, 1, 1);
     formLayout->addWidget(speedUnitLbl, 1, 2);
 
@@ -456,6 +488,8 @@ QWidget* MotionDialog::createRotationTab()
     formLayout->setColumnStretch(2, 0);
     panelLayout->addLayout(formLayout);
     layout->addWidget(panel);
+
+    updateParamToolTips();
 
     return tab;
 }
@@ -492,6 +526,7 @@ void MotionDialog::setCompletedState()
 
     if (m_sendBtn) m_sendBtn->setEnabled(true);
     onCurrentRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
+    emit motionCompleted();
 }
 
 void MotionDialog::setCanceledState()
@@ -502,14 +537,52 @@ void MotionDialog::setCanceledState()
 
     if (m_sendBtn) m_sendBtn->setEnabled(true);
     onCurrentRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
+    emit motionCanceled();
 }
 
 void MotionDialog::onSendClicked()
 {
     // 注意通过 MQTT 的状态判断，执行任务链期间不可执行移动
     if (TaskChainManager::instance().isWorking()) {
-        Toast::error(this, "当前正在执行任务链任务，不可下发移动指令！");
+        m_statusLabel->setText("任务链执行中，不可下发移动指令");
+        m_statusLabel->setStyleSheet("color: #ef4444; font-weight: bold; font-size: 14px;");
         return;
+    }
+
+    const int currentTab = m_tabWidget->currentIndex();
+
+    if (currentTab == 0) {
+        const double dist = m_transDistSpin->value();
+        const double rawVx = m_transVxSpin->value();
+        const double rawVy = m_transVySpin->value();
+        double vx = MotionConfigManager::instance().clampSignedLinearSpeed(rawVx);
+        double vy = MotionConfigManager::instance().clampSignedLinearSpeed(rawVy);
+
+        if (dist <= 0.0001) {
+            m_statusLabel->setText("距离应大于 0m");
+            m_statusLabel->setStyleSheet("color: #ef4444; font-weight: bold; font-size: 14px;");
+            return;
+        }
+        if (std::abs(vx) < 1e-4 && std::abs(vy) < 1e-4) {
+            m_statusLabel->setText("速度 vx 或 vy 绝对值应大于 0");
+            m_statusLabel->setStyleSheet("color: #ef4444; font-weight: bold; font-size: 14px;");
+            return;
+        }
+    } else {
+        const double angle = m_rotAngleSpin->value();
+        const double rawSpeed = m_rotSpeedSpin->value();
+        double speed = MotionConfigManager::instance().clampSignedAngularSpeedDeg(rawSpeed);
+
+        if (std::abs(angle) < 1e-4) {
+            m_statusLabel->setText("旋转角度绝对值应大于 0°");
+            m_statusLabel->setStyleSheet("color: #ef4444; font-weight: bold; font-size: 14px;");
+            return;
+        }
+        if (std::abs(speed) < 1e-4) {
+            m_statusLabel->setText("角速度绝对值应大于 0°/s");
+            m_statusLabel->setStyleSheet("color: #ef4444; font-weight: bold; font-size: 14px;");
+            return;
+        }
     }
 
     const RobotInfo &info = RobotInfoManager::instance().currentInfo();
@@ -523,7 +596,6 @@ void MotionDialog::onSendClicked()
     m_statusLabel->setText("正在下发移动指令...");
     m_statusLabel->setStyleSheet("color: #3b82f6; font-weight: bold; font-size: 14px;");
 
-    const int currentTab = m_tabWidget->currentIndex();
     QPointer<MotionDialog> self = this;
 
     if (currentTab == 0) {
@@ -540,7 +612,9 @@ void MotionDialog::onSendClicked()
         double maxV = std::max(std::abs(vx), std::abs(vy));
         double durationSec = (maxV > 1e-3) ? ((std::abs(dist) / maxV) + 1.5) : 4.0;
 
-        ApiService::instance().robotNavigationMoveLinear(vx, vy, dist, [self, durationSec](int code, const QJsonObject &resp) {
+        emit self->statusHintRequested(QString("正在下发平动指令(距离: %1m)...").arg(std::abs(dist), 0, 'f', 2), "#00bcd4");
+
+        ApiService::instance().robotNavigationMoveLinear(vx, vy, dist, [self, dist, durationSec](int code, const QJsonObject &resp) {
             if (!self) return;
             qDebug() << "[MotionDialog] 平动指令响应:" << code << resp;
 
@@ -549,17 +623,18 @@ void MotionDialog::onSendClicked()
             if (!ok) {
                 qWarning() << "[MotionDialog] 平动指令下发失败, code:" << code << resp;
                 self->m_sendBtn->setEnabled(true);
-                self->m_statusLabel->setText("就绪");
-                self->m_statusLabel->setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 14px;");
                 QString errMsg = msg.isEmpty() ? QString("错误码 %1").arg(code) : msg;
-                Toast::error(self.data(), QString("平动指令失败(%1): %2").arg(code).arg(errMsg));
+                self->m_statusLabel->setText(QString("平动指令失败: %1").arg(errMsg));
+                self->m_statusLabel->setStyleSheet("color: #ef4444; font-weight: bold; font-size: 14px;");
+                emit self->statusHintRequested(QString("平动指令下发失败: %1").arg(errMsg), "#ef4444");
                 return;
             }
 
             self->setRunningState(true, false);
+            emit self->motionStarted(1, std::abs(dist), QString("平动 %1m").arg(std::abs(dist), 0, 'f', 2));
+            emit self->statusHintRequested(QString("正在平动中(目标距离: %1m)...").arg(std::abs(dist), 0, 'f', 2), "#00e676");
             int watchdogMs = static_cast<int>(std::clamp(durationSec, 2.0, 120.0) * 1000.0);
             self->m_motionWatchdog.start(watchdogMs);
-            Toast::success(self.data(), "平动指令已下发");
         });
     } else {
         // 转动: 按照规范统一调用 POST 8048 /robot/navigation/move (actionType=12)
@@ -572,7 +647,9 @@ void MotionDialog::onSendClicked()
 
         double durationSec = (std::abs(speed) > 1e-3) ? ((std::abs(angle) / std::abs(speed)) + 1.5) : 4.0;
 
-        ApiService::instance().robotNavigationMoveRotate(angle, speed, [self, durationSec](int code, const QJsonObject &resp) {
+        emit self->statusHintRequested(QString("正在下发转动指令(角度: %1°)...").arg(std::abs(angle), 0, 'f', 1), "#00bcd4");
+
+        ApiService::instance().robotNavigationMoveRotate(angle, speed, [self, angle, durationSec](int code, const QJsonObject &resp) {
             if (!self) return;
             qDebug() << "[MotionDialog] 转动指令响应:" << code << resp;
 
@@ -581,17 +658,18 @@ void MotionDialog::onSendClicked()
             if (!ok) {
                 qWarning() << "[MotionDialog] 转动指令下发失败, code:" << code << resp;
                 self->m_sendBtn->setEnabled(true);
-                self->m_statusLabel->setText("就绪");
-                self->m_statusLabel->setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 14px;");
                 QString errMsg = msg.isEmpty() ? QString("错误码 %1").arg(code) : msg;
-                Toast::error(self.data(), QString("转动指令失败(%1): %2").arg(code).arg(errMsg));
+                self->m_statusLabel->setText(QString("转动指令失败: %1").arg(errMsg));
+                self->m_statusLabel->setStyleSheet("color: #ef4444; font-weight: bold; font-size: 14px;");
+                emit self->statusHintRequested(QString("转动指令下发失败: %1").arg(errMsg), "#ef4444");
                 return;
             }
 
             self->setRunningState(true, false);
+            emit self->motionStarted(2, std::abs(angle), QString("转动 %1°").arg(std::abs(angle), 0, 'f', 1));
+            emit self->statusHintRequested(QString("正在转动中(目标角度: %1°)...").arg(std::abs(angle), 0, 'f', 1), "#00e676");
             int watchdogMs = static_cast<int>(std::clamp(durationSec, 2.0, 120.0) * 1000.0);
             self->m_motionWatchdog.start(watchdogMs);
-            Toast::success(self.data(), "转动指令已下发");
         });
     }
 }
@@ -602,7 +680,7 @@ void MotionDialog::onCancelNavClicked()
     ApiService::instance().controlNavigation(QStringLiteral("stop navigation"), [](int, const QJsonObject &) {});
 
     setCanceledState();
-    Toast::info(this, "已取消导航");
+    emit statusHintRequested("移动已取消", "#f59e0b");
 }
 
 void MotionDialog::onPauseNavClicked()
@@ -614,12 +692,14 @@ void MotionDialog::onPauseNavClicked()
         // 恢复导航统一使用 /robot/navigation/control?command=continue navigation
         ApiService::instance().controlNavigation(QStringLiteral("continue navigation"), [](int, const QJsonObject &) {});
         setRunningState(true, false);
-        Toast::success(this, "已继续导航");
+        emit motionPaused(false);
+        emit statusHintRequested("已恢复移动", "#00e676");
     } else {
         // 暂停导航统一使用 /robot/navigation/control?command=pause navigation
         ApiService::instance().controlNavigation(QStringLiteral("pause navigation"), [](int, const QJsonObject &) {});
         setRunningState(true, true);
-        Toast::info(this, "导航已暂停");
+        emit motionPaused(true);
+        emit statusHintRequested("移动已暂停", "#f59e0b");
     }
 }
 
