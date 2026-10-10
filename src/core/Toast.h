@@ -23,7 +23,8 @@ public:
     enum Type {
         Success,
         Error,
-        Info
+        Info,
+        Warning
     };
     Q_ENUM(Type)
 
@@ -31,6 +32,7 @@ public:
     static void success(QWidget *parent, const QString &message, int durationMs = 2200) { show(parent, message, Success, durationMs); }
     static void error(QWidget *parent, const QString &message, int durationMs = 2200)   { show(parent, message, Error, durationMs); }
     static void info(QWidget *parent, const QString &message, int durationMs = 2200)    { show(parent, message, Info, durationMs); }
+    static void warning(QWidget *parent, const QString &message, int durationMs = 2200) { show(parent, message, Warning, durationMs); }
 
     ~Toast() override;
 

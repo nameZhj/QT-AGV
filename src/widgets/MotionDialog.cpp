@@ -91,23 +91,54 @@ void MotionDialog::showEvent(QShowEvent *event)
 
 void MotionDialog::refreshSpeedLimits()
 {
-    const double maxSpd = MotionConfigManager::instance().maxSpeed();
+    const auto &mc = MotionConfigManager::instance();
+    // 验证范围参数 (Range Bounds，取自元数据 min / max；移动支持负值，范围为最大值的正负数对称区间)
+    const double limitMaxSpd = mc.paramMax(QStringLiteral("max_speed"), 1.0);
+    const double limitMaxAngular = mc.paramMax(QStringLiteral("max_angular_speed"), 60.0);
+
+    // 默认值 / 当前值 (Value，取自“参数”中的当前值)
+    const double defSpd = mc.maxSpeed();
+    const double defAngular = mc.maxAngularSpeedDeg();
+
     if (m_transVxSpin) {
-        m_transVxSpin->setRange(-maxSpd, maxSpd);
-        if (m_transVxSpin->value() > maxSpd) m_transVxSpin->setValue(maxSpd);
-        if (m_transVxSpin->value() < -maxSpd) m_transVxSpin->setValue(-maxSpd);
+        m_transVxSpin->setRange(-limitMaxSpd, limitMaxSpd);
+        if (!m_isRunning) {
+            m_transVxSpin->setValue(defSpd);
+        } else {
+            if (m_transVxSpin->value() > limitMaxSpd) m_transVxSpin->setValue(limitMaxSpd);
+            if (m_transVxSpin->value() < -limitMaxSpd) m_transVxSpin->setValue(-limitMaxSpd);
+        }
     }
     if (m_transVySpin) {
-        m_transVySpin->setRange(-maxSpd, maxSpd);
-        if (m_transVySpin->value() > maxSpd) m_transVySpin->setValue(maxSpd);
-        if (m_transVySpin->value() < -maxSpd) m_transVySpin->setValue(-maxSpd);
+        m_transVySpin->setRange(-limitMaxSpd, limitMaxSpd);
+        if (!m_isRunning) {
+            m_transVySpin->setValue(0.000);
+        } else {
+            if (m_transVySpin->value() > limitMaxSpd) m_transVySpin->setValue(limitMaxSpd);
+            if (m_transVySpin->value() < -limitMaxSpd) m_transVySpin->setValue(-limitMaxSpd);
+        }
+    }
+    if (m_transDistSpin) {
+        m_transDistSpin->setRange(0.0, 100.0);
+        if (!m_isRunning && (qFuzzyIsNull(m_transDistSpin->value()) || m_transDistSpin->value() < 0.001)) {
+            m_transDistSpin->setValue(1.000);
+        }
     }
 
-    const double maxAngular = MotionConfigManager::instance().maxAngularSpeedDeg();
     if (m_rotSpeedSpin) {
-        m_rotSpeedSpin->setRange(-maxAngular, maxAngular);
-        if (m_rotSpeedSpin->value() > maxAngular) m_rotSpeedSpin->setValue(maxAngular);
-        if (m_rotSpeedSpin->value() < -maxAngular) m_rotSpeedSpin->setValue(-maxAngular);
+        m_rotSpeedSpin->setRange(-limitMaxAngular, limitMaxAngular);
+        if (!m_isRunning) {
+            m_rotSpeedSpin->setValue(defAngular);
+        } else {
+            if (m_rotSpeedSpin->value() > limitMaxAngular) m_rotSpeedSpin->setValue(limitMaxAngular);
+            if (m_rotSpeedSpin->value() < -limitMaxAngular) m_rotSpeedSpin->setValue(-limitMaxAngular);
+        }
+    }
+    if (m_rotAngleSpin) {
+        m_rotAngleSpin->setRange(0.0, 360.0);
+        if (!m_isRunning && (qFuzzyIsNull(m_rotAngleSpin->value()) || m_rotAngleSpin->value() < 0.001)) {
+            m_rotAngleSpin->setValue(90.000);
+        }
     }
 
     updateParamToolTips();
@@ -115,26 +146,27 @@ void MotionDialog::refreshSpeedLimits()
 
 void MotionDialog::updateParamToolTips()
 {
-    const double maxLinear = MotionConfigManager::instance().maxSpeed();
-    const double maxAngular = MotionConfigManager::instance().maxAngularSpeedDeg();
+    const auto &mc = MotionConfigManager::instance();
+    const double limitMaxLinear = mc.paramMax(QStringLiteral("max_speed"), 1.0);
+    const double limitMaxAngular = mc.paramMax(QStringLiteral("max_angular_speed"), 60.0);
 
-    const QString distTip = QStringLiteral("平动距离\n范围: 0.001 ~ 100.000 m (距离应大于 0m)");
+    const QString distTip = QStringLiteral("平动距离\n范围: 0.000 ~ 100.000 m (数值不能为负数，距离应大于 0m)");
     if (m_transDistSpin) m_transDistSpin->setToolTip(distTip);
     if (m_transDistLbl) m_transDistLbl->setToolTip(distTip);
 
-    const QString vxTip = QStringLiteral("前后线速度 vx\n范围: -%1 ~ %1 m/s (平动时速度绝对值应大于 0m/s，正数前进，负数后退)").arg(maxLinear, 0, 'f', 2);
+    const QString vxTip = QStringLiteral("前后线速度 vx\n范围: -%1 ~ %1 m/s (可以为负值，正数前进，负数后退)").arg(limitMaxLinear, 0, 'f', 2);
     if (m_transVxSpin) m_transVxSpin->setToolTip(vxTip);
     if (m_transVxLbl) m_transVxLbl->setToolTip(vxTip);
 
-    const QString vyTip = QStringLiteral("左右横移速度 vy\n范围: -%1 ~ %1 m/s (全向轮机型支持，正数向左，负数向右)").arg(maxLinear, 0, 'f', 2);
+    const QString vyTip = QStringLiteral("左右横移速度 vy\n范围: -%1 ~ %1 m/s (可以为负值，全向轮机型支持，正数向左，负数向右)").arg(limitMaxLinear, 0, 'f', 2);
     if (m_transVySpin) m_transVySpin->setToolTip(vyTip);
     if (m_transVyLbl) m_transVyLbl->setToolTip(vyTip);
 
-    const QString angleTip = QStringLiteral("旋转角度\n范围: -360.000° ~ 360.000° (角度绝对值应大于 0°，正数逆时针，负数顺时针)");
+    const QString angleTip = QStringLiteral("旋转角度\n范围: 0.000° ~ 360.000° (数值不能为负数，角度应大于 0°)");
     if (m_rotAngleSpin) m_rotAngleSpin->setToolTip(angleTip);
     if (m_rotAngleLbl) m_rotAngleLbl->setToolTip(angleTip);
 
-    const QString speedTip = QStringLiteral("旋转角速度\n范围: -%1°/s ~ %1°/s (旋转时角速度绝对值应大于 0°/s)").arg(maxAngular, 0, 'f', 1);
+    const QString speedTip = QStringLiteral("旋转角速度\n范围: -%1°/s ~ %1°/s (可以为负值，正数逆时针，负数顺时针)").arg(limitMaxAngular, 0, 'f', 1);
     if (m_rotSpeedSpin) m_rotSpeedSpin->setToolTip(speedTip);
     if (m_rotSpeedLbl) m_rotSpeedLbl->setToolTip(speedTip);
 
@@ -362,7 +394,7 @@ QWidget* MotionDialog::createTranslationTab()
     m_transDistSpin->setRange(0.0, 100.0);
     m_transDistSpin->setDecimals(3);
     m_transDistSpin->setSingleStep(0.1);
-    m_transDistSpin->setValue(0.000);
+    m_transDistSpin->setValue(1.000);
     auto *distUnitLbl = new QLabel("m", panel);
     distUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
     formLayout->addWidget(m_transDistLbl, 0, 0);
@@ -372,12 +404,13 @@ QWidget* MotionDialog::createTranslationTab()
     // 2. 设置 vx 速度
     m_transVxLbl = new QLabel("设置 vx 速度：", panel);
     m_transVxLbl->setStyleSheet("border: none; color: #c5cbd5;");
-    const double maxLinear = MotionConfigManager::instance().maxSpeed();
+    const auto &mc = MotionConfigManager::instance();
+    const double limitMaxLinear = mc.paramMax(QStringLiteral("max_speed"), 1.0);
     m_transVxSpin = new QDoubleSpinBox(panel);
-    m_transVxSpin->setRange(-maxLinear, maxLinear);
+    m_transVxSpin->setRange(-limitMaxLinear, limitMaxLinear);
     m_transVxSpin->setDecimals(3);
     m_transVxSpin->setSingleStep(0.05);
-    m_transVxSpin->setValue(0.000);
+    m_transVxSpin->setValue(mc.maxSpeed());
     auto *vxUnitLbl = new QLabel("m/s", panel);
     vxUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
     formLayout->addWidget(m_transVxLbl, 1, 0);
@@ -388,7 +421,7 @@ QWidget* MotionDialog::createTranslationTab()
     m_transVyLbl = new QLabel("设置 vy 速度：", panel);
     m_transVyLbl->setStyleSheet("border: none; color: #c5cbd5;");
     m_transVySpin = new QDoubleSpinBox(panel);
-    m_transVySpin->setRange(-maxLinear, maxLinear);
+    m_transVySpin->setRange(-limitMaxLinear, limitMaxLinear);
     m_transVySpin->setDecimals(3);
     m_transVySpin->setSingleStep(0.05);
     m_transVySpin->setValue(0.000);
@@ -458,10 +491,10 @@ QWidget* MotionDialog::createRotationTab()
     m_rotAngleLbl = new QLabel("设置旋转角度：", panel);
     m_rotAngleLbl->setStyleSheet("border: none; color: #c5cbd5;");
     m_rotAngleSpin = new QDoubleSpinBox(panel);
-    m_rotAngleSpin->setRange(-360.0, 360.0);
+    m_rotAngleSpin->setRange(0.0, 360.0);
     m_rotAngleSpin->setDecimals(3);
     m_rotAngleSpin->setSingleStep(5.0);
-    m_rotAngleSpin->setValue(0.000);
+    m_rotAngleSpin->setValue(90.000);
     auto *angleUnitLbl = new QLabel("°", panel);
     angleUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
     formLayout->addWidget(m_rotAngleLbl, 0, 0);
@@ -471,12 +504,13 @@ QWidget* MotionDialog::createRotationTab()
     // 2. 设置角速度
     m_rotSpeedLbl = new QLabel("设置角速度：", panel);
     m_rotSpeedLbl->setStyleSheet("border: none; color: #c5cbd5;");
-    const double maxAngular = MotionConfigManager::instance().maxAngularSpeedDeg();
+    const auto &mcRot = MotionConfigManager::instance();
+    const double limitMaxAngular = mcRot.paramMax(QStringLiteral("max_angular_speed"), 60.0);
     m_rotSpeedSpin = new QDoubleSpinBox(panel);
-    m_rotSpeedSpin->setRange(-maxAngular, maxAngular);
+    m_rotSpeedSpin->setRange(-limitMaxAngular, limitMaxAngular);
     m_rotSpeedSpin->setDecimals(3);
     m_rotSpeedSpin->setSingleStep(2.0);
-    m_rotSpeedSpin->setValue(0.000);
+    m_rotSpeedSpin->setValue(mcRot.maxAngularSpeedDeg());
     auto *speedUnitLbl = new QLabel("°/s", panel);
     speedUnitLbl->setStyleSheet("border: none; color: #a6b0be; font-size: 12px;");
     formLayout->addWidget(m_rotSpeedLbl, 1, 0);
@@ -573,8 +607,8 @@ void MotionDialog::onSendClicked()
         const double rawSpeed = m_rotSpeedSpin->value();
         double speed = MotionConfigManager::instance().clampSignedAngularSpeedDeg(rawSpeed);
 
-        if (std::abs(angle) < 1e-4) {
-            m_statusLabel->setText("旋转角度绝对值应大于 0°");
+        if (angle <= 1e-4) {
+            m_statusLabel->setText("旋转角度应大于 0°");
             m_statusLabel->setStyleSheet("color: #ef4444; font-weight: bold; font-size: 14px;");
             return;
         }

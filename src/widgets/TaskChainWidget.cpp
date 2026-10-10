@@ -784,18 +784,21 @@ void TaskChainWidget::setupPanel3Group(QVBoxLayout *layout)
             params["target_station"] = stId;
             params["target"]         = stName;
         } else if (actionName == "平动") {
+            const auto &mc = MotionConfigManager::instance();
+            double defVx = mc.maxSpeed();
             action["distance"]  = 1.0;
-            action["vx"]        = 0.2;
+            action["vx"]        = defVx;
             action["vy"]        = 0.0;
             params["distance"]  = 1.0;
-            params["vx"]        = 0.2;
+            params["vx"]        = defVx;
             params["vy"]        = 0.0;
         } else if (actionName == "转动") {
-            // 旋转方向由旋转角度正负决定
-            action["rotate_angle"] = -90.0;
-            action["rotate_speed"] = 30.0;
-            params["angle"]        = -90.0;
-            params["speed"]        = 30.0;
+            const auto &mc = MotionConfigManager::instance();
+            double defSpd = mc.maxAngularSpeedDeg();
+            action["rotate_angle"] = 90.0;
+            action["rotate_speed"] = defSpd;
+            params["angle"]        = 90.0;
+            params["speed"]        = defSpd;
         }
         action["params"] = params;
         actions.append(action);
@@ -1477,19 +1480,20 @@ void TaskChainWidget::initActionDefs()
     m_actionDefs.append(def);
 
     // 2. 平动 (参数与“地图与控制-移动-平动”一致: 距离 / vx / vy)
+    const auto &mc = MotionConfigManager::instance();
     def = {"平动", "motion"};
     def.params = {
         {"distance", "设置距离：", "double", {}, "m", 1.0},
-        {"vx", "设置 vx 速度：", "double", {}, "m/s", 0.2},
+        {"vx", "设置 vx 速度：", "double", {}, "m/s", mc.maxSpeed()},
         {"vy", "设置 vy 速度：", "double", {}, "m/s", 0.0},
     };
     m_actionDefs.append(def);
 
-    // 3. 转动 (旋转方向由旋转角度的正负决定, 不单独设置方向)
+    // 3. 转动 (旋转角度非负, 旋转方向由角速度正负决定)
     def = {"转动", "motion"};
     def.params = {
-        {"angle", "设置旋转角度：", "double", {}, "°", -90.0},
-        {"speed", "设置角速度：", "double", {}, "°/s", 30.0},
+        {"angle", "设置旋转角度：", "double", {}, "°", 90.0},
+        {"speed", "设置角速度：", "double", {}, "°/s", mc.maxAngularSpeedDeg()},
     };
     m_actionDefs.append(def);
 
@@ -1567,20 +1571,33 @@ QString TaskChainWidget::openActionDefDialog(const ActionDef &def, const QJsonOb
                 spin->setValue(qBound(0.0, existingVal.toDouble(param.defaultValue), kMaxLiftLinearSpeed));
                 spin->setToolTip(QStringLiteral("顶升线速度上限: %1 m/s").arg(kMaxLiftLinearSpeed));
             } else if (param.unit == "°/s") {
-                spin->setRange(-mc.maxAngularSpeedDeg(), mc.maxAngularSpeedDeg());
+                // 角速度可以为负值，范围以元数据 max 的正负数为准，默认值参考配置参数当前值
+                const double limitMaxAngular = mc.paramMax(QStringLiteral("max_angular_speed"), 60.0);
+                spin->setRange(-limitMaxAngular, limitMaxAngular);
                 spin->setSingleStep(2.0);
-                spin->setValue(mc.clampSignedAngularSpeedDeg(existingVal.toDouble(param.defaultValue)));
-                spin->setToolTip(QStringLiteral("受全局最大角速度限制 (上限: %1 °/s)").arg(mc.maxAngularSpeedDeg()));
+                double defaultVal = !existingVal.isUndefined() ? existingVal.toDouble() : mc.maxAngularSpeedDeg();
+                spin->setValue(mc.clampSignedAngularSpeedDeg(defaultVal));
+                spin->setToolTip(QStringLiteral("角速度范围: -%1 ~ %1 °/s (可以为负值，正数逆时针，负数顺时针)").arg(limitMaxAngular, 0, 'f', 1));
             } else if (param.unit == "m/s") {
-                spin->setRange(-mc.maxSpeed(), mc.maxSpeed());
+                // 线速度可以为负值，范围以元数据 max 的正负数为准，默认值参考配置参数当前值
+                const double limitMaxSpd = mc.paramMax(QStringLiteral("max_speed"), 1.0);
+                spin->setRange(-limitMaxSpd, limitMaxSpd);
                 spin->setSingleStep(0.05);
-                spin->setValue(mc.clampSignedLinearSpeed(existingVal.toDouble(param.defaultValue)));
-                spin->setToolTip(QStringLiteral("受全局最大速度限制 (上限: %1 m/s)").arg(mc.maxSpeed()));
+                double defaultVal = !existingVal.isUndefined() ? existingVal.toDouble() : (param.key == "vx" ? mc.maxSpeed() : 0.0);
+                spin->setValue(mc.clampSignedLinearSpeed(defaultVal));
+                spin->setToolTip(QStringLiteral("线速度范围: -%1 ~ %1 m/s (可以为负值，正数前进，负数后退)").arg(limitMaxSpd, 0, 'f', 2));
             } else if (param.key == "distance") {
                 // 距离只能为非负值, 方向由 vx / vy 的正负决定
                 spin->setRange(0.0, 100.0);
                 spin->setSingleStep(0.1);
                 spin->setValue(std::max(0.0, existingVal.toDouble(param.defaultValue)));
+                spin->setToolTip(QStringLiteral("平动距离范围: 0 ~ 100 m (不能为负数)"));
+            } else if (param.key == "angle" || param.key == "rotate_angle" || param.unit == "°") {
+                // 旋转角度只能为非负值
+                spin->setRange(0.0, 360.0);
+                spin->setSingleStep(5.0);
+                spin->setValue(std::max(0.0, existingVal.toDouble(param.defaultValue)));
+                spin->setToolTip(QStringLiteral("旋转角度范围: 0 ~ 360 ° (不能为负数)"));
             } else {
                 spin->setRange(-99999, 99999);
                 spin->setValue(existingVal.toDouble(param.defaultValue));
@@ -3091,10 +3108,11 @@ void TaskChainWidget::executeSingleAction(const QJsonObject &action)
         });
         updateStatus(QStringLiteral("正在向控制器下发平动动作: vx %1 m/s, vy %2 m/s, 距离 %3 m").arg(vx).arg(vy).arg(dist));
     } else if (type == "5") {
-        // 转动: 旋转方向由旋转角度的正负决定
-        double deg = action.value("rotate_angle").toDouble(-90.0);
-        // 参数以 °/s 保存, 下发前换算为 rad/s
-        double spdDeg = MotionConfigManager::instance().clampSignedAngularSpeedDeg(action.value("rotate_speed").toDouble(30.0));
+        // 转动: 旋转角度非负, 旋转方向由角速度正负决定
+        const auto &mc = MotionConfigManager::instance();
+        double deg = std::max(0.0, action.value("rotate_angle").toDouble(90.0));
+        // 参数以 °/s 保存, 下发前换算为 rad/s (支持正负)
+        double spdDeg = mc.clampSignedAngularSpeedDeg(action.value("rotate_speed").toDouble(mc.maxAngularSpeedDeg()));
         double spd    = spdDeg * M_PI / 180.0;
         double angleRad = deg * M_PI / 180.0;
 

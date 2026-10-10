@@ -71,7 +71,6 @@ static QString lookupMapName(const QString &mapId) {
     if (s_mapIdToName.contains(mapId)) {
         return s_mapIdToName.value(mapId);
     }
-    fetchGlobalMapList();
     return QString();
 }
 

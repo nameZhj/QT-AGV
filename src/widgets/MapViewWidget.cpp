@@ -1028,6 +1028,7 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     m_routeMaxAccVal     = mkInfoLabel();
     m_routeMaxDecVal     = mkInfoLabel();
     m_routeMaxRotVal     = mkInfoLabel();
+    m_routeMaxRotAccVal  = mkInfoLabel();
     m_routeReachDistVal  = mkInfoLabel();
     m_routeReachAngleVal = mkInfoLabel();
     m_routeWidthVal      = mkInfoLabel();
@@ -1041,8 +1042,9 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     rtForm->addRow("运动方向:", m_routeDirectVal);
     rtForm->addRow("最大速度:", m_routeMaxSpeedVal);
     rtForm->addRow("最大加速度:", m_routeMaxAccVal);
-    rtForm->addRow("最大减速度:", m_routeMaxDecVal);
+    // rtForm->addRow("最大减速度:", m_routeMaxDecVal); // 隐藏最大减速度 UI
     rtForm->addRow("最大角速度:", m_routeMaxRotVal);
+    rtForm->addRow("最大角加减速度:", m_routeMaxRotAccVal);
     rtForm->addRow("到达距离精度:", m_routeReachDistVal);
     rtForm->addRow("到达角度精度:", m_routeReachAngleVal);
     rtForm->addRow("路线宽度:", m_routeWidthVal);
@@ -1339,7 +1341,7 @@ void MapViewWidget::updateDeviceMonitor(const RobotInfo &info)
     if (m_robotInfoGroup) {
         bool has = (info.car_id != 0) || !info.status.isEmpty() || (info.map_id != 0) || (info.task_id >= 0);
         if (m_robotCarIdVal)  m_robotCarIdVal->setText(info.car_id != 0 ? QString::number(info.car_id) : "--");
-        if (m_robotMapIdVal)  m_robotMapIdVal->setText(info.map_id != 0 ? QString::number(info.map_id) : "--");
+        if (m_robotMapIdVal)  m_robotMapIdVal->setText(info.map_id != 0 ? lookupMapName(info.map_id) : "--");
         if (m_robotTaskIdVal) m_robotTaskIdVal->setText(info.task_id >= 0 ? QString::number(info.task_id) : "无");
         if (m_robotStatusVal) {
             m_robotStatusVal->setText(info.statusText());
@@ -1658,12 +1660,22 @@ void MapViewWidget::showRouteDetails(const QJsonObject &obj, const QString &type
     const auto &mc = MotionConfigManager::instance();
     if (m_routeMaxSpeedVal)
         m_routeMaxSpeedVal->setText(QString("%1 m/s").arg(mc.clampLinearSpeed(obj.value("maxspeed").toDouble(mc.maxSpeed())), 0, 'f', 2));
-    if (m_routeMaxAccVal)
-        m_routeMaxAccVal->setText(QString("%1 m/s²").arg(qMin(obj.value("maxacc").toDouble(mc.maxAcceleration()), mc.maxAcceleration()), 0, 'f', 2));
-    if (m_routeMaxDecVal)
-        m_routeMaxDecVal->setText(QString("%1 m/s²").arg(qMin(obj.value("maxdec").toDouble(mc.maxDeceleration()), mc.maxDeceleration()), 0, 'f', 2));
-    if (m_routeMaxRotVal)
-        m_routeMaxRotVal->setText(QString("%1 °/s").arg(qMin(obj.value("maxrot").toDouble(mc.maxAngularSpeedDeg()), mc.maxAngularSpeedDeg()), 0, 'f', 1));
+    if (m_routeMaxAccVal) {
+        double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble() : obj.value("maxacc").toDouble(mc.maxAcceleration());
+        m_routeMaxAccVal->setText(QString("%1 m/s²").arg(qMin(acc, mc.maxAcceleration()), 0, 'f', 2));
+    }
+    if (m_routeMaxDecVal) {
+        double dec = obj.contains("max_deceleration") ? obj.value("max_deceleration").toDouble() : obj.value("maxdec").toDouble(mc.maxDeceleration());
+        m_routeMaxDecVal->setText(QString("%1 m/s²").arg(qMin(dec, mc.maxDeceleration()), 0, 'f', 2));
+    }
+    if (m_routeMaxRotVal) {
+        double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble() : obj.value("maxrot").toDouble(mc.maxAngularSpeedDeg());
+        m_routeMaxRotVal->setText(QString("%1 °/s").arg(qMin(rot, mc.maxAngularSpeedDeg()), 0, 'f', 1));
+    }
+    if (m_routeMaxRotAccVal) {
+        double rotAcc = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble() : obj.value("maxrotacc").toDouble(mc.maxAngularAccelerationDeg());
+        m_routeMaxRotAccVal->setText(QString("%1 °/s²").arg(qMin(rotAcc, mc.maxAngularAccelerationDeg()), 0, 'f', 1));
+    }
     if (m_routeReachDistVal)
         m_routeReachDistVal->setText(QString("%1 m").arg(obj.value("reachdist").toDouble(mc.arrivalDistanceTolerance()), 0, 'f', 2));
     if (m_routeReachAngleVal)
@@ -1771,7 +1783,11 @@ void MapViewWidget::fetchMapNameList(std::function<void()> onDone)
                 // 若当前已有 robot info 显示，立即刷新地图名称
                 RobotInfo cur = RobotInfoManager::instance().currentInfo();
                 if (cur.map_id != 0 && m_robotMapIdVal) {
-                    m_robotMapIdVal->setText(lookupMapName(cur.map_id));
+                    QString name = m_mapIdToName.value(cur.map_id);
+                    if (name.isEmpty() && !m_mapId.isEmpty() && m_mapId.toInt() == cur.map_id && !m_mapName.isEmpty()) {
+                        name = m_mapName;
+                    }
+                    m_robotMapIdVal->setText(!name.isEmpty() ? name : QString::number(cur.map_id));
                 }
             }
             if (onDone) onDone();
@@ -1788,7 +1804,7 @@ QString MapViewWidget::lookupMapName(int mapId)
         m_mapIdToName[mapId] = m_mapName;
         return m_mapName;
     }
-    fetchMapNameList();
+    // 纯内存查询：未命中时仅返回数字ID，坚决杜绝在此触发异步网络请求，彻底消除死循环
     return QString::number(mapId);
 }
 
@@ -3538,10 +3554,11 @@ void MapViewWidget::onSwitchMap()
 
     QString selectedMapId;
     QString selectedMapName;
+    QString switchSuccessMsg;
     QVector<QFrame*> allCards;
     QJsonArray mapList;
 
-    // 点击确认切换逻辑：访问接口 /robot/car/edit/map/{mapid}，成功后关闭窗口并刷新地图
+    // 点击确认切换逻辑：订阅 /rob/1/crud 并下发切换接口，收到设备成功确认后关闭窗口并刷新地图
     auto doConfirmSwitch = [&]() {
         if (selectedMapId.isEmpty()) {
             Toast::info(&dlg, "请先选择需要切换的地图");
@@ -3554,17 +3571,100 @@ void MapViewWidget::onSwitchMap()
         selTipLabel->setText(QString("正在请求切换至地图 [ID: %1]...").arg(selectedMapId));
         selTipLabel->setStyleSheet("color:#38bdf8; font-size:12px;");
 
-        auto *loading = new LoadingDialog("正在切换地图...", &dlg);
+        // 阻塞式进度等待框 (设置 40 秒安全熔断超时)
+        auto *loading = new LoadingDialog("正在切换地图，等待设备确认...", &dlg, Qt::ApplicationModal, 40000);
         loading->show();
 
-        // 访问接口 "/robot/car/edit/map/{mapid}"
-        ApiService::instance().editCarMap(selectedMapId, [this, selectedMapId, selectedMapName, &dlg, okBtn, cancelBtn, selTipLabel, loading](int code, const QJsonObject &data) {
-            loading->close();
-            loading->deleteLater();
-            if (code == 200) {
-                // 成功后关闭窗口
+        QString carId = AppConfig::instance().agvId();
+        if (carId.isEmpty()) carId = "1";
+        QStringList crudTopics;
+        crudTopics << QString("/rob/%1/crud").arg(carId);
+        if (carId != "1") {
+            crudTopics << QStringLiteral("/rob/1/crud");
+        }
+
+        auto handled = std::make_shared<bool>(false);
+        auto *timeoutTimer = new QTimer(&dlg);
+        timeoutTimer->setSingleShot(true);
+
+        auto cleanup = [handled, loading, crudTopics, timeoutTimer]() {
+            if (*handled) return;
+            *handled = true;
+            if (timeoutTimer) {
+                timeoutTimer->stop();
+            }
+            for (const QString &t : crudTopics) {
+                MqttService::instance().unsubscribeTopic(t);
+            }
+            if (loading) {
+                loading->finish();
+            }
+        };
+
+        // 对话框关闭/销毁时兜底反注册与清理
+        QObject::connect(&dlg, &QDialog::finished, &dlg, [cleanup](int) {
+            cleanup();
+        });
+
+        // 订阅 MQTT /rob/1/crud (及 /rob/<carId>/crud)
+        auto onCrudMessage = [this, &dlg, selectedMapId, okBtn, cancelBtn, selTipLabel, &switchSuccessMsg, handled, cleanup](const QString &/*topic*/, const QJsonObject &obj) {
+            if (*handled) return;
+
+            QString sender = obj.value("sender").toString().trimmed();
+            if (sender.compare("Robot", Qt::CaseInsensitive) != 0) {
+                return;
+            }
+
+            int msgMapId = obj.value("map_id").toInt();
+            if (msgMapId > 0 && msgMapId != selectedMapId.toInt()) {
+                return;
+            }
+
+            QString status = obj.value("status").toString().trimmed();
+            QString info = obj.value("info").toString().trimmed();
+
+            cleanup();
+
+            if (status.compare("success", Qt::CaseInsensitive) == 0) {
+                qDebug().noquote() << QString("[SwitchMap] Robot reported map switch success: %1").arg(info);
+                switchSuccessMsg = info;
                 dlg.accept();
             } else {
+                qWarning().noquote() << QString("[SwitchMap] Robot reported map switch failed: %1 (status: %2)").arg(info, status);
+                okBtn->setEnabled(true);
+                cancelBtn->setEnabled(true);
+                okBtn->setText("确认切换");
+                QString errMsg = info.isEmpty() ? QString("设备切换地图失败 (状态: %1)").arg(status) : info;
+                selTipLabel->setText(QString("<font color='#f87171'>切换失败: %1</font>").arg(errMsg));
+                QMessageBox::warning(&dlg, "切换地图失败", errMsg);
+            }
+        };
+
+        for (const QString &t : crudTopics) {
+            MqttService::instance().subscribeJsonTopic(t, 0, onCrudMessage);
+        }
+
+        // 超时处理 (30秒)
+        QObject::connect(timeoutTimer, &QTimer::timeout, &dlg, [&dlg, okBtn, cancelBtn, selTipLabel, handled, cleanup]() {
+            if (*handled) return;
+            cleanup();
+            okBtn->setEnabled(true);
+            cancelBtn->setEnabled(true);
+            okBtn->setText("确认切换");
+            selTipLabel->setText("<font color='#f87171'>切换失败: 等待设备确认超时</font>");
+            QMessageBox::warning(&dlg, "切换超时", "等待设备切换地图响应超时 (30秒)，请确认设备在线且网络畅通。");
+        });
+        timeoutTimer->start(30000);
+
+        // 访问后端切换地图接口 "/robot/car/edit/map/{mapid}"
+        ApiService::instance().editCarMap(selectedMapId, [&dlg, okBtn, cancelBtn, selTipLabel, loading, handled, cleanup](int code, const QJsonObject &data) {
+            if (*handled) return;
+            if (code == 200) {
+                if (loading) {
+                    loading->setMessage("指令已下发，正在等待设备切换与导航重启...");
+                }
+            } else {
+                cleanup();
                 okBtn->setEnabled(true);
                 cancelBtn->setEnabled(true);
                 okBtn->setText("确认切换");
@@ -3830,7 +3930,7 @@ void MapViewWidget::onSwitchMap()
         m_routeLoaded = false;
         m_robot.posValid = false;
         loadMapById(selectedMapId, selectedMapName);
-        Toast::success(this, "地图切换成功");
+        Toast::success(this, switchSuccessMsg.isEmpty() ? "地图切换成功" : switchSuccessMsg);
     }
 }
 

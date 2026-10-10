@@ -1101,33 +1101,52 @@ void MapEditWidget::setupUI()
 
         const auto &mc = MotionConfigManager::instance();
 
+        double minSpd = mc.paramMin("max_speed", 0.0);
+        double maxSpd = mc.paramMax("max_speed", 1.0);
         m_lineMaxSpeedSpin = new QDoubleSpinBox;
-        m_lineMaxSpeedSpin->setRange(0.01, mc.maxSpeed());
+        m_lineMaxSpeedSpin->setRange(minSpd, maxSpd);
         m_lineMaxSpeedSpin->setSingleStep(0.05);
         m_lineMaxSpeedSpin->setValue(mc.maxSpeed());
-        m_lineMaxSpeedSpin->setToolTip(QString("受全局最大速度限制 (上限: %1 m/s)").arg(mc.maxSpeed()));
+        m_lineMaxSpeedSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s)").arg(minSpd, 0, 'f', 2).arg(maxSpd, 0, 'f', 2));
         mcl->addWidget(mkFormRow("最大速度:", m_lineMaxSpeedSpin, "m/s"));
 
+        double minAcc = mc.paramMin("max_acceleration", 0.3);
+        double maxAcc = mc.paramMax("max_acceleration", 0.5);
         m_lineMaxAccSpin = new QDoubleSpinBox;
-        m_lineMaxAccSpin->setRange(0.01, mc.maxAcceleration());
+        m_lineMaxAccSpin->setRange(minAcc, maxAcc);
         m_lineMaxAccSpin->setSingleStep(0.05);
         m_lineMaxAccSpin->setValue(mc.maxAcceleration());
-        m_lineMaxAccSpin->setToolTip(QString("受全局最大加速度限制 (上限: %1 m/s²)").arg(mc.maxAcceleration()));
+        m_lineMaxAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s²)").arg(minAcc, 0, 'f', 2).arg(maxAcc, 0, 'f', 2));
         mcl->addWidget(mkFormRow("最大加速度:", m_lineMaxAccSpin, "m/s²"));
 
+        double minDec = mc.paramMin("max_deceleration", 0.3);
+        double maxDec = mc.paramMax("max_deceleration", 0.5);
         m_lineMaxDecSpin = new QDoubleSpinBox;
-        m_lineMaxDecSpin->setRange(0.01, mc.maxDeceleration());
+        m_lineMaxDecSpin->setRange(minDec, maxDec);
         m_lineMaxDecSpin->setSingleStep(0.05);
         m_lineMaxDecSpin->setValue(mc.maxDeceleration());
-        m_lineMaxDecSpin->setToolTip(QString("受全局最大减速度限制 (上限: %1 m/s²)").arg(mc.maxDeceleration()));
-        mcl->addWidget(mkFormRow("最大减速度:", m_lineMaxDecSpin, "m/s²"));
+        m_lineMaxDecSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s²)").arg(minDec, 0, 'f', 2).arg(maxDec, 0, 'f', 2));
+        QWidget *rowMaxDec = mkFormRow("最大减速度:", m_lineMaxDecSpin, "m/s²");
+        rowMaxDec->setVisible(false); // 隐藏最大减速度 UI
+        mcl->addWidget(rowMaxDec);
 
+        double minRot = mc.paramMin("max_angular_speed", 5.0);
+        double maxRot = mc.paramMax("max_angular_speed", 60.0);
         m_lineMaxRotSpin = new QDoubleSpinBox;
-        m_lineMaxRotSpin->setRange(1.0, mc.maxAngularSpeedDeg());
+        m_lineMaxRotSpin->setRange(minRot, maxRot);
         m_lineMaxRotSpin->setSingleStep(5.0);
         m_lineMaxRotSpin->setValue(mc.maxAngularSpeedDeg());
-        m_lineMaxRotSpin->setToolTip(QString("受全局最大角速度限制 (上限: %1 °/s)").arg(mc.maxAngularSpeedDeg()));
+        m_lineMaxRotSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s)").arg(minRot, 0, 'f', 1).arg(maxRot, 0, 'f', 1));
         mcl->addWidget(mkFormRow("最大角速度:", m_lineMaxRotSpin, "°/s"));
+
+        double minRotAcc = mc.paramMin("max_angular_acceleration", 10.0);
+        double maxRotAcc = mc.paramMax("max_angular_acceleration", 30.0);
+        m_lineMaxRotAccSpin = new QDoubleSpinBox;
+        m_lineMaxRotAccSpin->setRange(minRotAcc, maxRotAcc);
+        m_lineMaxRotAccSpin->setSingleStep(5.0);
+        m_lineMaxRotAccSpin->setValue(mc.maxAngularAccelerationDeg());
+        m_lineMaxRotAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s²)").arg(minRotAcc, 0, 'f', 1).arg(maxRotAcc, 0, 'f', 1));
+        mcl->addWidget(mkFormRow("最大角加减速度:", m_lineMaxRotAccSpin, "°/s²"));
 
         m_lineReachDistSpin = new QDoubleSpinBox;
         m_lineReachDistSpin->setRange(0.01, qMax(1.0, mc.arrivalDistanceTolerance()));
@@ -1147,36 +1166,48 @@ void MapEditWidget::setupUI()
         m_lineRoadWidthSpin->setValue(mc.routeWidth());
         mcl->addWidget(mkFormRow("路线宽度:", m_lineRoadWidthSpin, "m"));
 
-        // 监听全局运动控制参数变化，动态调整各输入控件的上限与 ToolTip
+        // 监听全局运动控制参数变化，动态调整各输入控件的范围与 ToolTip
         connect(&MotionConfigManager::instance(), &MotionConfigManager::configChanged, this, [this]() {
             const auto &cfg = MotionConfigManager::instance();
             if (m_lineMaxSpeedSpin) {
-                m_lineMaxSpeedSpin->setRange(0.01, cfg.maxSpeed());
-                m_lineMaxSpeedSpin->setToolTip(QString("受全局最大速度限制 (上限: %1 m/s)").arg(cfg.maxSpeed()));
-                if (m_lineMaxSpeedSpin->value() > cfg.maxSpeed()) {
-                    m_lineMaxSpeedSpin->setValue(cfg.maxSpeed());
-                }
+                double minSpd = cfg.paramMin("max_speed", 0.0);
+                double maxSpd = cfg.paramMax("max_speed", 1.0);
+                m_lineMaxSpeedSpin->setRange(minSpd, maxSpd);
+                m_lineMaxSpeedSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s)").arg(minSpd, 0, 'f', 2).arg(maxSpd, 0, 'f', 2));
+                if (m_lineMaxSpeedSpin->value() > maxSpd) m_lineMaxSpeedSpin->setValue(maxSpd);
+                if (m_lineMaxSpeedSpin->value() < minSpd) m_lineMaxSpeedSpin->setValue(minSpd);
             }
             if (m_lineMaxAccSpin) {
-                m_lineMaxAccSpin->setRange(0.01, cfg.maxAcceleration());
-                m_lineMaxAccSpin->setToolTip(QString("受全局最大加速度限制 (上限: %1 m/s²)").arg(cfg.maxAcceleration()));
-                if (m_lineMaxAccSpin->value() > cfg.maxAcceleration()) {
-                    m_lineMaxAccSpin->setValue(cfg.maxAcceleration());
-                }
+                double minAcc = cfg.paramMin("max_acceleration", 0.3);
+                double maxAcc = cfg.paramMax("max_acceleration", 0.5);
+                m_lineMaxAccSpin->setRange(minAcc, maxAcc);
+                m_lineMaxAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s²)").arg(minAcc, 0, 'f', 2).arg(maxAcc, 0, 'f', 2));
+                if (m_lineMaxAccSpin->value() > maxAcc) m_lineMaxAccSpin->setValue(maxAcc);
+                if (m_lineMaxAccSpin->value() < minAcc) m_lineMaxAccSpin->setValue(minAcc);
             }
             if (m_lineMaxDecSpin) {
-                m_lineMaxDecSpin->setRange(0.01, cfg.maxDeceleration());
-                m_lineMaxDecSpin->setToolTip(QString("受全局最大减速度限制 (上限: %1 m/s²)").arg(cfg.maxDeceleration()));
-                if (m_lineMaxDecSpin->value() > cfg.maxDeceleration()) {
-                    m_lineMaxDecSpin->setValue(cfg.maxDeceleration());
-                }
+                double minDec = cfg.paramMin("max_deceleration", 0.3);
+                double maxDec = cfg.paramMax("max_deceleration", 0.5);
+                m_lineMaxDecSpin->setRange(minDec, maxDec);
+                m_lineMaxDecSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s²)").arg(minDec, 0, 'f', 2).arg(maxDec, 0, 'f', 2));
+                if (m_lineMaxDecSpin->value() > maxDec) m_lineMaxDecSpin->setValue(maxDec);
+                if (m_lineMaxDecSpin->value() < minDec) m_lineMaxDecSpin->setValue(minDec);
             }
             if (m_lineMaxRotSpin) {
-                m_lineMaxRotSpin->setRange(1.0, cfg.maxAngularSpeedDeg());
-                m_lineMaxRotSpin->setToolTip(QString("受全局最大角速度限制 (上限: %1 °/s)").arg(cfg.maxAngularSpeedDeg()));
-                if (m_lineMaxRotSpin->value() > cfg.maxAngularSpeedDeg()) {
-                    m_lineMaxRotSpin->setValue(cfg.maxAngularSpeedDeg());
-                }
+                double minRot = cfg.paramMin("max_angular_speed", 5.0);
+                double maxRot = cfg.paramMax("max_angular_speed", 60.0);
+                m_lineMaxRotSpin->setRange(minRot, maxRot);
+                m_lineMaxRotSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s)").arg(minRot, 0, 'f', 1).arg(maxRot, 0, 'f', 1));
+                if (m_lineMaxRotSpin->value() > maxRot) m_lineMaxRotSpin->setValue(maxRot);
+                if (m_lineMaxRotSpin->value() < minRot) m_lineMaxRotSpin->setValue(minRot);
+            }
+            if (m_lineMaxRotAccSpin) {
+                double minRotAcc = cfg.paramMin("max_angular_acceleration", 10.0);
+                double maxRotAcc = cfg.paramMax("max_angular_acceleration", 30.0);
+                m_lineMaxRotAccSpin->setRange(minRotAcc, maxRotAcc);
+                m_lineMaxRotAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s²)").arg(minRotAcc, 0, 'f', 1).arg(maxRotAcc, 0, 'f', 1));
+                if (m_lineMaxRotAccSpin->value() > maxRotAcc) m_lineMaxRotAccSpin->setValue(maxRotAcc);
+                if (m_lineMaxRotAccSpin->value() < minRotAcc) m_lineMaxRotAccSpin->setValue(minRotAcc);
             }
             if (m_lineReachDistSpin) {
                 m_lineReachDistSpin->setRange(0.01, qMax(1.0, cfg.arrivalDistanceTolerance()));
@@ -2545,6 +2576,10 @@ void MapEditWidget::addDevicePoint(const QString &type)
 void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
                             const QString &startId, const QString &endId)
 {
+    if (!startId.isEmpty() && !endId.isEmpty() && hasRouteBetween(startId, endId, a, b)) {
+        Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
+        return;
+    }
     QPointF wa = sceneToWorld(a.x(), a.y()), wb = sceneToWorld(b.x(), b.y());
     int n = nextIdNum(m_lines, "l_");
     const auto &mc = MotionConfigManager::instance();
@@ -2552,10 +2587,15 @@ void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
     ln["id"] = QString("l_%1").arg(n); ln["name"] = QString("线%1").arg(n);
     ln["x1"] = wa.x(); ln["y1"] = wa.y(); ln["x2"] = wb.x(); ln["y2"] = wb.y();
     ln["direct"] = 10; ln["startid"] = startId; ln["endid"] = endId; // 默认双向 ↔
-    ln["maxspeed"]   = mc.maxSpeed();
-    ln["maxacc"]     = mc.maxAcceleration();
-    ln["maxdec"]     = mc.maxDeceleration();
-    ln["maxrot"]     = mc.maxAngularSpeedDeg();
+    ln["maxspeed"]                 = mc.maxSpeed();
+    ln["max_acceleration"]         = mc.maxAcceleration();
+    ln["maxacc"]                   = mc.maxAcceleration();
+    ln["max_deceleration"]         = mc.maxDeceleration();
+    ln["maxdec"]                   = mc.maxDeceleration();
+    ln["max_angular_speed"]        = mc.maxAngularSpeedDeg();
+    ln["maxrot"]                   = mc.maxAngularSpeedDeg();
+    ln["max_angular_acceleration"] = mc.maxAngularAccelerationDeg();
+    ln["maxrotacc"]                = mc.maxAngularAccelerationDeg();
     ln["reachdist"]  = mc.arrivalDistanceTolerance();
     ln["reachangle"] = mc.arrivalAngleToleranceDeg();
     ln["width"]      = mc.routeWidth();
@@ -2573,6 +2613,10 @@ void MapEditWidget::addLine(const QPointF &a, const QPointF &b,
 void MapEditWidget::addCurve(const QPointF &a, const QPointF &b,
                              const QString &startId, const QString &endId)
 {
+    if (!startId.isEmpty() && !endId.isEmpty() && hasRouteBetween(startId, endId, a, b)) {
+        Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
+        return;
+    }
     QPointF mid  = (a + b) / 2;
     QPointF wa   = sceneToWorld(a.x(), a.y());
     QPointF wc   = sceneToWorld(mid.x(), mid.y());
@@ -2585,10 +2629,15 @@ void MapEditWidget::addCurve(const QPointF &a, const QPointF &b,
     cv["cx"] = wc.x(); cv["cy"] = wc.y();
     cv["x2"] = wb.x(); cv["y2"] = wb.y();
     cv["direct"] = 10; cv["startid"] = startId; cv["endid"] = endId; // 默认双向 ↔
-    cv["maxspeed"]   = mc.maxSpeed();
-    cv["maxacc"]     = mc.maxAcceleration();
-    cv["maxdec"]     = mc.maxDeceleration();
-    cv["maxrot"]     = mc.maxAngularSpeedDeg();
+    cv["maxspeed"]                 = mc.maxSpeed();
+    cv["max_acceleration"]         = mc.maxAcceleration();
+    cv["maxacc"]                   = mc.maxAcceleration();
+    cv["max_deceleration"]         = mc.maxDeceleration();
+    cv["maxdec"]                   = mc.maxDeceleration();
+    cv["max_angular_speed"]        = mc.maxAngularSpeedDeg();
+    cv["maxrot"]                   = mc.maxAngularSpeedDeg();
+    cv["max_angular_acceleration"] = mc.maxAngularAccelerationDeg();
+    cv["maxrotacc"]                = mc.maxAngularAccelerationDeg();
     cv["reachdist"]  = mc.arrivalDistanceTolerance();
     cv["reachangle"] = mc.arrivalAngleToleranceDeg();
     cv["width"]      = mc.routeWidth();
@@ -2624,6 +2673,20 @@ void MapEditWidget::finalizeCurve()
         m_curveCtrlPts.last() = tail.scenePos;
         m_curveCtrlIds.last() = tail.id;
     }
+
+    QString startId = m_curveCtrlIds.first();
+    QString endId   = m_curveCtrlIds.last();
+    if (startId == endId) {
+        Toast::warning(this, "起点与终点不能为同一站点");
+        cancelDraw();
+        return;
+    }
+    if (hasRouteBetween(startId, endId, m_curveCtrlPts.first(), m_curveCtrlPts.last())) {
+        Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
+        cancelDraw();
+        return;
+    }
+
     // 保存数据后立即清空状态，防止 addBezierCurve → renderMap 链中重入
     QList<QPointF> pts = m_curveCtrlPts;
     QList<QString> ids = m_curveCtrlIds;
@@ -2644,6 +2707,12 @@ void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
                                    const QList<QString> &snapIds)
 {
     if (scenePts.size() < 2) return;
+    QString startId = snapIds.isEmpty()     ? QString() : snapIds.first();
+    QString endId   = (snapIds.size() >= 2) ? snapIds.last() : QString();
+    if (!startId.isEmpty() && !endId.isEmpty() && hasRouteBetween(startId, endId, scenePts.first(), scenePts.last())) {
+        Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
+        return;
+    }
     int n = nextIdNum(m_curves, "b_");
     QJsonObject cv;
     cv["id"]   = QString("b_%1").arg(n);
@@ -2655,14 +2724,19 @@ void MapEditWidget::addBezierCurve(const QList<QPointF> &scenePts,
     QPointF wEnd   = sceneToWorld(scenePts.last().x(),  scenePts.last().y());
     cv["x1"] = wStart.x(); cv["y1"] = wStart.y();
     cv["x2"] = wEnd.x();   cv["y2"] = wEnd.y();
-    cv["startid"] = snapIds.isEmpty()     ? QString() : snapIds.first();
-    cv["endid"]   = (snapIds.size() >= 2) ? snapIds.last() : QString();
+    cv["startid"] = startId;
+    cv["endid"]   = endId;
 
     const auto &mc = MotionConfigManager::instance();
-    cv["maxspeed"]   = mc.maxSpeed();
-    cv["maxacc"]     = mc.maxAcceleration();
-    cv["maxdec"]     = mc.maxDeceleration();
-    cv["maxrot"]     = mc.maxAngularSpeedDeg();
+    cv["maxspeed"]                 = mc.maxSpeed();
+    cv["max_acceleration"]         = mc.maxAcceleration();
+    cv["maxacc"]                   = mc.maxAcceleration();
+    cv["max_deceleration"]         = mc.maxDeceleration();
+    cv["maxdec"]                   = mc.maxDeceleration();
+    cv["max_angular_speed"]        = mc.maxAngularSpeedDeg();
+    cv["maxrot"]                   = mc.maxAngularSpeedDeg();
+    cv["max_angular_acceleration"] = mc.maxAngularAccelerationDeg();
+    cv["maxrotacc"]                = mc.maxAngularAccelerationDeg();
     cv["reachdist"]  = mc.arrivalDistanceTolerance();
     cv["reachangle"] = mc.arrivalAngleToleranceDeg();
     cv["width"]      = mc.routeWidth();
@@ -2721,6 +2795,84 @@ MapEditWidget::SnapResult MapEditWidget::ensureNodeAt(const QPointF &sp)
         r.scenePos = worldToScene(r.worldPos.x(), r.worldPos.y());
     }
     return r;
+}
+
+bool MapEditWidget::hasRouteBetween(const QString &startId, const QString &endId,
+                                    const QPointF &sceneStart, const QPointF &sceneEnd) const
+{
+    const bool hasIds = !startId.isEmpty() && !endId.isEmpty() && (startId != endId);
+    const bool hasCoords = !sceneStart.isNull() && !sceneEnd.isNull();
+    QPointF wa, wb;
+    if (hasCoords) {
+        wa = sceneToWorld(sceneStart.x(), sceneStart.y());
+        wb = sceneToWorld(sceneEnd.x(), sceneEnd.y());
+    }
+
+    auto matchEndpoints = [&](const QString &s, const QString &e,
+                              double x1, double y1, double x2, double y2) -> bool {
+        // 1. 优先按站点 ID 匹配（无向：A-B 或 B-A 均视为同一路段）
+        if (hasIds && !s.isEmpty() && !e.isEmpty()) {
+            if ((s == startId && e == endId) || (s == endId && e == startId)) {
+                return true;
+            }
+        }
+        // 2. 坐标容差兜底匹配 (容差 0.15 米，防止历史导入数据缺少 ID)
+        if (hasCoords) {
+            const double tol = 0.15;
+            bool directMatch = (std::hypot(wa.x() - x1, wa.y() - y1) < tol &&
+                                std::hypot(wb.x() - x2, wb.y() - y2) < tol);
+            bool reverseMatch = (std::hypot(wa.x() - x2, wa.y() - y2) < tol &&
+                                 std::hypot(wb.x() - x1, wb.y() - y1) < tol);
+            if (directMatch || reverseMatch) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // 检查直线
+    for (const auto &v : m_lines) {
+        QJsonObject ln = v.toObject();
+        QString s = ln.value("startid").toString();
+        if (s.isEmpty()) s = ln.value("startId").toString();
+        if (s.isEmpty()) s = ln.value("sId").toString();
+
+        QString e = ln.value("endid").toString();
+        if (e.isEmpty()) e = ln.value("endId").toString();
+        if (e.isEmpty()) e = ln.value("eId").toString();
+
+        double x1 = ln.value("x1").toDouble();
+        double y1 = ln.value("y1").toDouble();
+        double x2 = ln.value("x2").toDouble();
+        double y2 = ln.value("y2").toDouble();
+
+        if (matchEndpoints(s, e, x1, y1, x2, y2)) {
+            return true;
+        }
+    }
+
+    // 检查曲线
+    for (const auto &v : m_curves) {
+        QJsonObject cv = v.toObject();
+        QString s = cv.value("startid").toString();
+        if (s.isEmpty()) s = cv.value("startId").toString();
+        if (s.isEmpty()) s = cv.value("sId").toString();
+
+        QString e = cv.value("endid").toString();
+        if (e.isEmpty()) e = cv.value("endId").toString();
+        if (e.isEmpty()) e = cv.value("eId").toString();
+
+        double x1 = cv.value("x1").toDouble();
+        double y1 = cv.value("y1").toDouble();
+        double x2 = cv.value("x2").toDouble();
+        double y2 = cv.value("y2").toDouble();
+
+        if (matchEndpoints(s, e, x1, y1, x2, y2)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // ── Feature selection ─────────────────────────────────────────────────────────
@@ -2848,18 +3000,44 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
         m_lineDirectCombo->setCurrentIndex(dIdx);
 
         const auto &mc = MotionConfigManager::instance();
-        m_lineMaxSpeedSpin->setRange(0.01, mc.maxSpeed());
-        m_lineMaxAccSpin->setRange(0.01, mc.maxAcceleration());
-        m_lineMaxDecSpin->setRange(0.01, mc.maxDeceleration());
-        m_lineMaxRotSpin->setRange(1.0, mc.maxAngularSpeedDeg());
+        double minSpd = mc.paramMin("max_speed", 0.0);
+        double maxSpd = mc.paramMax("max_speed", 1.0);
+        double minAcc = mc.paramMin("max_acceleration", 0.3);
+        double maxAcc = mc.paramMax("max_acceleration", 0.5);
+        double minDec = mc.paramMin("max_deceleration", 0.3);
+        double maxDec = mc.paramMax("max_deceleration", 0.5);
+        double minRot = mc.paramMin("max_angular_speed", 5.0);
+        double maxRot = mc.paramMax("max_angular_speed", 60.0);
+        double minRotAcc = mc.paramMin("max_angular_acceleration", 10.0);
+        double maxRotAcc = mc.paramMax("max_angular_acceleration", 30.0);
+
+        m_lineMaxSpeedSpin->setRange(minSpd, maxSpd);
+        m_lineMaxAccSpin->setRange(minAcc, maxAcc);
+        m_lineMaxDecSpin->setRange(minDec, maxDec);
+        m_lineMaxRotSpin->setRange(minRot, maxRot);
+        m_lineMaxRotAccSpin->setRange(minRotAcc, maxRotAcc);
         m_lineReachDistSpin->setRange(0.01, qMax(1.0, mc.arrivalDistanceTolerance()));
         m_lineReachAngleSpin->setRange(0.1, qMax(45.0, mc.arrivalAngleToleranceDeg()));
         m_lineRoadWidthSpin->setRange(0.5, qMax(10.0, mc.routeWidth()));
 
-        m_lineMaxSpeedSpin->setValue(mc.clampLinearSpeed(obj.value("maxspeed").toDouble(mc.maxSpeed())));
-        m_lineMaxAccSpin->setValue(qMin(obj.value("maxacc").toDouble(mc.maxAcceleration()), mc.maxAcceleration()));
-        m_lineMaxDecSpin->setValue(qMin(obj.value("maxdec").toDouble(mc.maxDeceleration()), mc.maxDeceleration()));
-        m_lineMaxRotSpin->setValue(qMin(obj.value("maxrot").toDouble(mc.maxAngularSpeedDeg()), mc.maxAngularSpeedDeg()));
+        // 若图元有保存的属性（用户修改过）则以图元为准；若未修改则以“参数”中的全局当前值为准
+        double defSpd = mc.maxSpeed();
+        double defAcc = mc.maxAcceleration();
+        double defDec = mc.maxDeceleration();
+        double defRot = mc.maxAngularSpeedDeg();
+        double defRotAcc = mc.maxAngularAccelerationDeg();
+
+        double curSpd = obj.contains("maxspeed") ? obj.value("maxspeed").toDouble() : defSpd;
+        double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble() : (obj.contains("maxacc") ? obj.value("maxacc").toDouble() : defAcc);
+        double dec = obj.contains("max_deceleration") ? obj.value("max_deceleration").toDouble() : (obj.contains("maxdec") ? obj.value("maxdec").toDouble() : defDec);
+        double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble() : (obj.contains("maxrot") ? obj.value("maxrot").toDouble() : defRot);
+        double rotAcc = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble() : (obj.contains("maxrotacc") ? obj.value("maxrotacc").toDouble() : defRotAcc);
+
+        m_lineMaxSpeedSpin->setValue(qBound(minSpd, curSpd, maxSpd));
+        m_lineMaxAccSpin->setValue(qBound(minAcc, acc, maxAcc));
+        m_lineMaxDecSpin->setValue(qBound(minDec, dec, maxDec));
+        m_lineMaxRotSpin->setValue(qBound(minRot, rot, maxRot));
+        m_lineMaxRotAccSpin->setValue(qBound(minRotAcc, rotAcc, maxRotAcc));
         m_lineReachDistSpin->setValue(obj.value("reachdist").toDouble(mc.arrivalDistanceTolerance()));
         m_lineReachAngleSpin->setValue(obj.value("reachangle").toDouble(mc.arrivalAngleToleranceDeg()));
         m_lineRoadWidthSpin->setValue(obj.value("width").toDouble(mc.routeWidth()));
@@ -3439,10 +3617,22 @@ void MapEditWidget::applyPropsEdit()
         QString newName   = m_lineNameEdit->text().trimmed();
         int newDirect     = m_lineDirectCombo->currentData().toInt();
         const auto &mc = MotionConfigManager::instance();
-        double maxSpeed   = mc.clampLinearSpeed(m_lineMaxSpeedSpin->value());
-        double maxAcc     = qMin(m_lineMaxAccSpin->value(), mc.maxAcceleration());
-        double maxDec     = qMin(m_lineMaxDecSpin->value(), mc.maxDeceleration());
-        double maxRot     = qMin(m_lineMaxRotSpin->value(), mc.maxAngularSpeedDeg());
+        double minSpd = mc.paramMin("max_speed", 0.0);
+        double limitMaxSpd = mc.paramMax("max_speed", 1.0);
+        double minAcc = mc.paramMin("max_acceleration", 0.3);
+        double limitMaxAcc = mc.paramMax("max_acceleration", 0.5);
+        double minDec = mc.paramMin("max_deceleration", 0.3);
+        double limitMaxDec = mc.paramMax("max_deceleration", 0.5);
+        double minRot = mc.paramMin("max_angular_speed", 5.0);
+        double limitMaxRot = mc.paramMax("max_angular_speed", 60.0);
+        double minRotAcc = mc.paramMin("max_angular_acceleration", 10.0);
+        double limitMaxRotAcc = mc.paramMax("max_angular_acceleration", 30.0);
+
+        double maxSpeed   = qBound(minSpd, m_lineMaxSpeedSpin->value(), limitMaxSpd);
+        double maxAcc     = qBound(minAcc, m_lineMaxAccSpin->value(), limitMaxAcc);
+        double maxDec     = qBound(minDec, m_lineMaxDecSpin->value(), limitMaxDec);
+        double maxRot     = qBound(minRot, m_lineMaxRotSpin->value(), limitMaxRot);
+        double maxRotAcc  = qBound(minRotAcc, m_lineMaxRotAccSpin->value(), limitMaxRotAcc);
         double reachDist  = m_lineReachDistSpin->value();
         double reachAngle = m_lineReachAngleSpin->value();
         double roadWidth  = m_lineRoadWidthSpin->value();
@@ -3457,10 +3647,15 @@ void MapEditWidget::applyPropsEdit()
                 if (o.value("id").toString() != m_selId) continue;
                 o["name"]       = newName;
                 o["direct"]     = newDirect;
-                o["maxspeed"]   = maxSpeed;
-                o["maxacc"]     = maxAcc;
-                o["maxdec"]     = maxDec;
-                o["maxrot"]     = maxRot;
+                o["maxspeed"]                  = maxSpeed;
+                o["max_acceleration"]          = maxAcc;
+                o["maxacc"]                    = maxAcc;
+                o["max_deceleration"]          = maxDec;
+                o["maxdec"]                    = maxDec;
+                o["max_angular_speed"]         = maxRot;
+                o["maxrot"]                    = maxRot;
+                o["max_angular_acceleration"]  = maxRotAcc;
+                o["maxrotacc"]                 = maxRotAcc;
                 o["reachdist"]  = reachDist;
                 o["reachangle"] = reachAngle;
                 o["width"]      = roadWidth;
@@ -3972,14 +4167,20 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             } else {
                 // 终点: 优先吸附到已有点，未命中则在空地自动创建新普通站点(LM)
                 SnapResult tail = ensureNodeAt(usePos);
-                if (tail.id != m_drawP1Id) {
+                if (tail.id == m_drawP1Id) {
+                    Toast::warning(this, "起点与终点不能为同一站点");
+                    clearPreview();
+                } else if (hasRouteBetween(m_drawP1Id, tail.id, m_drawP1, tail.scenePos)) {
+                    Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
+                    clearPreview();
+                } else {
                     addLine(m_drawP1, tail.scenePos, m_drawP1Id, tail.id);
                     // 连续连线模式: 刚绘制好的终点自动作为下一条线段的起点
                     m_drawP1   = tail.scenePos;
                     m_drawP1Id = tail.id;
                     m_drawHasP1 = true;
+                    clearPreview();
                 }
-                clearPreview();
             }
             break;
         }
@@ -4001,9 +4202,18 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
             } else if (n == 3) {
                 // 第 4 点 (P3): 达到三阶上限（4控制点），强制吸附或创建终点节点并自动完成绘制
                 SnapResult tail = ensureNodeAt(usePos);
-                m_curveCtrlPts.append(tail.scenePos);
-                m_curveCtrlIds.append(tail.id);
-                finalizeCurve();
+                QString startId = m_curveCtrlIds.isEmpty() ? QString() : m_curveCtrlIds.first();
+                if (!startId.isEmpty() && tail.id == startId) {
+                    Toast::warning(this, "起点与终点不能为同一站点");
+                    cancelDraw();
+                } else if (!startId.isEmpty() && hasRouteBetween(startId, tail.id, m_curveCtrlPts.first(), tail.scenePos)) {
+                    Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
+                    cancelDraw();
+                } else {
+                    m_curveCtrlPts.append(tail.scenePos);
+                    m_curveCtrlIds.append(tail.id);
+                    finalizeCurve();
+                }
             }
             break;
         }

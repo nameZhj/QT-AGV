@@ -44,6 +44,9 @@ private:
     void parseMetadata(const QByteArray &rawJson);
     QJsonObject findMetadataForConfig(const QJsonObject &configEntry) const;
     QString getDefaultValueString(const QJsonObject &metaObj, const QString &fullPath) const;
+    bool getParamMinMax(const QJsonObject &metaObj, const QString &fullPath,
+                        double &outMin, double &outMax,
+                        bool &hasMin, bool &hasMax) const;
     void updateDefaultValuesInTable();
     void syncObstacleParamsToRouteNetwork(double stopDx, double stopDy,
                                           double decelDx, double decelDy,

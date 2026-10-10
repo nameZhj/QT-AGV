@@ -562,10 +562,16 @@ bool MapPgmUtil::parseSmapJson(const QJsonObject &smapObj,
         curveObj["name"]     = mc.name.isEmpty() ? QString("曲%1").arg(curveCount) : mc.name;
         curveObj["startid"]  = startId;
         curveObj["endid"]    = endId;
-        curveObj["direct"]   = static_cast<int>(MapPgmUtil::Direction::Bidirectional);
-        curveObj["maxspeed"] = 8.0;
-        curveObj["minspeed"] = 0.0;
-        curveObj["slowdis"]  = 2.0;
+        curveObj["direct"]                   = static_cast<int>(MapPgmUtil::Direction::Bidirectional);
+        curveObj["maxspeed"]                 = 8.0;
+        curveObj["minspeed"]                 = 0.0;
+        curveObj["max_acceleration"]         = 0.3;
+        curveObj["maxacc"]                   = 0.3;
+        curveObj["max_angular_speed"]        = 60.0;
+        curveObj["maxrot"]                   = 60.0;
+        curveObj["max_angular_acceleration"] = 45.0;
+        curveObj["maxrotacc"]                = 45.0;
+        curveObj["slowdis"]                  = 2.0;
 
         QJsonArray ctrlArr;
         for (const auto &pt : mc.ctrlPts) {

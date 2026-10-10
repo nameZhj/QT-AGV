@@ -386,6 +386,7 @@ private:
     QLabel               *m_routeMaxAccVal     = nullptr;
     QLabel               *m_routeMaxDecVal     = nullptr;
     QLabel               *m_routeMaxRotVal     = nullptr;
+    QLabel               *m_routeMaxRotAccVal  = nullptr;
     QLabel               *m_routeReachDistVal  = nullptr;
     QLabel               *m_routeReachAngleVal = nullptr;
     QLabel               *m_routeWidthVal      = nullptr;

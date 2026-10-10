@@ -92,6 +92,10 @@ private:
     // 返回该端点对应的节点 id 与吸附/创建后的场景坐标。
     // 仅用于曲线首尾端点，中间控制点不应调用。
     SnapResult ensureNodeAt(const QPointF &sp);
+    // 检查两个站点之间是否已存在连线(直线或曲线，无向)
+    bool hasRouteBetween(const QString &startId, const QString &endId,
+                         const QPointF &sceneStart = QPointF(),
+                         const QPointF &sceneEnd = QPointF()) const;
 
     // 把"屏幕像素"半径换算成当前缩放下的场景坐标半径，避免缩小地图后命中容差跟着缩小
     double hitTolScene(double screenPx) const;
@@ -208,6 +212,7 @@ private:
     QDoubleSpinBox *m_lineMaxAccSpin     = nullptr; // 最大加速度 m/s²
     QDoubleSpinBox *m_lineMaxDecSpin     = nullptr; // 最大减速度 m/s²
     QDoubleSpinBox *m_lineMaxRotSpin     = nullptr; // 最大旋转速度 °/s
+    QDoubleSpinBox *m_lineMaxRotAccSpin  = nullptr; // 最大角加减速度 °/s²
     QDoubleSpinBox *m_lineReachDistSpin  = nullptr; // 到达距离精度 m
     QDoubleSpinBox *m_lineReachAngleSpin = nullptr; // 到达角度精度 °
     QDoubleSpinBox *m_lineRoadWidthSpin  = nullptr; // 路线宽度 m

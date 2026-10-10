@@ -236,19 +236,23 @@ QJsonObject RouteSegment::toJson() const
         }
     }
 
-    // 动力学与控制参数
-    obj["maxSpeed"]    = maxSpeed;
-    obj["maxspeed"]    = maxSpeed;
-    obj["minSpeed"]    = minSpeed;
-    obj["minspeed"]    = minSpeed;
-    obj["maxAcc"]      = maxAcc;
-    obj["maxacc"]      = maxAcc;
-    obj["maxDec"]      = maxDec;
-    obj["maxdec"]      = maxDec;
-    obj["maxRotSpeed"] = maxRotSpeed;
-    obj["maxrot"]      = maxRotSpeed;
-    obj["maxRotAcc"]   = maxRotAcc;
-    obj["maxrotacc"]   = maxRotAcc;
+    // 动力学与控制参数 (速度保持 maxspeed 原参数名，加速度、角速度与角加速度采用 max_acceleration, max_angular_speed, max_angular_acceleration 并向前兼容)
+    obj["maxSpeed"]                 = maxSpeed;
+    obj["maxspeed"]                 = maxSpeed;
+    obj["minSpeed"]                 = minSpeed;
+    obj["minspeed"]                 = minSpeed;
+    obj["max_acceleration"]         = maxAcc;
+    obj["maxAcc"]                   = maxAcc;
+    obj["maxacc"]                   = maxAcc;
+    obj["max_deceleration"]         = maxDec;
+    obj["maxDec"]                   = maxDec;
+    obj["maxdec"]                   = maxDec;
+    obj["max_angular_speed"]        = maxRotSpeed;
+    obj["maxRotSpeed"]              = maxRotSpeed;
+    obj["maxrot"]                   = maxRotSpeed;
+    obj["max_angular_acceleration"] = maxRotAcc;
+    obj["maxRotAcc"]                = maxRotAcc;
+    obj["maxrotacc"]                = maxRotAcc;
     obj["reachDist"]   = reachDist;
     obj["reachAngle"]  = reachAngle;
     obj["roadWidth"]   = roadWidth;
@@ -298,11 +302,21 @@ RouteSegment RouteSegment::fromJson(const QJsonObject &obj)
     }
 
     seg.maxSpeed    = obj.contains("maxSpeed") ? obj.value("maxSpeed").toDouble(0.5) : obj.value("maxspeed").toDouble(0.5);
-    seg.minSpeed    = obj.contains("minSpeed") ? obj.value("minSpeed").toDouble(0.0) : obj.value("minspeed").toDouble(0.0);
-    seg.maxAcc      = obj.contains("maxAcc") ? obj.value("maxAcc").toDouble(0.3) : obj.value("maxacc").toDouble(0.3);
-    seg.maxDec      = obj.contains("maxDec") ? obj.value("maxDec").toDouble(0.3) : obj.value("maxdec").toDouble(0.3);
-    seg.maxRotSpeed = obj.contains("maxRotSpeed") ? obj.value("maxRotSpeed").toDouble(60.0) : obj.value("maxrot").toDouble(60.0);
-    seg.maxRotAcc   = obj.contains("maxRotAcc") ? obj.value("maxRotAcc").toDouble(45.0) : obj.value("maxrotacc").toDouble(45.0);
+    seg.minSpeed    = obj.contains("min_speed") ? obj.value("min_speed").toDouble(0.0)
+                    : obj.contains("minSpeed")  ? obj.value("minSpeed").toDouble(0.0)
+                    : obj.value("minspeed").toDouble(0.0);
+    seg.maxAcc      = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble(0.3)
+                    : obj.contains("maxAcc")           ? obj.value("maxAcc").toDouble(0.3)
+                    : obj.value("maxacc").toDouble(0.3);
+    seg.maxDec      = obj.contains("max_deceleration") ? obj.value("max_deceleration").toDouble(0.3)
+                    : obj.contains("maxDec")           ? obj.value("maxDec").toDouble(0.3)
+                    : obj.value("maxdec").toDouble(0.3);
+    seg.maxRotSpeed = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble(60.0)
+                    : obj.contains("maxRotSpeed")       ? obj.value("maxRotSpeed").toDouble(60.0)
+                    : obj.value("maxrot").toDouble(60.0);
+    seg.maxRotAcc   = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble(45.0)
+                    : obj.contains("maxRotAcc")                ? obj.value("maxRotAcc").toDouble(45.0)
+                    : obj.value("maxrotacc").toDouble(45.0);
     seg.reachDist   = obj.value("reachDist").toDouble(0.05);
     seg.reachAngle  = obj.value("reachAngle").toDouble(2.0);
     seg.roadWidth   = obj.contains("roadWidth") ? obj.value("roadWidth").toDouble(1.0) : obj.value("width").toDouble(1.0);

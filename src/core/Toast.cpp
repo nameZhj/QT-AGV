@@ -74,6 +74,11 @@ Toast::Toast(QWidget *topLevel, const QString &message, Type type, int durationM
         iconBgColor = "rgba(239, 68, 68, 0.18)";
         iconSymbol  = QString::fromUtf8("\xE2\x9C\x95"); // ✕
         break;
+    case Warning:
+        accentColor = "#f59e0b"; // 琥珀橙黄
+        iconBgColor = "rgba(245, 158, 11, 0.18)";
+        iconSymbol  = QString::fromUtf8("\xE2\x9A\xA0"); // ⚠
+        break;
     case Info:
     default:
         accentColor = "#0284c7"; // 科技青蓝

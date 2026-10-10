@@ -5,6 +5,7 @@
 #include "core/LoadingDialog.h"
 #include "core/Toast.h"
 #include "core/MapPgmUtil.h"
+#include "core/MotionConfigManager.h"
 #include <QPushButton>
 #include <QComboBox>
 #include <QLabel>
@@ -179,8 +180,8 @@ const QList<ActionDef> &actionCatalog()
             {"侧向减速膨胀半径m",   "intrusion_deceleration_width",  0},
         }},
         {5, "原地旋转", {
-            {"旋转角度", "rotate_angle", 0},
-            {"旋转速度", "rotate_speed", 0.1}
+            {"旋转角度", "rotate_angle", 90.0},
+            {"旋转速度", "rotate_speed", MotionConfigManager::instance().maxAngularSpeedDeg()}
         }},
         {20, "原地等待", {
             {"等待时间s", "delay", 0}
@@ -215,13 +216,50 @@ QJsonObject editActionParamsDialog(QWidget *parent, const ActionDef &def,
     dlg.setWindowTitle(dialogTitle);
     QFormLayout *form = new QFormLayout(&dlg);
 
+    const auto &mc = MotionConfigManager::instance();
     QList<QDoubleSpinBox*> spins;
     for (const auto &f : def.fields) {
         QDoubleSpinBox *spin = new QDoubleSpinBox;
-        spin->setRange(-1e6, 1e6);
+        if (f.param == "rotate_angle") {
+            // 旋转角度不能为负数
+            spin->setRange(0.0, 360.0);
+            spin->setSingleStep(5.0);
+        } else if (f.param == "rotate_speed") {
+            // 旋转角速度范围以元数据 paramMax 为准，支持负值
+            const double limitMaxRot = mc.paramMax(QStringLiteral("max_angular_speed"), 60.0);
+            spin->setRange(-limitMaxRot, limitMaxRot);
+            spin->setSingleStep(2.0);
+        } else if (f.param == "astern_speed") {
+            // 倒行速度范围以元数据 paramMax 为准，支持负值
+            const double limitMaxSpd = mc.paramMax(QStringLiteral("max_speed"), 1.0);
+            spin->setRange(-limitMaxSpd, limitMaxSpd);
+            spin->setSingleStep(0.05);
+        } else if (f.param == "distance") {
+            // 移动距离不能为负数
+            spin->setRange(0.0, 100.0);
+            spin->setSingleStep(0.1);
+        } else if (f.param.contains("intrusion")) {
+            spin->setRange(0.0, 10.0);
+            spin->setSingleStep(0.05);
+        } else if (f.param == "lift_height") {
+            spin->setRange(0.0, 0.15);
+            spin->setSingleStep(0.01);
+        } else if (f.param == "lift_linear") {
+            spin->setRange(0.0, 0.1);
+            spin->setSingleStep(0.01);
+        } else if (f.param == "delay") {
+            spin->setRange(0.0, 86400.0);
+            spin->setSingleStep(1.0);
+        } else {
+            spin->setRange(-1e6, 1e6);
+            spin->setSingleStep(0.1);
+        }
         spin->setDecimals(3);
-        spin->setSingleStep(0.1);
-        spin->setValue(existingValues.contains(f.param) ? existingValues.value(f.param).toDouble() : f.defaultValue);
+        double val = existingValues.contains(f.param) ? existingValues.value(f.param).toDouble() : f.defaultValue;
+        if (f.param == "rotate_angle" || f.param == "distance") {
+            val = std::max(0.0, val);
+        }
+        spin->setValue(val);
         form->addRow(f.label + ":", spin);
         spins.append(spin);
     }

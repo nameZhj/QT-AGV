@@ -854,12 +854,12 @@ void ApiService::setRotateMotion(double rotateAngleRad, double rotateSpeed, int 
     if (actionId <= 0) {
         actionId = static_cast<int>(QDateTime::currentMSecsSinceEpoch() % 1000000 + 1);
     }
-    rotateSpeed = MotionConfigManager::instance().clampAngularSpeedRad(rotateSpeed);
+    rotateSpeed = MotionConfigManager::instance().clampSignedAngularSpeedRad(rotateSpeed);
 
     QJsonObject actionObj;
     actionObj["action_id"]    = actionId;
     actionObj["action_type"]  = 12;
-    actionObj["rotate_angle"] = rotateAngleRad;
+    actionObj["rotate_angle"] = std::abs(rotateAngleRad);
     actionObj["rotate_speed"] = rotateSpeed;
     setActionControl(actionObj, cb);
 }

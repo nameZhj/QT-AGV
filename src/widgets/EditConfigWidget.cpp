@@ -240,6 +240,7 @@ static void ensureMotionControlConfig(QJsonArray &configs) {
       if (!params.contains("max_acceleration")) params["max_acceleration"] = mc.maxAcceleration();
       if (!params.contains("max_deceleration")) params["max_deceleration"] = mc.maxDeceleration();
       if (!params.contains("max_angular_speed")) params["max_angular_speed"] = mc.maxAngularSpeedDeg();
+      if (!params.contains("max_angular_acceleration")) params["max_angular_acceleration"] = mc.maxAngularAccelerationDeg();
       if (!params.contains("arrival_distance_tolerance")) params["arrival_distance_tolerance"] = mc.arrivalDistanceTolerance();
       if (!params.contains("arrival_angle_tolerance")) params["arrival_angle_tolerance"] = mc.arrivalAngleToleranceDeg();
       if (!params.contains("route_width")) params["route_width"] = mc.routeWidth();
@@ -384,6 +385,9 @@ void EditConfigWidget::loadAll() {
         ensureMotionControlConfig(list);
         ensureAlignConfig(list);
         ensureObstacleConfig(list);
+
+        // 将从 /rbrainrobot/get_all_configs 接口获取的实际参数动态更新到全局 MotionConfigManager
+        MotionConfigManager::instance().updateFromConfigsArray(list);
 
         m_configs = list;
         refreshGroups();
@@ -557,6 +561,7 @@ QPair<QString, QString> EditConfigWidget::fieldMetaFor(const QString &key) {
       {"max_acceleration", {"最大线加速度配置值", "单位 m/s²"}},
       {"max_deceleration", {"最大线减速度的幅值", "单位 m/s²，使用正数"}},
       {"max_angular_speed", {"最大角速度配置值", "单位 °/s；此处使用角度制"}},
+      {"max_angular_acceleration", {"最大角加减速度配置值", "单位 °/s²；此处使用角度制"}},
       {"arrival_distance_tolerance", {"到达目标允许的距离误差", "单位 m"}},
       {"arrival_angle_tolerance", {"到达目标允许的角度误差", "单位 °；此处使用角度制"}},
       {"route_width", {"路线宽度配置值", "单位 m；全宽/半宽及控制用途尚未接入定义"}},
@@ -581,6 +586,7 @@ void EditConfigWidget::addParamRows(const QJsonObject &params, int configIdx,
       "max_acceleration",
       "max_deceleration",
       "max_angular_speed",
+      "max_angular_acceleration",
       "arrival_distance_tolerance",
       "arrival_angle_tolerance",
       "route_width"
@@ -597,6 +603,11 @@ void EditConfigWidget::addParamRows(const QJsonObject &params, int configIdx,
   for (const QString &key : keys) {
     const QJsonValue &jv = params.value(key);
     const QString fullPath = prefix.isEmpty() ? key : prefix + "." + key;
+
+    // 隐藏 max_deceleration 相关的参数配置 UI
+    if (key == "max_deceleration" || fullPath.endsWith(".max_deceleration")) {
+      continue;
+    }
 
     // Recurse into nested objects (expand them as dotted-path rows)
     if (jv.isObject() && !jv.toObject().isEmpty()) {
@@ -659,10 +670,24 @@ void EditConfigWidget::addParamRows(const QJsonObject &params, int configIdx,
     defaultItem->setData(Qt::UserRole + 1, fullPath);
     m_paramTable->setItem(row, 2, defaultItem);
 
-    // Column 3: Chinese name + remark (not editable)
+    // Column 3: Chinese name + remark + range (not editable)
     QString desc = fm.first;
     if (!fm.second.isEmpty())
       desc += "  (" + fm.second + ")";
+
+    // 检查 metadata 是否包含 min/max 参数范围 (若为 null 或空则不显示范围)
+    double outMin = 0.0, outMax = 0.0;
+    bool hasMin = false, hasMax = false;
+    if (getParamMinMax(metaObj, fullPath, outMin, outMax, hasMin, hasMax)) {
+      if (hasMin && hasMax) {
+        desc += QString(" [范围: %1 ~ %2]").arg(outMin).arg(outMax);
+      } else if (hasMin) {
+        desc += QString(" [最小: %1]").arg(outMin);
+      } else if (hasMax) {
+        desc += QString(" [最大: %1]").arg(outMax);
+      }
+    }
+
     auto *descItem = new QTableWidgetItem(desc);
     descItem->setFlags(descItem->flags() & ~Qt::ItemIsEditable);
     descItem->setForeground(QColor(0x88, 0x99, 0xaa));
@@ -904,7 +929,7 @@ void EditConfigWidget::syncObstacleParamsToRouteNetwork(double stopDx, double st
             }
           }
         } else if (gtype == "LineString" || gtype == "MultiPoint") {
-          // 线和曲线：如果用户修改过避障参数，则不使用全局避障参数
+          // 线和曲线：如果用户修改过，则以用户修改为准；未修改则同步全局默认值
           bool isCustom = props.value("is_custom_obstacle").toBool(props.value("custom_obstacle").toBool(false));
           if (!isCustom) {
             props["intrusion_stop_length"]         = stopDx;
@@ -912,6 +937,20 @@ void EditConfigWidget::syncObstacleParamsToRouteNetwork(double stopDx, double st
             props["intrusion_deceleration_length"] = decelDx;
             props["intrusion_deceleration_width"]  = decelDy;
             props["is_custom_obstacle"]            = false;
+
+            const auto &mc = MotionConfigManager::instance();
+            props["maxspeed"]                 = mc.maxSpeed();
+            props["max_acceleration"]         = mc.maxAcceleration();
+            props["maxacc"]                   = mc.maxAcceleration();
+            props["max_deceleration"]         = mc.maxDeceleration();
+            props["maxdec"]                   = mc.maxDeceleration();
+            props["max_angular_speed"]        = mc.maxAngularSpeedDeg();
+            props["maxrot"]                   = mc.maxAngularSpeedDeg();
+            props["max_angular_acceleration"] = mc.maxAngularAccelerationDeg();
+            props["maxrotacc"]                = mc.maxAngularAccelerationDeg();
+            props["reachdist"]                = mc.arrivalDistanceTolerance();
+            props["reachangle"]               = mc.arrivalAngleToleranceDeg();
+            props["width"]                    = mc.routeWidth();
           }
         }
 
@@ -954,6 +993,20 @@ void EditConfigWidget::syncObstacleParamsToRouteNetwork(double stopDx, double st
             ln["intrusion_deceleration_length"] = decelDx;
             ln["intrusion_deceleration_width"]  = decelDy;
             ln["is_custom_obstacle"]            = false;
+
+            const auto &mc = MotionConfigManager::instance();
+            ln["maxspeed"]                 = mc.maxSpeed();
+            ln["max_acceleration"]         = mc.maxAcceleration();
+            ln["maxacc"]                   = mc.maxAcceleration();
+            ln["max_deceleration"]         = mc.maxDeceleration();
+            ln["maxdec"]                   = mc.maxDeceleration();
+            ln["max_angular_speed"]        = mc.maxAngularSpeedDeg();
+            ln["maxrot"]                   = mc.maxAngularSpeedDeg();
+            ln["max_angular_acceleration"] = mc.maxAngularAccelerationDeg();
+            ln["maxrotacc"]                = mc.maxAngularAccelerationDeg();
+            ln["reachdist"]                = mc.arrivalDistanceTolerance();
+            ln["reachangle"]               = mc.arrivalAngleToleranceDeg();
+            ln["width"]                    = mc.routeWidth();
           }
           arr[i] = ln;
         }
@@ -1016,22 +1069,17 @@ void EditConfigWidget::onSave() {
   m_paramTable->clearFocus();
   m_paramTable->setCurrentIndex(QModelIndex());
 
-  // 兜底强行更新当前行
-  int curRow = m_paramTable->currentRow();
-  if (curRow >= 0 && curRow < m_paramTable->rowCount()) {
-      onParamCellChanged(curRow, 1);
+  // 兜底强行更新所有当前表格中的行，确保每一行都经过 min/max 范围校验并同步
+  for (int r = 0; r < m_paramTable->rowCount(); ++r) {
+    onParamCellChanged(r, 1);
   }
+
+  // 1. 同步修改 MotionConfigManager 中的全局参数值
+  MotionConfigManager::instance().updateFromConfigsArray(m_configs);
 
   QJsonObject payload;
   for (const auto &item : m_configs) {
     QJsonObject entry = item.toObject();
-    QString name = entry.value("name").toString().toLower();
-    QString path = entry.value("file_path").toString().toLower();
-    if (name == "motion_control" || name.contains("motion_control") ||
-        path.contains("motion_control") || name == "运动控制") {
-      MotionConfigManager::instance().updateFromJsonObject(entry.value("params").toObject());
-    }
-    MotionConfigManager::instance().updateObstacleConfig(entry.value("params").toObject());
     QString key =
         entry.value("file_path").toString(entry.value("name").toString());
     QJsonObject val;
@@ -1190,7 +1238,7 @@ void EditConfigWidget::onParamCellChanged(int row, int col) {
     fullPath = keyItem->text(); // fallback
   QStringList segments = fullPath.split(".");
 
-  const QString newStr = valItem->text().trimmed();
+  QString newStr = valItem->text().trimmed();
 
   QJsonObject entry = m_configs[configIdx].toObject();
   QJsonValue params = entry.value("params");
@@ -1199,26 +1247,88 @@ void EditConfigWidget::onParamCellChanged(int row, int col) {
   QJsonValue origLeaf = jsonGet(params, segments);
   QJsonValue newLeaf;
 
-  if (origLeaf.isDouble()) {
-    bool ok;
+  // 1. 获取该参数在接口元数据中的 min 和 max 限制 (若为 null 或空则不限制)
+  double minVal = 0.0;
+  double maxVal = 0.0;
+  bool hasMin = false;
+  bool hasMax = false;
+  QJsonObject metaObj = findMetadataForConfig(entry);
+  getParamMinMax(metaObj, fullPath, minVal, maxVal, hasMin, hasMax);
+
+  // 2. 如果存在 min 或 max 限制，对输入数值施加限制；若为 null 或空则不限制
+  if (hasMin || hasMax) {
+    bool ok = false;
     double d = newStr.toDouble(&ok);
-    newLeaf = ok ? QJsonValue(d) : QJsonValue(newStr);
-  } else if (origLeaf.isBool()) {
-    QString lo = newStr.toLower();
-    if (lo == "true" || lo == "1")
-      newLeaf = QJsonValue(true);
-    else if (lo == "false" || lo == "0")
-      newLeaf = QJsonValue(false);
-    else
-      newLeaf = QJsonValue(newStr);
-  } else if (origLeaf.isArray()) {
-    QJsonParseError pe;
-    QJsonDocument doc = QJsonDocument::fromJson(newStr.toUtf8(), &pe);
-    newLeaf = (pe.error == QJsonParseError::NoError && doc.isArray())
-                  ? QJsonValue(doc.array())
-                  : QJsonValue(newStr);
+    if (ok) {
+      bool clamped = false;
+      if (hasMin && d < minVal) {
+        d = minVal;
+        clamped = true;
+      }
+      if (hasMax && d > maxVal) {
+        d = maxVal;
+        clamped = true;
+      }
+
+      if (clamped) {
+        QString rangeStr;
+        if (hasMin && hasMax) {
+          rangeStr = QString("[%1 ~ %2]").arg(minVal).arg(maxVal);
+        } else if (hasMin) {
+          rangeStr = QString("[>= %1]").arg(minVal);
+        } else {
+          rangeStr = QString("[<= %1]").arg(maxVal);
+        }
+        Toast::warning(this, QString("参数「%1」超出允许范围 %2，已限制为 %3")
+                                  .arg(fullPath)
+                                  .arg(rangeStr)
+                                  .arg(d));
+      }
+
+      newStr = (d == (long long)d) ? QString::number((long long)d)
+                                   : QString::number(d, 'g', 10);
+      m_paramTable->blockSignals(true);
+      valItem->setText(newStr);
+      m_paramTable->blockSignals(false);
+
+      newLeaf = QJsonValue(d);
+    } else {
+      if (origLeaf.isDouble()) {
+        double oldD = origLeaf.toDouble();
+        newStr = (oldD == (long long)oldD) ? QString::number((long long)oldD)
+                                           : QString::number(oldD, 'g', 10);
+        m_paramTable->blockSignals(true);
+        valItem->setText(newStr);
+        m_paramTable->blockSignals(false);
+        newLeaf = QJsonValue(oldD);
+        Toast::warning(this, QString("参数「%1」必须为数值").arg(fullPath));
+      } else {
+        newLeaf = QJsonValue(newStr);
+      }
+    }
   } else {
-    newLeaf = QJsonValue(newStr);
+    // min 和 max 为 null 或空，不限制
+    if (origLeaf.isDouble()) {
+      bool ok;
+      double d = newStr.toDouble(&ok);
+      newLeaf = ok ? QJsonValue(d) : QJsonValue(newStr);
+    } else if (origLeaf.isBool()) {
+      QString lo = newStr.toLower();
+      if (lo == "true" || lo == "1")
+        newLeaf = QJsonValue(true);
+      else if (lo == "false" || lo == "0")
+        newLeaf = QJsonValue(false);
+      else
+        newLeaf = QJsonValue(newStr);
+    } else if (origLeaf.isArray()) {
+      QJsonParseError pe;
+      QJsonDocument doc = QJsonDocument::fromJson(newStr.toUtf8(), &pe);
+      newLeaf = (pe.error == QJsonParseError::NoError && doc.isArray())
+                    ? QJsonValue(doc.array())
+                    : QJsonValue(newStr);
+    } else {
+      newLeaf = QJsonValue(newStr);
+    }
   }
 
   entry["params"] = jsonSet(params, segments, newLeaf).toObject();
@@ -1235,6 +1345,12 @@ void EditConfigWidget::onParamCellChanged(int row, int col) {
       const auto &mc = MotionConfigManager::instance();
       syncObstacleParamsToRouteNetwork(mc.defaultObsStopLength(), mc.defaultObsStopWidth(),
                                        mc.defaultObsDecelLength(), mc.defaultObsDecelWidth());
+    }
+
+    QString cfgName = entry.value("name").toString().trimmed().toLower();
+    QString cfgPath = entry.value("file_path").toString().trimmed().toLower();
+    if (cfgName.contains("motion_control") || cfgPath.contains("motion_control")) {
+      MotionConfigManager::instance().updateFromJsonObject(entry.value("params").toObject());
     }
   }
 }
@@ -1269,6 +1385,7 @@ void EditConfigWidget::parseMetadata(const QByteArray &rawJson) {
     m_metadataList = list;
     QSettings settings;
     settings.setValue("editConfig/cachedMetadata", rawJson);
+    MotionConfigManager::instance().updateFromMetadataArray(list);
   }
 }
 
@@ -1364,6 +1481,69 @@ QString EditConfigWidget::getDefaultValueString(const QJsonObject &metaObj,
         QJsonDocument(def.toArray()).toJson(QJsonDocument::Compact));
   }
   return QStringLiteral("--");
+}
+
+bool EditConfigWidget::getParamMinMax(const QJsonObject &metaObj,
+                                      const QString &fullPath,
+                                      double &outMin, double &outMax,
+                                      bool &hasMin, bool &hasMax) const {
+  hasMin = false;
+  hasMax = false;
+  if (fullPath.isEmpty())
+    return false;
+
+  auto parseLimit = [](const QJsonValue &val, double &outVal) -> bool {
+    if (val.isNull() || val.isUndefined())
+      return false;
+    if (val.isDouble()) {
+      outVal = val.toDouble();
+      return true;
+    }
+    if (val.isString()) {
+      QString s = val.toString().trimmed();
+      if (s.isEmpty() || s.compare("null", Qt::CaseInsensitive) == 0 ||
+          s == "--" || s == "none")
+        return false;
+      bool ok = false;
+      double d = s.toDouble(&ok);
+      if (ok) {
+        outVal = d;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (!metaObj.isEmpty()) {
+    QJsonObject curObj = metaObj.value("params").toObject();
+    const QStringList parts = fullPath.split('.');
+    for (int i = 0; i < parts.size() - 1; ++i) {
+      curObj = curObj.value(parts[i]).toObject();
+    }
+    QJsonObject leafObj = curObj.value(parts.last()).toObject();
+    if (!leafObj.isEmpty()) {
+      hasMin = parseLimit(leafObj.value("min"), outMin);
+      hasMax = parseLimit(leafObj.value("max"), outMax);
+    }
+  }
+
+  // 兜底：若该项为 motion_control 相关参数且 metaObj 中未找到，则尝试从 MotionConfigManager 获取
+  if (!hasMin && !hasMax) {
+    const QString leafKey = fullPath.contains('.') ? fullPath.split('.').last() : fullPath;
+    if (MotionConfigManager::instance().hasParamMeta(leafKey)) {
+      auto m = MotionConfigManager::instance().paramMeta(leafKey);
+      if (m.hasMin) {
+        hasMin = true;
+        outMin = m.minVal;
+      }
+      if (m.hasMax) {
+        hasMax = true;
+        outMax = m.maxVal;
+      }
+    }
+  }
+
+  return hasMin || hasMax;
 }
 
 void EditConfigWidget::updateDefaultValuesInTable() {
