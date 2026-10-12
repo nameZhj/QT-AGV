@@ -898,11 +898,11 @@ void MapEditWidget::setupUI()
         auto *w = new QWidget;
         w->setStyleSheet("background:transparent; border:none;");
         auto *h = new QHBoxLayout(w);
-        h->setContentsMargins(0,1,0,1);
+        h->setContentsMargins(0, 1, 0, 1);
         h->setSpacing(6);
         auto *lbl = new QLabel(label);
-        lbl->setMinimumWidth(68);
-        lbl->setMaximumWidth(84);
+        lbl->setFixedWidth(118);
+        lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         lbl->setStyleSheet("color:#7e96b0; font-size:11px; background:transparent; border:none;");
         h->addWidget(lbl);
         h->addWidget(editor, 1);
@@ -912,6 +912,62 @@ void MapEditWidget::setupUI()
             unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none;");
             h->addWidget(unitLbl);
         }
+        return w;
+    };
+
+    auto mkCheckableRow = [](QCheckBox *&chk, const QString &label, QWidget *editor, const QString &unit = QString()) -> QWidget* {
+        auto *w = new QWidget;
+        w->setStyleSheet("background:transparent; border:none;");
+        auto *h = new QHBoxLayout(w);
+        h->setContentsMargins(0, 1, 0, 1);
+        h->setSpacing(6);
+
+        // 左侧固定宽度 118px: 包含复选框与靠右对齐的文字，确保无论是否勾选文字绝对不发生左右移动
+        auto *leftCont = new QWidget;
+        leftCont->setFixedWidth(118);
+        leftCont->setStyleSheet("background:transparent; border:none;");
+        auto *lh = new QHBoxLayout(leftCont);
+        lh->setContentsMargins(0, 0, 0, 0);
+        lh->setSpacing(4);
+
+        chk = new QCheckBox;
+        chk->setFixedSize(16, 16);
+        chk->setStyleSheet(
+            "QCheckBox { background: transparent; }"
+            "QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #3d4a5d; border-radius: 2px; background: #171c26; }"
+            "QCheckBox::indicator:checked { background: #1e6fd4; border-color: #1e6fd4; image: url(:/check.svg); }"
+        );
+        lh->addWidget(chk, 0, Qt::AlignVCenter);
+
+        auto *lbl = new QLabel(label);
+        lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        lbl->setStyleSheet("color: #8fa6bf; font-size: 11px; background: transparent; border: none;");
+        lh->addWidget(lbl, 1, Qt::AlignVCenter);
+
+        h->addWidget(leftCont, 0, Qt::AlignLeft | Qt::AlignVCenter);
+
+        auto *editorCont = new QWidget;
+        editorCont->setStyleSheet("background:transparent; border:none;");
+        auto *eh = new QHBoxLayout(editorCont);
+        eh->setContentsMargins(0, 0, 0, 0);
+        eh->setSpacing(4);
+        eh->addWidget(editor, 1);
+        if (!unit.isEmpty()) {
+            auto *unitLbl = new QLabel(unit);
+            unitLbl->setMinimumWidth(26);
+            unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none;");
+            eh->addWidget(unitLbl);
+        }
+        h->addWidget(editorCont, 1);
+
+        // 默认不勾选，右侧编辑输入隐藏 (参考图片1)
+        chk->setChecked(false);
+        editorCont->setVisible(false);
+
+        QObject::connect(chk, &QCheckBox::toggled, editorCont, [editorCont](bool checked) {
+            editorCont->setVisible(checked);
+        });
+
         return w;
     };
 
@@ -964,7 +1020,7 @@ void MapEditWidget::setupUI()
         m_stationTypeCombo->addItem("普通站点 (LM)", "point");
         m_stationTypeCombo->addItem("充电桩 (CP)", "charge");
         m_stationTypeCombo->addItem("高精定位点 (TL)", "highPrecision");
-        sl->addWidget(mkFormRow("站点类型:", m_stationTypeCombo));
+        sl->addWidget(mkCheckableRow(m_chkStationType, "站点类型:", m_stationTypeCombo));
 
         m_stationIdEdit = new QLineEdit;
         m_stationIdEdit->setReadOnly(true);
@@ -972,39 +1028,33 @@ void MapEditWidget::setupUI()
         sl->addWidget(mkFormRow("站点编号:", m_stationIdEdit));
 
         m_stationLabelEdit = new QLineEdit;
-        sl->addWidget(mkFormRow("站点名称:", m_stationLabelEdit));
+        sl->addWidget(mkCheckableRow(m_chkStationLabel, "站点名称:", m_stationLabelEdit));
 
         // 空间坐标
         m_stationXSpin = new QDoubleSpinBox;
         m_stationXSpin->setRange(-99999.0, 99999.0);
         m_stationXSpin->setDecimals(3);
-        sl->addWidget(mkFormRow("X 坐标:", m_stationXSpin, "m"));
+        sl->addWidget(mkCheckableRow(m_chkStationX, "X 坐标:", m_stationXSpin, "m"));
 
         m_stationYSpin = new QDoubleSpinBox;
         m_stationYSpin->setRange(-99999.0, 99999.0);
         m_stationYSpin->setDecimals(3);
-        sl->addWidget(mkFormRow("Y 坐标:", m_stationYSpin, "m"));
+        sl->addWidget(mkCheckableRow(m_chkStationY, "Y 坐标:", m_stationYSpin, "m"));
 
         m_stationYawSpin = new QDoubleSpinBox;
         m_stationYawSpin->setRange(-360.0, 360.0);
         m_stationYawSpin->setDecimals(1);
-        sl->addWidget(mkFormRow("朝向角度:", m_stationYawSpin, "°"));
+        sl->addWidget(mkCheckableRow(m_chkStationYaw, "朝向角度:", m_stationYawSpin, "°"));
 
         // 站点特性复选框
-        auto *attrCard = new QWidget;
-        attrCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
-        auto *acl = new QVBoxLayout(attrCard);
-        acl->setContentsMargins(6,6,6,6);
-        acl->setSpacing(6);
-        m_stationDockableChk = new QCheckBox("允许停靠 (rdsDockable)");
-        m_stationDockableChk->setChecked(true);
-        m_stationRotateChk = new QCheckBox("允许转身 (allowRotate)");
-        m_stationRotateChk->setChecked(true);
-        m_stationPgvChk = new QCheckBox("使用下视 PGV (useDownPGV)");
-        acl->addWidget(m_stationDockableChk);
-        acl->addWidget(m_stationRotateChk);
-        acl->addWidget(m_stationPgvChk);
-        sl->addWidget(attrCard);
+        m_stationDockableChk = new QCheckBox("启用");
+        sl->addWidget(mkCheckableRow(m_chkStationDockable, "允许停靠:", m_stationDockableChk));
+
+        m_stationRotateChk = new QCheckBox("启用");
+        sl->addWidget(mkCheckableRow(m_chkStationRotate, "允许转身:", m_stationRotateChk));
+
+        m_stationPgvChk = new QCheckBox("启用");
+        sl->addWidget(mkCheckableRow(m_chkStationPgv, "使用下视PGV:", m_stationPgvChk));
 
         // EPC 相对定位数据
         m_stationEpcGroup = new QWidget;
@@ -1047,7 +1097,7 @@ void MapEditWidget::setupUI()
         ll->addWidget(mkFormRow("线路编号:", m_lineIdEdit));
 
         m_lineNameEdit = new QLineEdit;
-        ll->addWidget(mkFormRow("线路名称:", m_lineNameEdit));
+        ll->addWidget(mkCheckableRow(m_chkLineName, "线路名称:", m_lineNameEdit));
 
         // 起止端点
         m_lineStartLabel = new QLabel("--");
@@ -1087,7 +1137,7 @@ void MapEditWidget::setupUI()
         });
         dirl->addWidget(m_lineDirectCombo, 1);
         dirl->addWidget(m_lineFlipDirBtn);
-        ll->addWidget(mkFormRow("运动方向:", dirRow));
+        ll->addWidget(mkCheckableRow(m_chkLineDirect, "运动方向:", dirRow));
 
         // 运动控制参数卡片
         auto *motionCard = new QWidget;
@@ -1108,7 +1158,7 @@ void MapEditWidget::setupUI()
         m_lineMaxSpeedSpin->setSingleStep(0.05);
         m_lineMaxSpeedSpin->setValue(mc.maxSpeed());
         m_lineMaxSpeedSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s)").arg(minSpd, 0, 'f', 2).arg(maxSpd, 0, 'f', 2));
-        mcl->addWidget(mkFormRow("最大速度:", m_lineMaxSpeedSpin, "m/s"));
+        mcl->addWidget(mkCheckableRow(m_chkLineMaxSpeed, "最大速度:", m_lineMaxSpeedSpin, "m/s"));
 
         double minAcc = mc.paramMin("max_acceleration", 0.3);
         double maxAcc = mc.paramMax("max_acceleration", 0.5);
@@ -1117,7 +1167,7 @@ void MapEditWidget::setupUI()
         m_lineMaxAccSpin->setSingleStep(0.05);
         m_lineMaxAccSpin->setValue(mc.maxAcceleration());
         m_lineMaxAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s²)").arg(minAcc, 0, 'f', 2).arg(maxAcc, 0, 'f', 2));
-        mcl->addWidget(mkFormRow("最大加速度:", m_lineMaxAccSpin, "m/s²"));
+        mcl->addWidget(mkCheckableRow(m_chkLineMaxAcc, "最大加速度:", m_lineMaxAccSpin, "m/s²"));
 
         double minDec = mc.paramMin("max_deceleration", 0.3);
         double maxDec = mc.paramMax("max_deceleration", 0.5);
@@ -1137,7 +1187,7 @@ void MapEditWidget::setupUI()
         m_lineMaxRotSpin->setSingleStep(5.0);
         m_lineMaxRotSpin->setValue(mc.maxAngularSpeedDeg());
         m_lineMaxRotSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s)").arg(minRot, 0, 'f', 1).arg(maxRot, 0, 'f', 1));
-        mcl->addWidget(mkFormRow("最大角速度:", m_lineMaxRotSpin, "°/s"));
+        mcl->addWidget(mkCheckableRow(m_chkLineMaxRot, "最大角速度:", m_lineMaxRotSpin, "°/s"));
 
         double minRotAcc = mc.paramMin("max_angular_acceleration", 10.0);
         double maxRotAcc = mc.paramMax("max_angular_acceleration", 30.0);
@@ -1146,25 +1196,25 @@ void MapEditWidget::setupUI()
         m_lineMaxRotAccSpin->setSingleStep(5.0);
         m_lineMaxRotAccSpin->setValue(mc.maxAngularAccelerationDeg());
         m_lineMaxRotAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s²)").arg(minRotAcc, 0, 'f', 1).arg(maxRotAcc, 0, 'f', 1));
-        mcl->addWidget(mkFormRow("最大角加减速度:", m_lineMaxRotAccSpin, "°/s²"));
+        mcl->addWidget(mkCheckableRow(m_chkLineMaxRotAcc, "最大角加减:", m_lineMaxRotAccSpin, "°/s²"));
 
         m_lineReachDistSpin = new QDoubleSpinBox;
         m_lineReachDistSpin->setRange(0.01, qMax(1.0, mc.arrivalDistanceTolerance()));
         m_lineReachDistSpin->setSingleStep(0.01);
         m_lineReachDistSpin->setValue(mc.arrivalDistanceTolerance());
-        mcl->addWidget(mkFormRow("到达距离精度:", m_lineReachDistSpin, "m"));
+        mcl->addWidget(mkCheckableRow(m_chkLineReachDist, "到达距离精度:", m_lineReachDistSpin, "m"));
 
         m_lineReachAngleSpin = new QDoubleSpinBox;
         m_lineReachAngleSpin->setRange(0.1, qMax(45.0, mc.arrivalAngleToleranceDeg()));
         m_lineReachAngleSpin->setSingleStep(0.1);
         m_lineReachAngleSpin->setValue(mc.arrivalAngleToleranceDeg());
-        mcl->addWidget(mkFormRow("到达角度精度:", m_lineReachAngleSpin, "°"));
+        mcl->addWidget(mkCheckableRow(m_chkLineReachAngle, "到达角度精度:", m_lineReachAngleSpin, "°"));
 
         m_lineRoadWidthSpin = new QDoubleSpinBox;
         m_lineRoadWidthSpin->setRange(0.5, qMax(10.0, mc.routeWidth()));
         m_lineRoadWidthSpin->setSingleStep(0.5);
         m_lineRoadWidthSpin->setValue(mc.routeWidth());
-        mcl->addWidget(mkFormRow("路线宽度:", m_lineRoadWidthSpin, "m"));
+        mcl->addWidget(mkCheckableRow(m_chkLineRoadWidth, "路线宽度:", m_lineRoadWidthSpin, "m"));
 
         // 监听全局运动控制参数变化，动态调整各输入控件的范围与 ToolTip
         connect(&MotionConfigManager::instance(), &MotionConfigManager::configChanged, this, [this]() {
@@ -1237,28 +1287,28 @@ void MapEditWidget::setupUI()
         m_lineObsStopLenSpin->setSingleStep(0.05);
         m_lineObsStopLenSpin->setValue(0.00);
         m_lineObsStopLenSpin->setToolTip("正向停止膨胀半径 (intrusion_stop_length)");
-        ocl->addWidget(mkFormRow("正向停止膨胀:", m_lineObsStopLenSpin, "m"));
+        ocl->addWidget(mkCheckableRow(m_chkLineObsStopLen, "正向停止膨胀:", m_lineObsStopLenSpin, "m"));
 
         m_lineObsStopWidSpin = new QDoubleSpinBox;
         m_lineObsStopWidSpin->setRange(0.00, 5.00);
         m_lineObsStopWidSpin->setSingleStep(0.05);
         m_lineObsStopWidSpin->setValue(0.00);
         m_lineObsStopWidSpin->setToolTip("侧向停止膨胀半径 (intrusion_stop_width)");
-        ocl->addWidget(mkFormRow("侧向停止膨胀:", m_lineObsStopWidSpin, "m"));
+        ocl->addWidget(mkCheckableRow(m_chkLineObsStopWid, "侧向停止膨胀:", m_lineObsStopWidSpin, "m"));
 
         m_lineObsDecelLenSpin = new QDoubleSpinBox;
         m_lineObsDecelLenSpin->setRange(0.00, 5.00);
         m_lineObsDecelLenSpin->setSingleStep(0.05);
         m_lineObsDecelLenSpin->setValue(0.00);
         m_lineObsDecelLenSpin->setToolTip("正向减速膨胀半径 (intrusion_deceleration_length)");
-        ocl->addWidget(mkFormRow("正向减速膨胀:", m_lineObsDecelLenSpin, "m"));
+        ocl->addWidget(mkCheckableRow(m_chkLineObsDecelLen, "正向减速膨胀:", m_lineObsDecelLenSpin, "m"));
 
         m_lineObsDecelWidSpin = new QDoubleSpinBox;
         m_lineObsDecelWidSpin->setRange(0.00, 5.00);
         m_lineObsDecelWidSpin->setSingleStep(0.05);
         m_lineObsDecelWidSpin->setValue(0.00);
         m_lineObsDecelWidSpin->setToolTip("侧向减速膨胀半径 (intrusion_deceleration_width)");
-        ocl->addWidget(mkFormRow("侧向减速膨胀:", m_lineObsDecelWidSpin, "m"));
+        ocl->addWidget(mkCheckableRow(m_chkLineObsDecelWid, "侧向减速膨胀:", m_lineObsDecelWidSpin, "m"));
 
         ll->addWidget(obsCard);
         pl->addWidget(m_linePropGroup);
@@ -2977,6 +3027,20 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
         } else {
             m_stationEpcGroup->setVisible(false);
         }
+
+        // 恢复选中状态 (若未保存过自定义属性，则默认全为非选中状态)
+        QSet<QString> chkSet;
+        QJsonArray cpArr = obj.value("checked_props").toArray();
+        for (const auto &v : cpArr) chkSet.insert(v.toString());
+
+        if (m_chkStationType)     m_chkStationType->setChecked(chkSet.contains("stationType"));
+        if (m_chkStationLabel)    m_chkStationLabel->setChecked(chkSet.contains("name"));
+        if (m_chkStationX)        m_chkStationX->setChecked(chkSet.contains("x"));
+        if (m_chkStationY)        m_chkStationY->setChecked(chkSet.contains("y"));
+        if (m_chkStationYaw)      m_chkStationYaw->setChecked(chkSet.contains("yaw"));
+        if (m_chkStationDockable) m_chkStationDockable->setChecked(chkSet.contains("rdsDockable"));
+        if (m_chkStationRotate)   m_chkStationRotate->setChecked(chkSet.contains("allowRotate"));
+        if (m_chkStationPgv)      m_chkStationPgv->setChecked(chkSet.contains("useDownPGV"));
     } else {
         // Line or Curve
         m_propHeaderTitle->setText("线路属性");
@@ -3052,6 +3116,25 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
         m_lineObsStopWidSpin->setValue(sw);
         m_lineObsDecelLenSpin->setValue(dl);
         m_lineObsDecelWidSpin->setValue(dw);
+
+        // 恢复选中状态 (若未保存过自定义属性，则默认全为非选中状态)
+        QSet<QString> chkSet;
+        QJsonArray cpArr = obj.value("checked_props").toArray();
+        for (const auto &v : cpArr) chkSet.insert(v.toString());
+
+        if (m_chkLineName)        m_chkLineName->setChecked(chkSet.contains("name"));
+        if (m_chkLineDirect)      m_chkLineDirect->setChecked(chkSet.contains("direct"));
+        if (m_chkLineMaxSpeed)    m_chkLineMaxSpeed->setChecked(chkSet.contains("maxspeed"));
+        if (m_chkLineMaxAcc)      m_chkLineMaxAcc->setChecked(chkSet.contains("maxacc"));
+        if (m_chkLineMaxRot)      m_chkLineMaxRot->setChecked(chkSet.contains("maxrot"));
+        if (m_chkLineMaxRotAcc)   m_chkLineMaxRotAcc->setChecked(chkSet.contains("maxrotacc"));
+        if (m_chkLineReachDist)   m_chkLineReachDist->setChecked(chkSet.contains("reachdist"));
+        if (m_chkLineReachAngle)  m_chkLineReachAngle->setChecked(chkSet.contains("reachangle"));
+        if (m_chkLineRoadWidth)   m_chkLineRoadWidth->setChecked(chkSet.contains("width"));
+        if (m_chkLineObsStopLen)  m_chkLineObsStopLen->setChecked(chkSet.contains("intrusion_stop_length"));
+        if (m_chkLineObsStopWid)  m_chkLineObsStopWid->setChecked(chkSet.contains("intrusion_stop_width"));
+        if (m_chkLineObsDecelLen) m_chkLineObsDecelLen->setChecked(chkSet.contains("intrusion_deceleration_length"));
+        if (m_chkLineObsDecelWid) m_chkLineObsDecelWid->setChecked(chkSet.contains("intrusion_deceleration_width"));
     }
 
     m_propsPanel->setVisible(true);
@@ -3511,8 +3594,9 @@ void MapEditWidget::applyPropsEdit()
         bool rotate      = m_stationRotateChk->isChecked();
         bool pgv         = m_stationPgvChk->isChecked();
 
-        if (newKind != m_selType) {
-            // 类型切换处理
+        bool typeChecked = m_chkStationType && m_chkStationType->isChecked();
+        if (typeChecked && newKind != m_selType) {
+            // 类型切换处理 (仅当勾选了站点类型时)
             QJsonObject pointObj;
             auto take = [&](QJsonArray &arr) {
                 for (int i = 0; i < arr.size(); ++i) {
@@ -3534,15 +3618,28 @@ void MapEditWidget::applyPropsEdit()
                 else                                  { int nn = nextIdNum(m_highPrecisionPoints, "hp_"); newId = QString("hp_%1").arg(nn); defaultName = QString("TL%1").arg(nn); }
 
                 pointObj["id"]   = newId;
-                pointObj["name"] = newName.isEmpty() ? defaultName : newName;
-                pointObj["x"]    = newX;
-                pointObj["y"]    = newY;
-                pointObj["yaw"]  = newYawRad;
-                pointObj["theta"] = newYawDeg;
-                pointObj["robotYaw"] = 0.0;
-                pointObj["rdsDockable"] = dockable;
-                pointObj["allowRotate"] = rotate;
-                pointObj["useDownPGV"]  = pgv;
+                if (m_chkStationLabel && m_chkStationLabel->isChecked()) pointObj["name"] = newName.isEmpty() ? defaultName : newName;
+                if (m_chkStationX && m_chkStationX->isChecked()) pointObj["x"] = newX;
+                if (m_chkStationY && m_chkStationY->isChecked()) pointObj["y"] = newY;
+                if (m_chkStationYaw && m_chkStationYaw->isChecked()) {
+                    pointObj["yaw"] = newYawRad;
+                    pointObj["theta"] = newYawDeg;
+                    pointObj["robotYaw"] = 0.0;
+                }
+                if (m_chkStationDockable && m_chkStationDockable->isChecked()) pointObj["rdsDockable"] = dockable;
+                if (m_chkStationRotate && m_chkStationRotate->isChecked()) pointObj["allowRotate"] = rotate;
+                if (m_chkStationPgv && m_chkStationPgv->isChecked()) pointObj["useDownPGV"] = pgv;
+
+                QJsonArray stChkProps;
+                if (m_chkStationType && m_chkStationType->isChecked()) stChkProps.append("stationType");
+                if (m_chkStationLabel && m_chkStationLabel->isChecked()) stChkProps.append("name");
+                if (m_chkStationX && m_chkStationX->isChecked()) stChkProps.append("x");
+                if (m_chkStationY && m_chkStationY->isChecked()) stChkProps.append("y");
+                if (m_chkStationYaw && m_chkStationYaw->isChecked()) stChkProps.append("yaw");
+                if (m_chkStationDockable && m_chkStationDockable->isChecked()) stChkProps.append("rdsDockable");
+                if (m_chkStationRotate && m_chkStationRotate->isChecked()) stChkProps.append("allowRotate");
+                if (m_chkStationPgv && m_chkStationPgv->isChecked()) stChkProps.append("useDownPGV");
+                pointObj["checked_props"] = stChkProps;
 
                 if      (newKind == "point")         m_points.append(pointObj);
                 else if (newKind == "charge")        m_charges.append(pointObj);
@@ -3552,56 +3649,85 @@ void MapEditWidget::applyPropsEdit()
                 m_selId   = newId;
             }
         } else {
-            // 普通更新
+            // 普通更新 (仅修改被勾选的属性，未勾选不覆盖原值)
             auto upd = [&](QJsonArray &arr) {
                 for (int i = 0; i < arr.size(); ++i) {
                     QJsonObject o = arr[i].toObject();
                     if (o.value("id").toString() != m_selId) continue;
-                    o["name"]        = newName;
-                    o["x"]           = newX;
-                    o["y"]           = newY;
-                    o["yaw"]         = newYawRad;
-                    o["theta"]       = newYawDeg;
-                    o["robotYaw"]    = 0.0;
-                    o["rdsDockable"] = dockable;
-                    o["allowRotate"] = rotate;
-                    o["useDownPGV"]  = pgv;
-
-                    // 联动更新所有相连线路与曲线的端点坐标
-                    for (int li = 0; li < m_lines.size(); ++li) {
-                        QJsonObject ln = m_lines[li].toObject();
-                        bool changed = false;
-                        if (ln.value("startid").toString() == m_selId) { ln["x1"] = newX; ln["y1"] = newY; changed = true; }
-                        if (ln.value("endid").toString() == m_selId)   { ln["x2"] = newX; ln["y2"] = newY; changed = true; }
-                        if (changed) m_lines[li] = ln;
+                    if (m_chkStationLabel && m_chkStationLabel->isChecked()) o["name"] = newName;
+                    bool xChecked = m_chkStationX && m_chkStationX->isChecked();
+                    bool yChecked = m_chkStationY && m_chkStationY->isChecked();
+                    if (xChecked) o["x"] = newX;
+                    if (yChecked) o["y"] = newY;
+                    if (m_chkStationYaw && m_chkStationYaw->isChecked()) {
+                        o["yaw"] = newYawRad;
+                        o["theta"] = newYawDeg;
+                        o["robotYaw"] = 0.0;
                     }
-                    for (int ci = 0; ci < m_curves.size(); ++ci) {
-                        QJsonObject cv = m_curves[ci].toObject();
-                        bool changed = false;
-                        if (cv.value("startid").toString() == m_selId) {
-                            cv["x1"] = newX; cv["y1"] = newY;
-                            QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-                            if (!ctrlArr.isEmpty()) {
-                                QJsonObject cp0 = ctrlArr[0].toObject();
-                                cp0["x"] = newX; cp0["y"] = newY;
-                                ctrlArr[0] = cp0;
-                                cv["controlPoints"] = ctrlArr;
+                    if (m_chkStationDockable && m_chkStationDockable->isChecked()) o["rdsDockable"] = dockable;
+                    if (m_chkStationRotate && m_chkStationRotate->isChecked()) o["allowRotate"] = rotate;
+                    if (m_chkStationPgv && m_chkStationPgv->isChecked()) o["useDownPGV"] = pgv;
+
+                    QJsonArray stChkProps;
+                    if (m_chkStationType && m_chkStationType->isChecked()) stChkProps.append("stationType");
+                    if (m_chkStationLabel && m_chkStationLabel->isChecked()) stChkProps.append("name");
+                    if (m_chkStationX && m_chkStationX->isChecked()) stChkProps.append("x");
+                    if (m_chkStationY && m_chkStationY->isChecked()) stChkProps.append("y");
+                    if (m_chkStationYaw && m_chkStationYaw->isChecked()) stChkProps.append("yaw");
+                    if (m_chkStationDockable && m_chkStationDockable->isChecked()) stChkProps.append("rdsDockable");
+                    if (m_chkStationRotate && m_chkStationRotate->isChecked()) stChkProps.append("allowRotate");
+                    if (m_chkStationPgv && m_chkStationPgv->isChecked()) stChkProps.append("useDownPGV");
+                    o["checked_props"] = stChkProps;
+
+                    // 联动更新所有相连线路与曲线的端点坐标 (仅在坐标被勾选修改时)
+                    if (xChecked || yChecked) {
+                        for (int li = 0; li < m_lines.size(); ++li) {
+                            QJsonObject ln = m_lines[li].toObject();
+                            bool changed = false;
+                            if (ln.value("startid").toString() == m_selId) {
+                                if (xChecked) ln["x1"] = newX;
+                                if (yChecked) ln["y1"] = newY;
+                                changed = true;
                             }
-                            changed = true;
-                        }
-                        if (cv.value("endid").toString() == m_selId) {
-                            cv["x2"] = newX; cv["y2"] = newY;
-                            QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-                            if (!ctrlArr.isEmpty()) {
-                                int lastIdx = ctrlArr.size() - 1;
-                                QJsonObject cpLast = ctrlArr[lastIdx].toObject();
-                                cpLast["x"] = newX; cpLast["y"] = newY;
-                                ctrlArr[lastIdx] = cpLast;
-                                cv["controlPoints"] = ctrlArr;
+                            if (ln.value("endid").toString() == m_selId) {
+                                if (xChecked) ln["x2"] = newX;
+                                if (yChecked) ln["y2"] = newY;
+                                changed = true;
                             }
-                            changed = true;
+                            if (changed) m_lines[li] = ln;
                         }
-                        if (changed) m_curves[ci] = cv;
+                        for (int ci = 0; ci < m_curves.size(); ++ci) {
+                            QJsonObject cv = m_curves[ci].toObject();
+                            bool changed = false;
+                            if (cv.value("startid").toString() == m_selId) {
+                                if (xChecked) cv["x1"] = newX;
+                                if (yChecked) cv["y1"] = newY;
+                                QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+                                if (!ctrlArr.isEmpty()) {
+                                    QJsonObject cp0 = ctrlArr[0].toObject();
+                                    if (xChecked) cp0["x"] = newX;
+                                    if (yChecked) cp0["y"] = newY;
+                                    ctrlArr[0] = cp0;
+                                    cv["controlPoints"] = ctrlArr;
+                                }
+                                changed = true;
+                            }
+                            if (cv.value("endid").toString() == m_selId) {
+                                if (xChecked) cv["x2"] = newX;
+                                if (yChecked) cv["y2"] = newY;
+                                QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+                                if (!ctrlArr.isEmpty()) {
+                                    int lastIdx = ctrlArr.size() - 1;
+                                    QJsonObject cpLast = ctrlArr[lastIdx].toObject();
+                                    if (xChecked) cpLast["x"] = newX;
+                                    if (yChecked) cpLast["y"] = newY;
+                                    ctrlArr[lastIdx] = cpLast;
+                                    cv["controlPoints"] = ctrlArr;
+                                }
+                                changed = true;
+                            }
+                            if (changed) m_curves[ci] = cv;
+                        }
                     }
 
                     arr[i] = o;
@@ -3645,25 +3771,47 @@ void MapEditWidget::applyPropsEdit()
             for (int i = 0; i < arr.size(); ++i) {
                 QJsonObject o = arr[i].toObject();
                 if (o.value("id").toString() != m_selId) continue;
-                o["name"]       = newName;
-                o["direct"]     = newDirect;
-                o["maxspeed"]                  = maxSpeed;
-                o["max_acceleration"]          = maxAcc;
-                o["maxacc"]                    = maxAcc;
-                o["max_deceleration"]          = maxDec;
-                o["maxdec"]                    = maxDec;
-                o["max_angular_speed"]         = maxRot;
-                o["maxrot"]                    = maxRot;
-                o["max_angular_acceleration"]  = maxRotAcc;
-                o["maxrotacc"]                 = maxRotAcc;
-                o["reachdist"]  = reachDist;
-                o["reachangle"] = reachAngle;
-                o["width"]      = roadWidth;
-                o["intrusion_stop_length"]         = obsStopLen;
-                o["intrusion_stop_width"]          = obsStopWid;
-                o["intrusion_deceleration_length"] = obsDecelLen;
-                o["intrusion_deceleration_width"]  = obsDecelWid;
-                o["is_custom_obstacle"]            = true;
+                if (m_chkLineName && m_chkLineName->isChecked()) o["name"] = newName;
+                if (m_chkLineDirect && m_chkLineDirect->isChecked()) o["direct"] = newDirect;
+                if (m_chkLineMaxSpeed && m_chkLineMaxSpeed->isChecked()) o["maxspeed"] = maxSpeed;
+                if (m_chkLineMaxAcc && m_chkLineMaxAcc->isChecked()) {
+                    o["max_acceleration"] = maxAcc;
+                    o["maxacc"]           = maxAcc;
+                }
+                if (m_chkLineMaxRot && m_chkLineMaxRot->isChecked()) {
+                    o["max_angular_speed"] = maxRot;
+                    o["maxrot"]            = maxRot;
+                }
+                if (m_chkLineMaxRotAcc && m_chkLineMaxRotAcc->isChecked()) {
+                    o["max_angular_acceleration"] = maxRotAcc;
+                    o["maxrotacc"]                = maxRotAcc;
+                }
+                if (m_chkLineReachDist && m_chkLineReachDist->isChecked()) o["reachdist"] = reachDist;
+                if (m_chkLineReachAngle && m_chkLineReachAngle->isChecked()) o["reachangle"] = reachAngle;
+                if (m_chkLineRoadWidth && m_chkLineRoadWidth->isChecked()) o["width"] = roadWidth;
+                bool obsChanged = false;
+                if (m_chkLineObsStopLen && m_chkLineObsStopLen->isChecked())   { o["intrusion_stop_length"] = obsStopLen; obsChanged = true; }
+                if (m_chkLineObsStopWid && m_chkLineObsStopWid->isChecked())   { o["intrusion_stop_width"] = obsStopWid; obsChanged = true; }
+                if (m_chkLineObsDecelLen && m_chkLineObsDecelLen->isChecked()) { o["intrusion_deceleration_length"] = obsDecelLen; obsChanged = true; }
+                if (m_chkLineObsDecelWid && m_chkLineObsDecelWid->isChecked()) { o["intrusion_deceleration_width"] = obsDecelWid; obsChanged = true; }
+                if (obsChanged) o["is_custom_obstacle"] = true;
+
+                QJsonArray lnChkProps;
+                if (m_chkLineName && m_chkLineName->isChecked()) lnChkProps.append("name");
+                if (m_chkLineDirect && m_chkLineDirect->isChecked()) lnChkProps.append("direct");
+                if (m_chkLineMaxSpeed && m_chkLineMaxSpeed->isChecked()) lnChkProps.append("maxspeed");
+                if (m_chkLineMaxAcc && m_chkLineMaxAcc->isChecked()) lnChkProps.append("maxacc");
+                if (m_chkLineMaxRot && m_chkLineMaxRot->isChecked()) lnChkProps.append("maxrot");
+                if (m_chkLineMaxRotAcc && m_chkLineMaxRotAcc->isChecked()) lnChkProps.append("maxrotacc");
+                if (m_chkLineReachDist && m_chkLineReachDist->isChecked()) lnChkProps.append("reachdist");
+                if (m_chkLineReachAngle && m_chkLineReachAngle->isChecked()) lnChkProps.append("reachangle");
+                if (m_chkLineRoadWidth && m_chkLineRoadWidth->isChecked()) lnChkProps.append("width");
+                if (m_chkLineObsStopLen && m_chkLineObsStopLen->isChecked())   lnChkProps.append("intrusion_stop_length");
+                if (m_chkLineObsStopWid && m_chkLineObsStopWid->isChecked())   lnChkProps.append("intrusion_stop_width");
+                if (m_chkLineObsDecelLen && m_chkLineObsDecelLen->isChecked()) lnChkProps.append("intrusion_deceleration_length");
+                if (m_chkLineObsDecelWid && m_chkLineObsDecelWid->isChecked()) lnChkProps.append("intrusion_deceleration_width");
+                o["checked_props"] = lnChkProps;
+
                 arr[i] = o;
                 break;
             }

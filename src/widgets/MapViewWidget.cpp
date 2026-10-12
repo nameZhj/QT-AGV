@@ -941,13 +941,50 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     m_stationEmptyHint->setStyleSheet("color:#556677; font-size:12px; padding:14px 0;");
     stationMainLay->addWidget(m_stationEmptyHint);
 
+    // 辅助构造只读带勾选框的属性行 (参考图片2: 置灰不可操作，显示属性选中状态)
+    auto mkReadOnlyCheckableRow = [](QCheckBox *&chk, const QString &text, QLabel *valLbl) -> QWidget* {
+        auto *w = new QWidget;
+        w->setStyleSheet("background:transparent; border:none;");
+        auto *h = new QHBoxLayout(w);
+        h->setContentsMargins(0, 2, 0, 2);
+        h->setSpacing(6);
+
+        auto *leftCont = new QWidget;
+        leftCont->setFixedWidth(118);
+        leftCont->setStyleSheet("background:transparent; border:none;");
+        auto *lh = new QHBoxLayout(leftCont);
+        lh->setContentsMargins(0, 0, 0, 0);
+        lh->setSpacing(4);
+
+        chk = new QCheckBox;
+        chk->setEnabled(false);
+        chk->setFixedSize(16, 16);
+        chk->setStyleSheet(
+            "QCheckBox { background: transparent; }"
+            "QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #3d4a5d; border-radius: 2px; background: #171c26; }"
+            "QCheckBox::indicator:disabled { border: 1px solid #3d4a5d; background: #171c26; }"
+            "QCheckBox::indicator:checked:disabled { background: #1e6fd4; border-color: #1e6fd4; image: url(:/check.svg); }"
+        );
+        lh->addWidget(chk, 0, Qt::AlignVCenter);
+
+        auto *lbl = new QLabel(text);
+        lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        lbl->setStyleSheet("color: #8fa6bf; font-size: 11px; background: transparent; border: none;");
+        lh->addWidget(lbl, 1, Qt::AlignVCenter);
+
+        h->addWidget(leftCont, 0, Qt::AlignLeft | Qt::AlignVCenter);
+
+        valLbl->setStyleSheet("color: #c8d0d8; font-size: 11px; background: transparent; border: none;");
+        h->addWidget(valLbl, 1, Qt::AlignVCenter);
+        return w;
+    };
+
     // 属性表单容器
     m_stationContentWidget = new QWidget;
     m_stationContentWidget->setStyleSheet("background:transparent; border:none;");
-    auto *stForm = new QFormLayout(m_stationContentWidget);
-    stForm->setContentsMargins(0, 0, 0, 0);
-    stForm->setSpacing(6);
-    stForm->setLabelAlignment(Qt::AlignRight);
+    auto *stLay = new QVBoxLayout(m_stationContentWidget);
+    stLay->setContentsMargins(0, 0, 0, 0);
+    stLay->setSpacing(4);
 
     m_stationTypeVal   = mkInfoLabel();
     m_stationIdVal     = mkInfoLabel();
@@ -958,14 +995,14 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     m_stationRotateVal = mkInfoLabel();
     m_stationPgvVal    = mkInfoLabel();
 
-    stForm->addRow("类型:", m_stationTypeVal);
-    stForm->addRow("编号:", m_stationIdVal);
-    stForm->addRow("名称:", m_stationNameVal);
-    stForm->addRow("坐标:", m_stationPosVal);
-    stForm->addRow("朝向:", m_stationYawVal);
-    stForm->addRow("停靠:", m_stationDockVal);
-    stForm->addRow("转身:", m_stationRotateVal);
-    stForm->addRow("PGV:",  m_stationPgvVal);
+    stLay->addWidget(mkReadOnlyCheckableRow(m_chkStationType,   "类型:", m_stationTypeVal));
+    stLay->addWidget(mkReadOnlyCheckableRow(m_chkStationId,     "编号:", m_stationIdVal));
+    stLay->addWidget(mkReadOnlyCheckableRow(m_chkStationName,   "名称:", m_stationNameVal));
+    stLay->addWidget(mkReadOnlyCheckableRow(m_chkStationPos,    "坐标:", m_stationPosVal));
+    stLay->addWidget(mkReadOnlyCheckableRow(m_chkStationYaw,    "朝向:", m_stationYawVal));
+    stLay->addWidget(mkReadOnlyCheckableRow(m_chkStationDock,   "停靠:", m_stationDockVal));
+    stLay->addWidget(mkReadOnlyCheckableRow(m_chkStationRotate, "转身:", m_stationRotateVal));
+    stLay->addWidget(mkReadOnlyCheckableRow(m_chkStationPgv,    "PGV:",  m_stationPgvVal));
 
     // EPC 相对定位数据卡片
     m_stationEpcGroup = new QWidget;
@@ -985,7 +1022,7 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     epcForm->addRow("相对坐标:", m_stationEpcPosVal);
     epcForm->addRow("相对偏角:", m_stationEpcYawVal);
     epcL->addLayout(epcForm);
-    stForm->addRow(m_stationEpcGroup);
+    stLay->addWidget(m_stationEpcGroup);
     m_stationEpcGroup->setVisible(false);
 
     stationMainLay->addWidget(m_stationContentWidget);
@@ -1013,10 +1050,9 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
 
     m_routeContentWidget = new QWidget;
     m_routeContentWidget->setStyleSheet("background:transparent; border:none;");
-    auto *rtForm = new QFormLayout(m_routeContentWidget);
-    rtForm->setContentsMargins(0, 0, 0, 0);
-    rtForm->setSpacing(6);
-    rtForm->setLabelAlignment(Qt::AlignRight);
+    auto *rtLay = new QVBoxLayout(m_routeContentWidget);
+    rtLay->setContentsMargins(0, 0, 0, 0);
+    rtLay->setSpacing(4);
 
     m_routeTypeVal       = mkInfoLabel();
     m_routeIdVal         = mkInfoLabel();
@@ -1034,21 +1070,20 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     m_routeWidthVal      = mkInfoLabel();
     m_routeObsRangeVal   = mkInfoLabel();
 
-    rtForm->addRow("线路类型:", m_routeTypeVal);
-    rtForm->addRow("线路编号:", m_routeIdVal);
-    rtForm->addRow("线路名称:", m_routeNameVal);
-    rtForm->addRow("起点:",     m_routeStartVal);
-    rtForm->addRow("终点:",     m_routeEndVal);
-    rtForm->addRow("运动方向:", m_routeDirectVal);
-    rtForm->addRow("最大速度:", m_routeMaxSpeedVal);
-    rtForm->addRow("最大加速度:", m_routeMaxAccVal);
-    // rtForm->addRow("最大减速度:", m_routeMaxDecVal); // 隐藏最大减速度 UI
-    rtForm->addRow("最大角速度:", m_routeMaxRotVal);
-    rtForm->addRow("最大角加减速度:", m_routeMaxRotAccVal);
-    rtForm->addRow("到达距离精度:", m_routeReachDistVal);
-    rtForm->addRow("到达角度精度:", m_routeReachAngleVal);
-    rtForm->addRow("路线宽度:", m_routeWidthVal);
-    rtForm->addRow("避障范围:", m_routeObsRangeVal);
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteType,       "线路类型:",     m_routeTypeVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteId,         "线路编号:",     m_routeIdVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteName,       "线路名称:",     m_routeNameVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteStart,      "起点:",         m_routeStartVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteEnd,        "终点:",         m_routeEndVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteDirect,     "运动方向:",     m_routeDirectVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteMaxSpeed,   "最大速度:",     m_routeMaxSpeedVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteMaxAcc,     "最大加速度:",   m_routeMaxAccVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteMaxRot,     "最大角速度:",   m_routeMaxRotVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteMaxRotAcc,  "最大角加减:",   m_routeMaxRotAccVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteReachDist,  "到达距离精度:", m_routeReachDistVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteReachAngle, "到达角度精度:", m_routeReachAngleVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteWidth,      "路线宽度:",     m_routeWidthVal));
+    rtLay->addWidget(mkReadOnlyCheckableRow(m_chkRouteObsRange,   "避障范围:",     m_routeObsRangeVal));
 
     routeMainLay->addWidget(m_routeContentWidget);
     m_routeContentWidget->setVisible(false);
@@ -1558,34 +1593,54 @@ void MapViewWidget::showStationDetails(const QJsonObject &pt, const QString &typ
         m_stationBadge->setVisible(true);
     }
 
+    QSet<QString> chkSet;
+    QJsonArray cpArr = pt.value("checked_props").toArray();
+    for (const auto &v : cpArr) chkSet.insert(v.toString());
+
+    if (m_chkStationType)   m_chkStationType->setChecked(chkSet.contains("stationType"));
     if (m_stationTypeVal)   m_stationTypeVal->setText(typeText);
+
+    if (m_chkStationId)     m_chkStationId->setChecked(chkSet.contains("id"));
     if (m_stationIdVal)     m_stationIdVal->setText(id);
+
+    if (m_chkStationName)   m_chkStationName->setChecked(chkSet.contains("name"));
     if (m_stationNameVal)   m_stationNameVal->setText(name);
 
     double x = pt.value("x").toDouble();
     double y = pt.value("y").toDouble();
+    if (m_chkStationPos)    m_chkStationPos->setChecked(chkSet.contains("x") || chkSet.contains("y"));
     if (m_stationPosVal) {
         m_stationPosVal->setText(QString("(%1, %2) m").arg(x, 0, 'f', 3).arg(y, 0, 'f', 3));
     }
 
+    bool hasYaw = false;
     double yawVal = 0.0;
     if (pt.contains("yaw") && !pt.value("yaw").isNull()) {
         yawVal = pt.value("yaw").toVariant().toDouble();
+        hasYaw = true;
     } else if (pt.contains("theta") && !pt.value("theta").isNull()) {
         yawVal = pt.value("theta").toVariant().toDouble() * M_PI / 180.0;
+        hasYaw = true;
     } else if (pt.contains("robotYaw") && !pt.value("robotYaw").isNull()) {
         yawVal = pt.value("robotYaw").toVariant().toDouble();
+        hasYaw = true;
     }
+    if (m_chkStationYaw)    m_chkStationYaw->setChecked(chkSet.contains("yaw"));
     if (m_stationYawVal) {
         m_stationYawVal->setText(QString("%1°").arg(yawVal * 180.0 / M_PI, 0, 'f', 1));
     }
 
+    if (m_chkStationDock)   m_chkStationDock->setChecked(chkSet.contains("rdsDockable"));
     if (m_stationDockVal) {
         m_stationDockVal->setText(pt.value("rdsDockable").toBool(true) ? "允许停靠" : "禁止停靠");
     }
+
+    if (m_chkStationRotate) m_chkStationRotate->setChecked(chkSet.contains("allowRotate"));
     if (m_stationRotateVal) {
         m_stationRotateVal->setText(pt.value("allowRotate").toBool(true) ? "允许转身" : "禁止转身");
     }
+
+    if (m_chkStationPgv)    m_chkStationPgv->setChecked(chkSet.contains("useDownPGV"));
     if (m_stationPgvVal) {
         m_stationPgvVal->setText(pt.value("useDownPGV").toBool(false) ? "使用PGV" : "不使用PGV");
     }
@@ -1618,6 +1673,14 @@ void MapViewWidget::clearStationDetails()
         m_stationBadge->setText("");
         m_stationBadge->setVisible(false);
     }
+    if (m_chkStationType)   m_chkStationType->setChecked(false);
+    if (m_chkStationId)     m_chkStationId->setChecked(false);
+    if (m_chkStationName)   m_chkStationName->setChecked(false);
+    if (m_chkStationPos)    m_chkStationPos->setChecked(false);
+    if (m_chkStationYaw)    m_chkStationYaw->setChecked(false);
+    if (m_chkStationDock)   m_chkStationDock->setChecked(false);
+    if (m_chkStationRotate) m_chkStationRotate->setChecked(false);
+    if (m_chkStationPgv)    m_chkStationPgv->setChecked(false);
     if (m_stationContentWidget) m_stationContentWidget->setVisible(false);
     if (m_stationEmptyHint)     m_stationEmptyHint->setVisible(true);
 }
@@ -1644,22 +1707,40 @@ void MapViewWidget::showRouteDetails(const QJsonObject &obj, const QString &type
         m_routeBadge->setVisible(true);
     }
 
-    if (m_routeTypeVal)   m_routeTypeVal->setText(isLine ? "直线" : "贝塞尔曲线");
-    if (m_routeIdVal)     m_routeIdVal->setText(obj.value("id").toString());
-    if (m_routeNameVal)   m_routeNameVal->setText(obj.value("name").toString("--"));
+    QSet<QString> chkSet;
+    QJsonArray cpArr = obj.value("checked_props").toArray();
+    for (const auto &v : cpArr) chkSet.insert(v.toString());
+
+    if (m_chkRouteType)       m_chkRouteType->setChecked(chkSet.contains("routeType"));
+    if (m_routeTypeVal)       m_routeTypeVal->setText(isLine ? "直线" : "贝塞尔曲线");
+
+    if (m_chkRouteId)         m_chkRouteId->setChecked(chkSet.contains("id"));
+    if (m_routeIdVal)         m_routeIdVal->setText(obj.value("id").toString());
+
+    bool hasName = obj.contains("name") && !obj.value("name").toString().isEmpty();
+    if (m_chkRouteName)       m_chkRouteName->setChecked(chkSet.contains("name"));
+    if (m_routeNameVal)       m_routeNameVal->setText(obj.value("name").toString("--"));
 
     QString sId = obj.value("startid").toString();
     QString eId = obj.value("endid").toString();
-    if (m_routeStartVal)  m_routeStartVal->setText(sId.isEmpty() ? "--" : stationNameById(sId));
-    if (m_routeEndVal)    m_routeEndVal->setText(eId.isEmpty() ? "--" : stationNameById(eId));
+    if (m_chkRouteStart)      m_chkRouteStart->setChecked(chkSet.contains("startid"));
+    if (m_routeStartVal)      m_routeStartVal->setText(sId.isEmpty() ? "--" : stationNameById(sId));
 
+    if (m_chkRouteEnd)        m_chkRouteEnd->setChecked(chkSet.contains("endid"));
+    if (m_routeEndVal)        m_routeEndVal->setText(eId.isEmpty() ? "--" : stationNameById(eId));
+
+    if (m_chkRouteDirect)     m_chkRouteDirect->setChecked(chkSet.contains("direct"));
     int direct = obj.value("direct").toInt(10);
     QString directText = (direct == 10) ? "双向 ↔" : ((direct == 0) ? "单向前进 →" : "单向后退 ←");
-    if (m_routeDirectVal) m_routeDirectVal->setText(directText);
+    if (m_routeDirectVal)     m_routeDirectVal->setText(directText);
 
     const auto &mc = MotionConfigManager::instance();
+    if (m_chkRouteMaxSpeed)   m_chkRouteMaxSpeed->setChecked(chkSet.contains("maxspeed"));
     if (m_routeMaxSpeedVal)
         m_routeMaxSpeedVal->setText(QString("%1 m/s").arg(mc.clampLinearSpeed(obj.value("maxspeed").toDouble(mc.maxSpeed())), 0, 'f', 2));
+
+    bool hasAcc = chkSet.contains("maxacc") || chkSet.contains("max_acceleration");
+    if (m_chkRouteMaxAcc)     m_chkRouteMaxAcc->setChecked(hasAcc);
     if (m_routeMaxAccVal) {
         double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble() : obj.value("maxacc").toDouble(mc.maxAcceleration());
         m_routeMaxAccVal->setText(QString("%1 m/s²").arg(qMin(acc, mc.maxAcceleration()), 0, 'f', 2));
@@ -1668,21 +1749,36 @@ void MapViewWidget::showRouteDetails(const QJsonObject &obj, const QString &type
         double dec = obj.contains("max_deceleration") ? obj.value("max_deceleration").toDouble() : obj.value("maxdec").toDouble(mc.maxDeceleration());
         m_routeMaxDecVal->setText(QString("%1 m/s²").arg(qMin(dec, mc.maxDeceleration()), 0, 'f', 2));
     }
+
+    bool hasRot = chkSet.contains("maxrot") || chkSet.contains("max_angular_speed");
+    if (m_chkRouteMaxRot)     m_chkRouteMaxRot->setChecked(hasRot);
     if (m_routeMaxRotVal) {
         double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble() : obj.value("maxrot").toDouble(mc.maxAngularSpeedDeg());
         m_routeMaxRotVal->setText(QString("%1 °/s").arg(qMin(rot, mc.maxAngularSpeedDeg()), 0, 'f', 1));
     }
+
+    bool hasRotAcc = chkSet.contains("maxrotacc") || chkSet.contains("max_angular_acceleration");
+    if (m_chkRouteMaxRotAcc)  m_chkRouteMaxRotAcc->setChecked(hasRotAcc);
     if (m_routeMaxRotAccVal) {
         double rotAcc = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble() : obj.value("maxrotacc").toDouble(mc.maxAngularAccelerationDeg());
         m_routeMaxRotAccVal->setText(QString("%1 °/s²").arg(qMin(rotAcc, mc.maxAngularAccelerationDeg()), 0, 'f', 1));
     }
+
+    if (m_chkRouteReachDist)  m_chkRouteReachDist->setChecked(chkSet.contains("reachdist"));
     if (m_routeReachDistVal)
         m_routeReachDistVal->setText(QString("%1 m").arg(obj.value("reachdist").toDouble(mc.arrivalDistanceTolerance()), 0, 'f', 2));
+
+    if (m_chkRouteReachAngle) m_chkRouteReachAngle->setChecked(chkSet.contains("reachangle"));
     if (m_routeReachAngleVal)
         m_routeReachAngleVal->setText(QString("%1 °").arg(obj.value("reachangle").toDouble(mc.arrivalAngleToleranceDeg()), 0, 'f', 1));
+
+    if (m_chkRouteWidth)      m_chkRouteWidth->setChecked(chkSet.contains("width"));
     if (m_routeWidthVal)
         m_routeWidthVal->setText(QString("%1 m").arg(obj.value("width").toDouble(mc.routeWidth()), 0, 'f', 2));
 
+    bool hasObs = chkSet.contains("intrusion_stop_length") || chkSet.contains("intrusion_stop_width") ||
+                  chkSet.contains("intrusion_deceleration_length") || chkSet.contains("intrusion_deceleration_width");
+    if (m_chkRouteObsRange)   m_chkRouteObsRange->setChecked(hasObs);
     if (m_routeObsRangeVal) {
         double sl = obj.value("intrusion_stop_length").toDouble(0.0);
         double sw = obj.value("intrusion_stop_width").toDouble(0.0);
@@ -1716,6 +1812,20 @@ void MapViewWidget::clearRouteDetails()
         m_routeBadge->setText("");
         m_routeBadge->setVisible(false);
     }
+    if (m_chkRouteType)       m_chkRouteType->setChecked(false);
+    if (m_chkRouteId)         m_chkRouteId->setChecked(false);
+    if (m_chkRouteName)       m_chkRouteName->setChecked(false);
+    if (m_chkRouteStart)      m_chkRouteStart->setChecked(false);
+    if (m_chkRouteEnd)        m_chkRouteEnd->setChecked(false);
+    if (m_chkRouteDirect)     m_chkRouteDirect->setChecked(false);
+    if (m_chkRouteMaxSpeed)   m_chkRouteMaxSpeed->setChecked(false);
+    if (m_chkRouteMaxAcc)     m_chkRouteMaxAcc->setChecked(false);
+    if (m_chkRouteMaxRot)     m_chkRouteMaxRot->setChecked(false);
+    if (m_chkRouteMaxRotAcc)  m_chkRouteMaxRotAcc->setChecked(false);
+    if (m_chkRouteReachDist)  m_chkRouteReachDist->setChecked(false);
+    if (m_chkRouteReachAngle) m_chkRouteReachAngle->setChecked(false);
+    if (m_chkRouteWidth)      m_chkRouteWidth->setChecked(false);
+    if (m_chkRouteObsRange)   m_chkRouteObsRange->setChecked(false);
     if (m_routeContentWidget) m_routeContentWidget->setVisible(false);
     if (m_routeEmptyHint)     m_routeEmptyHint->setVisible(true);
 }

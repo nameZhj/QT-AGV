@@ -1096,7 +1096,11 @@ void TaskChainWidget::refreshTaskList()
             topRow->setSpacing(6);
             auto *checkBox = new QCheckBox;
             checkBox->setChecked(checked);
-            checkBox->setStyleSheet("QCheckBox{spacing:4px;} QCheckBox::indicator{width:16px;height:16px;}");
+            checkBox->setStyleSheet(
+                "QCheckBox{spacing:4px;} "
+                "QCheckBox::indicator{width:16px;height:16px;border:1px solid #3a3f4a;border-radius:3px;background-color:#22262e;} "
+                "QCheckBox::indicator:checked{background-color:#1e6fd4;border-color:#1e6fd4;image:url(:/check.svg);}"
+            );
             topRow->addWidget(checkBox);
 
             auto *nameLabel = new QLabel(subTaskName);
@@ -1222,7 +1226,11 @@ void TaskChainWidget::createGroupRowWidget(QListWidgetItem *item, int groupIndex
 
     auto *checkBox = new QCheckBox;
     checkBox->setChecked(checked);
-    checkBox->setStyleSheet("QCheckBox{spacing:4px;} QCheckBox::indicator{width:16px;height:16px;}");
+    checkBox->setStyleSheet(
+        "QCheckBox{spacing:4px;} "
+        "QCheckBox::indicator{width:16px;height:16px;border:1px solid #3a3f4a;border-radius:3px;background-color:#22262e;} "
+        "QCheckBox::indicator:checked{background-color:#1e6fd4;border-color:#1e6fd4;image:url(:/check.svg);}"
+    );
     headerRow->addWidget(checkBox);
 
     auto *nameLbl = new QLabel(groupName);

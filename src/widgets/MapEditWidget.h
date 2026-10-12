@@ -186,14 +186,22 @@ private:
 
     // --- 站点专属属性组 (WidgetMarkPPTW) ---
     QWidget        *m_stationPropGroup   = nullptr;
+    QCheckBox      *m_chkStationType     = nullptr;
     QComboBox      *m_stationTypeCombo   = nullptr; // 普通站点 LM / 充电桩 CP / 高精定位 TL
     QLineEdit      *m_stationIdEdit      = nullptr;
+    QCheckBox      *m_chkStationLabel    = nullptr;
     QLineEdit      *m_stationLabelEdit   = nullptr;
+    QCheckBox      *m_chkStationX        = nullptr;
     QDoubleSpinBox *m_stationXSpin       = nullptr;
+    QCheckBox      *m_chkStationY        = nullptr;
     QDoubleSpinBox *m_stationYSpin       = nullptr;
+    QCheckBox      *m_chkStationYaw      = nullptr;
     QDoubleSpinBox *m_stationYawSpin     = nullptr;
+    QCheckBox      *m_chkStationDockable = nullptr;
     QCheckBox      *m_stationDockableChk = nullptr; // 允许停靠 rdsDockable
+    QCheckBox      *m_chkStationRotate   = nullptr;
     QCheckBox      *m_stationRotateChk   = nullptr; // 允许转身 allowRotate
+    QCheckBox      *m_chkStationPgv      = nullptr;
     QCheckBox      *m_stationPgvChk      = nullptr; // 使用下视 PGV
     QWidget        *m_stationEpcGroup    = nullptr; // EPC相对定位数据
     QLabel         *m_stationEpcXLabel   = nullptr;
@@ -203,24 +211,37 @@ private:
     QWidget        *m_linePropGroup      = nullptr;
     QComboBox      *m_lineTypeCombo      = nullptr; // 直线 / 贝塞尔曲线
     QLineEdit      *m_lineIdEdit         = nullptr;
+    QCheckBox      *m_chkLineName        = nullptr;
     QLineEdit      *m_lineNameEdit       = nullptr;
     QLabel         *m_lineStartLabel     = nullptr; // 起点 (如 LM1)
     QLabel         *m_lineEndLabel       = nullptr; // 终点 (如 LM2)
+    QCheckBox      *m_chkLineDirect      = nullptr;
     QComboBox      *m_lineDirectCombo    = nullptr; // 双向 ↔ / 单向前进 → / 单向倒走 ←
     QPushButton    *m_lineFlipDirBtn     = nullptr; // 翻转方向 ⇄
+    QCheckBox      *m_chkLineMaxSpeed    = nullptr;
     QDoubleSpinBox *m_lineMaxSpeedSpin   = nullptr; // 最大速度 m/s
+    QCheckBox      *m_chkLineMaxAcc      = nullptr;
     QDoubleSpinBox *m_lineMaxAccSpin     = nullptr; // 最大加速度 m/s²
     QDoubleSpinBox *m_lineMaxDecSpin     = nullptr; // 最大减速度 m/s²
+    QCheckBox      *m_chkLineMaxRot      = nullptr;
     QDoubleSpinBox *m_lineMaxRotSpin     = nullptr; // 最大旋转速度 °/s
+    QCheckBox      *m_chkLineMaxRotAcc   = nullptr;
     QDoubleSpinBox *m_lineMaxRotAccSpin  = nullptr; // 最大角加减速度 °/s²
+    QCheckBox      *m_chkLineReachDist   = nullptr;
     QDoubleSpinBox *m_lineReachDistSpin  = nullptr; // 到达距离精度 m
+    QCheckBox      *m_chkLineReachAngle  = nullptr;
     QDoubleSpinBox *m_lineReachAngleSpin = nullptr; // 到达角度精度 °
+    QCheckBox      *m_chkLineRoadWidth   = nullptr;
     QDoubleSpinBox *m_lineRoadWidthSpin  = nullptr; // 路线宽度 m
 
     // --- 实时避障范围属性组 (对齐 base.json 规范) ---
+    QCheckBox      *m_chkLineObsStopLen  = nullptr;
     QDoubleSpinBox *m_lineObsStopLenSpin  = nullptr; // 正向停止膨胀半径 (m)
+    QCheckBox      *m_chkLineObsStopWid  = nullptr;
     QDoubleSpinBox *m_lineObsStopWidSpin  = nullptr; // 侧向停止膨胀半径 (m)
+    QCheckBox      *m_chkLineObsDecelLen = nullptr;
     QDoubleSpinBox *m_lineObsDecelLenSpin = nullptr; // 正向减速膨胀半径 (m)
+    QCheckBox      *m_chkLineObsDecelWid = nullptr;
     QDoubleSpinBox *m_lineObsDecelWidSpin = nullptr; // 侧向减速膨胀半径 (m)
 
     // 操作按钮
