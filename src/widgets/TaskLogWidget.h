@@ -2,45 +2,26 @@
 #define TASKLOGWIDGET_H
 
 #include <QWidget>
-#include <QTableWidget>
-#include <QLineEdit>
-#include <QComboBox>
-#include <QJsonObject>
-#include <QJsonArray>
+#include <QTreeWidget>
 
 class TaskLogWidget : public QWidget
 {
     Q_OBJECT
 public:
     explicit TaskLogWidget(QWidget *parent = nullptr);
+    ~TaskLogWidget() override = default;
+
     // 刷新任务日志列表(由 MainWindow 在切换菜单时调用)
     void refreshData();
 
 signals:
     void navigateRequested(const QString &target, const QString &id);
 
-private slots:
-    void onSearch();
-    void onReset();
-    void onTableSelectionChanged();
-
 private:
     void setupUI();
-    void getList();
-    void showDetail(const QJsonObject &row);
-    void showMap(const QJsonObject &row);
+    void buildSampleData();
 
-    QTableWidget *m_table = nullptr;
-    QLineEdit *m_carNameFilter = nullptr;
-    QLineEdit *m_taskNameFilter = nullptr;
-    QComboBox *m_statusFilter = nullptr;
-    QLineEdit *m_taskNumberFilter = nullptr;
-    QLineEdit *m_messageFilter = nullptr;
-
-    QJsonArray m_taskList;
-    int m_pageNum = 1;
-    int m_pageSize = 10;
-    int m_total = 0;
+    QTreeWidget *m_tree = nullptr;
 };
 
 #endif // TASKLOGWIDGET_H
