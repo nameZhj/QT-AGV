@@ -12,6 +12,7 @@
 #include "core/DeviceManagerDialog.h"
 #include "core/AppConfig.h"
 #include "core/ButtonClickEffect.h"
+#include "core/SpinBoxWheelFilter.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -102,6 +103,9 @@ int main(int argc, char *argv[])
 
     // 全局按钮点击动效，对所有按钮统一生效
     app.installEventFilter(new ButtonClickEffect(&app));
+
+    // 全局步进器滚轮防误触：只有在点击获取焦点后才响应滚轮
+    app.installEventFilter(new SpinBoxWheelFilter(&app));
 
     // Log file
     QString logPath = app.applicationDirPath() + "/qt-agv.log";

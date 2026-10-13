@@ -719,6 +719,11 @@ void ApiService::sendNextTask(const QJsonObject &data, const Callback &cb)
     post("/task/chain/sendNextTask", data, cb, 8048);
 }
 
+void ApiService::getTaskChainLog(const Callback &cb)
+{
+    get("/task/chain/taskLog", cb);
+}
+
 // ========== 音频接口 (端口 8048) ==========
 
 void ApiService::listAudio(const Callback &cb)

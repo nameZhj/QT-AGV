@@ -857,24 +857,26 @@ void MapEditWidget::setupUI()
 
     // ── Right panel ───────────────────────────────────────────────────────────
     QWidget *rightOuter = new QWidget;
-    rightOuter->setMinimumWidth(260);
-    rightOuter->setMaximumWidth(650);
+    rightOuter->setMinimumWidth(340);
+    rightOuter->setMaximumWidth(700);
     rightOuter->setStyleSheet(S_RIGHTPANEL);
 
     QScrollArea *sa = new QScrollArea;
     sa->setWidgetResizable(true);
     sa->setFrameStyle(QFrame::NoFrame);
-    sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     sa->setStyleSheet(
         "QScrollArea{background:transparent; border:none;}"
         "QScrollBar:vertical{background:#131722;width:5px;border:none;}"
-        "QScrollBar::handle:vertical{background:#2a364d;border-radius:2px;}");
+        "QScrollBar::handle:vertical{background:#2a364d;border-radius:2px;}"
+        "QScrollBar:horizontal{background:#131722;height:5px;border:none;}"
+        "QScrollBar::handle:horizontal{background:#2a364d;border-radius:2px;}");
 
     QWidget *rc = new QWidget;
     rc->setStyleSheet("background:#151822;");
     QVBoxLayout *rl = new QVBoxLayout(rc);
-    rl->setContentsMargins(8,8,8,8);
-    rl->setSpacing(8);
+    rl->setContentsMargins(6,6,6,6);
+    rl->setSpacing(7);
     sa->setWidget(rc);
 
     QVBoxLayout *rol = new QVBoxLayout(rightOuter);
@@ -886,7 +888,7 @@ void MapEditWidget::setupUI()
         auto *container = new QWidget;
         container->setStyleSheet("background:#1b2230; border:1px solid #263348; border-radius:6px;");
         auto *l = new QVBoxLayout(container);
-        l->setContentsMargins(10,8,10,10);
+        l->setContentsMargins(8,6,8,8);
         l->setSpacing(5);
         auto *lbl = new QLabel(title);
         lbl->setStyleSheet("color:#627e9e; font-size:11px; font-weight:bold; background:transparent; border:none;");
@@ -898,18 +900,19 @@ void MapEditWidget::setupUI()
         auto *w = new QWidget;
         w->setStyleSheet("background:transparent; border:none;");
         auto *h = new QHBoxLayout(w);
-        h->setContentsMargins(0, 1, 0, 1);
+        h->setContentsMargins(0, 1, 2, 1);
         h->setSpacing(6);
         auto *lbl = new QLabel(label);
-        lbl->setFixedWidth(118);
+        lbl->setFixedWidth(110);
         lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         lbl->setStyleSheet("color:#7e96b0; font-size:11px; background:transparent; border:none;");
         h->addWidget(lbl);
         h->addWidget(editor, 1);
         if (!unit.isEmpty()) {
             auto *unitLbl = new QLabel(unit);
-            unitLbl->setMinimumWidth(26);
-            unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none;");
+            unitLbl->setMinimumWidth(32);
+            unitLbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none; padding-left:2px;");
             h->addWidget(unitLbl);
         }
         return w;
@@ -919,12 +922,12 @@ void MapEditWidget::setupUI()
         auto *w = new QWidget;
         w->setStyleSheet("background:transparent; border:none;");
         auto *h = new QHBoxLayout(w);
-        h->setContentsMargins(0, 1, 0, 1);
+        h->setContentsMargins(0, 1, 2, 1);
         h->setSpacing(6);
 
-        // 左侧固定宽度 118px: 包含复选框与靠右对齐的文字，确保无论是否勾选文字绝对不发生左右移动
+        // 左侧固定宽度 110px: 包含复选框与靠右对齐的文字，确保无论是否勾选文字绝对不发生左右移动
         auto *leftCont = new QWidget;
-        leftCont->setFixedWidth(118);
+        leftCont->setFixedWidth(110);
         leftCont->setStyleSheet("background:transparent; border:none;");
         auto *lh = new QHBoxLayout(leftCont);
         lh->setContentsMargins(0, 0, 0, 0);
@@ -954,8 +957,9 @@ void MapEditWidget::setupUI()
         eh->addWidget(editor, 1);
         if (!unit.isEmpty()) {
             auto *unitLbl = new QLabel(unit);
-            unitLbl->setMinimumWidth(26);
-            unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none;");
+            unitLbl->setMinimumWidth(32);
+            unitLbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none; padding-left:2px;");
             eh->addWidget(unitLbl);
         }
         h->addWidget(editorCont, 1);
@@ -1060,7 +1064,7 @@ void MapEditWidget::setupUI()
         m_stationEpcGroup = new QWidget;
         m_stationEpcGroup->setStyleSheet("background:#141a26; border:1px solid #222b3c; border-radius:4px;");
         auto *el = new QVBoxLayout(m_stationEpcGroup);
-        el->setContentsMargins(6,6,6,6);
+        el->setContentsMargins(6,5,6,5);
         el->setSpacing(3);
         auto *epcTitle = new QLabel("设备相对校准 (EPC)");
         epcTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
@@ -1120,9 +1124,9 @@ void MapEditWidget::setupUI()
         m_lineDirectCombo->addItem("单向后退 ←", 1);
         m_lineFlipDirBtn = new QPushButton("⇄ 翻转");
         m_lineFlipDirBtn->setToolTip("翻转单向行进方向或交换端点");
-        m_lineFlipDirBtn->setFixedWidth(64);
+        m_lineFlipDirBtn->setFixedWidth(52);
         m_lineFlipDirBtn->setStyleSheet(
-            "QPushButton{background:#1e2736; border:1px solid #2e3d54; border-radius:3px; color:#8fa6bf; font-size:11px; padding:2px;}"
+            "QPushButton{background:#1e2736; border:1px solid #2e3d54; border-radius:3px; color:#8fa6bf; font-size:11px; padding:2px 4px;}"
             "QPushButton:hover{background:#2a374c; color:#fff;}");
         connect(m_lineFlipDirBtn, &QPushButton::clicked, this, [this]() {
             int curDirect = m_lineDirectCombo->currentData().toInt();
@@ -1143,7 +1147,7 @@ void MapEditWidget::setupUI()
         auto *motionCard = new QWidget;
         motionCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
         auto *mcl = new QVBoxLayout(motionCard);
-        mcl->setContentsMargins(6,6,6,6);
+        mcl->setContentsMargins(6,5,6,5);
         mcl->setSpacing(3);
         auto *mTitle = new QLabel("运动控制参数");
         mTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
@@ -1276,7 +1280,7 @@ void MapEditWidget::setupUI()
         auto *obsCard = new QWidget;
         obsCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
         auto *ocl = new QVBoxLayout(obsCard);
-        ocl->setContentsMargins(6,6,6,6);
+        ocl->setContentsMargins(6,5,6,5);
         ocl->setSpacing(3);
         auto *oTitle = new QLabel("实时避障范围");
         oTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
@@ -1391,7 +1395,7 @@ void MapEditWidget::setupUI()
     editSplitter->addWidget(rightOuter);
     editSplitter->setStretchFactor(0, 1);
     editSplitter->setStretchFactor(1, 0);
-    editSplitter->setSizes({960, 300});
+    editSplitter->setSizes({880, 360});
     cl->addWidget(editSplitter, 1);
     root->addWidget(content, 1);
 

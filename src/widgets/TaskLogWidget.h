@@ -3,6 +3,8 @@
 
 #include <QWidget>
 #include <QTreeWidget>
+#include <QJsonArray>
+#include <QJsonObject>
 
 class TaskLogWidget : public QWidget
 {
@@ -19,7 +21,8 @@ signals:
 
 private:
     void setupUI();
-    void buildSampleData();
+    void loadLogData(const QJsonArray &data);
+    void parseJsonNode(const QJsonObject &nodeObj, QTreeWidgetItem *parentItem = nullptr);
 
     QTreeWidget *m_tree = nullptr;
 };

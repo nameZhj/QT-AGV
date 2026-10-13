@@ -585,14 +585,14 @@ void MapViewWidget::setupUI()
 
     // Right panel
     auto *rightWidget = new QWidget;
-    rightWidget->setMinimumWidth(200);
+    rightWidget->setMinimumWidth(260);
     rightWidget->setMaximumWidth(900);
     rightWidget->setStyleSheet("background:#1a1d23;");
     setupRightPanel(rightWidget);
     splitter->addWidget(rightWidget);
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 0);
-    splitter->setSizes({960, 280});
+    splitter->setSizes({900, 320});
 
     root->addWidget(splitter, 1);
 }
@@ -767,12 +767,15 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
 
     auto *scrollArea = new QScrollArea(propsPage);
     scrollArea->setWidgetResizable(true);
-    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scrollArea->setStyleSheet(
         "QScrollArea { border: none; background: transparent; }"
         "QScrollBar:vertical { background: #12151a; width: 6px; }"
         "QScrollBar::handle:vertical { background: #2d3340; border-radius: 3px; min-height: 20px; }"
-        "QScrollBar::handle:vertical:hover { background: #3d4758; }");
+        "QScrollBar::handle:vertical:hover { background: #3d4758; }"
+        "QScrollBar:horizontal { background: #12151a; height: 6px; }"
+        "QScrollBar::handle:horizontal { background: #2d3340; border-radius: 3px; min-width: 20px; }"
+        "QScrollBar::handle:horizontal:hover { background: #3d4758; }");
 
     auto *container = new QWidget;
     container->setStyleSheet("background: transparent;");
@@ -946,11 +949,11 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
         auto *w = new QWidget;
         w->setStyleSheet("background:transparent; border:none;");
         auto *h = new QHBoxLayout(w);
-        h->setContentsMargins(0, 2, 0, 2);
+        h->setContentsMargins(0, 2, 2, 2);
         h->setSpacing(6);
 
         auto *leftCont = new QWidget;
-        leftCont->setFixedWidth(118);
+        leftCont->setFixedWidth(110);
         leftCont->setStyleSheet("background:transparent; border:none;");
         auto *lh = new QHBoxLayout(leftCont);
         lh->setContentsMargins(0, 0, 0, 0);

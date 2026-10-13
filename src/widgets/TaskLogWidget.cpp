@@ -1,10 +1,15 @@
 #include "TaskLogWidget.h"
+#include "core/ApiService.h"
 #include <QVBoxLayout>
 #include <QHeaderView>
 #include <QPainter>
 #include <QPainterPath>
 #include <QProxyStyle>
 #include <QStyleOption>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QStyledItemDelegate>
+#include <QApplication>
 
 namespace {
 // 自定义树控件绘制样式：定制青蓝色展开/折叠三角指示器，去除冗余连线
@@ -47,30 +52,70 @@ public:
         QProxyStyle::drawPrimitive(element, option, painter, widget);
     }
 };
+
+// 自定义项委托：绘制文字时锁定节点预设前景色，彻底杜绝点击选中或悬停时文字变黑或变色
+class LogItemDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+
+        // 提取文本并清空 opt.text，让底层样式引擎仅绘制背景高亮和选中矩形
+        const QString text = opt.text;
+        opt.text.clear();
+
+        const QWidget *widget = opt.widget;
+        QStyle *style = widget ? widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+
+        // 精确保持原节点颜色绘制文字，绝不因点击或选中而变黑/变色
+        if (!text.isEmpty()) {
+            painter->save();
+            painter->setFont(opt.font);
+
+            const QVariant fg = index.data(Qt::ForegroundRole);
+            const QColor textColor = fg.isValid() ? fg.value<QBrush>().color() : QColor("#d4d4d4");
+            painter->setPen(textColor);
+
+            QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &option, widget);
+            if (!textRect.isValid()) {
+                textRect = option.rect.adjusted(6, 0, -6, 0);
+            }
+            painter->drawText(textRect, opt.displayAlignment | Qt::TextSingleLine, text);
+            painter->restore();
+        }
+    }
+};
 }
 
 TaskLogWidget::TaskLogWidget(QWidget *parent)
     : QWidget(parent)
 {
     setupUI();
-    buildSampleData();
+    refreshData();
 }
 
 void TaskLogWidget::setupUI()
 {
-    QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
 
+    // ── 树形列表（完全参考效果图，全屏纯树形结构展示） ──
     m_tree = new QTreeWidget(this);
     m_tree->setStyle(new LogTreeStyle);
+    m_tree->setItemDelegate(new LogItemDelegate(m_tree));
     m_tree->setColumnCount(2);
     m_tree->setHeaderLabels({"Key / Time", "Value"});
 
     // 列宽与自适应
     m_tree->header()->setSectionResizeMode(0, QHeaderView::Interactive);
     m_tree->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-    m_tree->setColumnWidth(0, 360);
+    m_tree->setColumnWidth(0, 380);
     m_tree->setIndentation(18);
     m_tree->setAnimated(true);
     m_tree->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -97,8 +142,7 @@ void TaskLogWidget::setupUI()
         "    background-color: #282a2d;"
         "}"
         "QTreeWidget::item:selected {"
-        "    background-color: #0c1012;"
-        "    color: inherit;"
+        "    background-color: #141a24;"
         "}"
         "QHeaderView::section {"
         "    background-color: #252526;"
@@ -128,112 +172,126 @@ void TaskLogWidget::setupUI()
         "}"
     );
 
-    layout->addWidget(m_tree);
+    mainLayout->addWidget(m_tree);
 }
 
 void TaskLogWidget::refreshData()
 {
-    // 具体数据通过接口获取，当前接口尚未就绪，在此处预留接入位置
-    // TODO: 待接口开发完成后调用接口并解析成树节点
+    ApiService::instance().getTaskChainLog([this](int code, const QJsonObject &resp) {
+        if (code == 200) {
+            const QJsonValue dataVal = resp.value("data");
+            if (dataVal.isArray()) {
+                loadLogData(dataVal.toArray());
+            } else if (dataVal.isObject()) {
+                loadLogData(QJsonArray{dataVal.toObject()});
+            } else {
+                m_tree->clear();
+            }
+            return;
+        }
+        m_tree->clear();
+    });
 }
 
-void TaskLogWidget::buildSampleData()
+void TaskLogWidget::loadLogData(const QJsonArray &data)
 {
     m_tree->clear();
-
-    const QColor greenColor("#38e168");  // 完成亮绿色
-    const QColor grayColor("#a6a6a6");   // 普通灰白色
-
-    auto addRow = [&](const QString &key, const QString &val, QTreeWidgetItem *parent = nullptr) -> QTreeWidgetItem* {
-        QTreeWidgetItem *item = nullptr;
-        if (parent) {
-            item = new QTreeWidgetItem(parent);
-        } else {
-            item = new QTreeWidgetItem(m_tree);
+    for (const auto &val : data) {
+        if (val.isObject()) {
+            parseJsonNode(val.toObject(), nullptr);
         }
-        item->setText(0, key);
-        item->setText(1, val);
+    }
+}
 
-        bool isCompleted = val.contains("完成") || (key.contains("完成") && val.isEmpty());
-        QColor color = isCompleted ? greenColor : grayColor;
+void TaskLogWidget::parseJsonNode(const QJsonObject &nodeObj, QTreeWidgetItem *parentItem)
+{
+    // 1. 若为包含 fileName 的日志文件根对象 (层级最顶层)
+    if (nodeObj.contains("fileName")) {
+        const QString fileName = nodeObj.value("fileName").toString();
+        const QString filePath = nodeObj.value("filePath").toString();
+
+        auto *item = parentItem ? new QTreeWidgetItem(parentItem) : new QTreeWidgetItem(m_tree);
+        item->setText(0, fileName);
+        item->setText(1, filePath);
+        item->setToolTip(0, fileName);
+        item->setToolTip(1, filePath);
+
+        // 文件根项设为高亮科技青蓝
+        item->setForeground(0, QColor("#00a8ff"));
+        item->setForeground(1, QColor("#858585"));
+
+        // 递归解析其下子节点集合 (rootNodes 或 children)
+        const QJsonArray children = nodeObj.contains("rootNodes") ? nodeObj.value("rootNodes").toArray()
+                                                                  : nodeObj.value("children").toArray();
+        for (const auto &cVal : children) {
+            if (cVal.isObject()) {
+                parseJsonNode(cVal.toObject(), item);
+            }
+        }
+
+        item->setExpanded(false);
+        return;
+    }
+
+    // 2. 若为包含 rawText 的具体动作/事件节点
+    if (nodeObj.contains("rawText")) {
+        const QString rawText = nodeObj.value("rawText").toString();
+        auto *item = parentItem ? new QTreeWidgetItem(parentItem) : new QTreeWidgetItem(m_tree);
+
+        int splitIdx = rawText.indexOf(" | ");
+        if (splitIdx != -1) {
+            item->setText(0, rawText.left(splitIdx).trimmed());
+            item->setText(1, rawText.mid(splitIdx + 3).trimmed());
+        } else {
+            item->setText(0, rawText.trimmed());
+            item->setText(1, QString());
+        }
+        item->setToolTip(0, item->text(0));
+        item->setToolTip(1, item->text(1));
+
+        // 语义化终端着色
+        QColor color("#d4d4d4");
+        if (rawText.contains("完成")) {
+            color = QColor("#38e168");  // 亮绿色
+        } else if (rawText.contains("【任务开始】")) {
+            color = QColor("#00a8ff");  // 科技青蓝
+        } else if (rawText.contains("【动作】")) {
+            color = QColor("#79c0ff");  // 淡天蓝
+        } else if (rawText.contains("取消") || rawText.contains("失败") || rawText.contains("错误")) {
+            color = QColor("#f87171");  // 亮红警示
+        }
+
         item->setForeground(0, color);
         item->setForeground(1, color);
-        return item;
-    };
 
-    addRow("2026-10-08 20:20:30.543", "GotoSpecifiedPose 1 完成");
-    addRow("2026-10-08 20:21:05.540", "GotoSpecifiedPose 2 未知");
-    addRow("2026-10-08 20:21:17.867", "GoByOdometer 未知 完成");
-    addRow("2026-10-08 20:23:02.558", "GotoSpecifiedPose 2 被取消");
-    addRow("2026-10-08 20:23:25.417", "GotoSpecifiedPose 2 被取消");
-    addRow("2026-10-08 20:24:45.429", "GotoSpecifiedPose 2 被取消");
-    addRow("2026-10-08 20:26:57.328", "GotoSpecifiedPose 2 被取消");
-    addRow("2026-10-08 20:27:27.025", "GotoSpecifiedPose 2 被取消");
-    addRow("2026-10-08 20:28:14.985", "GotoSpecifiedPose 2 被取消");
+        // 递归解析任意深度子节点 (无限层级支持)
+        const QJsonArray children = nodeObj.contains("children") ? nodeObj.value("children").toArray()
+                                                                 : nodeObj.value("rootNodes").toArray();
+        for (const auto &cVal : children) {
+            if (cVal.isObject()) {
+                parseJsonNode(cVal.toObject(), item);
+            }
+        }
 
-    // 展开状态的项（第二张效果图）
-    QTreeWidgetItem *expandedItem = addRow("2026-10-08 20:29:04.205", "GotoSpecifiedPose 2 完成");
+        item->setExpanded(false);
+        return;
+    }
 
-    // 子节点 1: TaskStart (展开状态)
-    QTreeWidgetItem *taskStart = addRow("TaskStart", "", expandedItem);
-    addRow("skill_name", "GotoSpecifiedPose", taskStart);
-    addRow("target_x", "-6.599", taskStart);
-    addRow("target_y", "4.339", taskStart);
-    addRow("target_angle", "-2.3368682881716567", taskStart);
-    addRow("target_name", "2", taskStart);
-    addRow("reach_dist", "0.005", taskStart);
-    addRow("reach_angle", "3.1415926535897931", taskStart);
-    addRow("reach_method", "forward", taskStart);
-    addRow("reach_vel_x", "", taskStart);
-    addRow("max_speed", "1.1", taskStart);
-    addRow("max_acc", "1", taskStart);
-    addRow("max_rot", "1.5707963267948966", taskStart);
-    addRow("max_rot_acc", "2.0943951023931953", taskStart);
-    addRow("params", "key: parkRequired bool_value: false", taskStart);
-    addRow("params", "key: final bool_value: true", taskStart);
-    addRow("params", "key: allow_free_go bool_value: true", taskStart);
-    addRow("params", "key: em_stop_dist double_value: -1", taskStart);
-    addRow("params", "key: stop_acc double_value: -1", taskStart);
-    addRow("params", "key: load_stop_acc double_value: -1", taskStart);
-    addRow("task_id", "", taskStart);
-    addRow("max_dec", "1", taskStart);
-    addRow("max_rot_dec", "1.5707963267948966", taskStart);
-    addRow("obs_stop_dist", "1", taskStart);
-    addRow("obs_dec_dist", "3", taskStart);
-    addRow("obs_dec_speed", "0.2", taskStart);
-    addRow("obs_expansion", "0.1", taskStart);
-    addRow("dec_obs_expansion", "0.2", taskStart);
-    taskStart->setExpanded(true);
+    // 3. 通用兜底解析：支持任意嵌套结构
+    auto *item = parentItem ? new QTreeWidgetItem(parentItem) : new QTreeWidgetItem(m_tree);
+    const QString key = nodeObj.contains("name") ? nodeObj.value("name").toString() : nodeObj.value("key").toString();
+    const QString val = nodeObj.value("value").toString();
+    item->setText(0, key);
+    item->setText(1, val);
+    item->setForeground(0, QColor("#d4d4d4"));
+    item->setForeground(1, QColor("#d4d4d4"));
 
-    // 任务执行中的时序子事件
-    addRow("2026-10-08 20:29:04.206", "SoundPlayer play 播放音频", expandedItem);
-    addRow("2026-10-08 20:29:04.206", "SoundPlayer play 播放音频 Cost", expandedItem);
-    addRow("2026-10-08 20:29:04.227", "SoundPlayer play 播放音频", expandedItem);
-    addRow("2026-10-08 20:29:04.227", "SoundPlayer play 播放音频 Cost", expandedItem);
-    addRow("2026-10-08 20:29:17.622", "完成", expandedItem);
-    addRow("2026-10-08 20:29:17.643", "SoundPlayer stop 停止播放音频", expandedItem);
-    addRow("2026-10-08 20:29:17.643", "SoundPlayer stop 停止播放音频 Cost", expandedItem);
-    expandedItem->setExpanded(true);
-
-    addRow("2026-10-08 20:29:47.912", "GotoSpecifiedPose 2 完成");
-    addRow("2026-10-08 20:34:26.725", "GotoSpecifiedPose 2 被取消");
-    addRow("2026-10-08 20:34:39.307", "GotoSpecifiedPose 2 被取消");
-    addRow("2026-10-08 20:34:58.713", "GotoSpecifiedPose 2 被取消");
-    addRow("2026-10-08 20:37:32.494", "GoByOdometer 未知 未知");
-    addRow("2026-10-08 20:37:34.187", "GoByOdometer 未知 未知");
-    addRow("2026-10-08 20:37:38.195", "GoByOdometer 未知 完成");
-    addRow("2026-10-08 20:38:31.493", "GoByOdometer 未知 未知");
-    addRow("2026-10-08 20:38:35.995", "GoByOdometer 未知 完成");
-    addRow("2026-10-08 20:39:11.020", "GoByOdometer 未知 未知");
-    addRow("2026-10-08 20:39:11.218", "GoByOdometer 未知 未知");
-    addRow("2026-10-08 20:39:16.068", "GoByOdometer 未知 未知");
-    addRow("2026-10-08 20:39:17.163", "GoByOdometer 未知 未知");
-    addRow("2026-10-08 20:39:19.892", "GoByOdometer 未知 未知");
-
-    QTreeWidgetItem *selectedItem = addRow("2026-10-08 20:39:20.533", "GoByOdometer 未知 完成");
-    m_tree->setCurrentItem(selectedItem);
-
-    addRow("2026-10-08 21:01:28.501", "GoByOdometer 未知 被取消");
-    addRow("2026-10-08 21:23:38.323", "GotoSpecifiedPose 1 完成");
-    addRow("2026-10-08 21:45:01.045", "GotoSpecifiedPose 2 被取消");
+    const QJsonArray children = nodeObj.contains("children") ? nodeObj.value("children").toArray()
+                                                             : nodeObj.value("rootNodes").toArray();
+    for (const auto &cVal : children) {
+        if (cVal.isObject()) {
+            parseJsonNode(cVal.toObject(), item);
+        }
+    }
+    item->setExpanded(false);
 }

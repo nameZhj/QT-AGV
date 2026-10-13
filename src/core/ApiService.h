@@ -152,6 +152,7 @@ public:
     void controlNavigation(const QString &command, const Callback &cb = nullptr);  ///< PUT /robot/navigation/control?command=...
     void sendNextTask(const Callback &cb = nullptr);                              ///< POST /task/chain/sendNextTask (端口 8048)
     void sendNextTask(const QJsonObject &data, const Callback &cb);               ///< POST /task/chain/sendNextTask (端口 8048)
+    void getTaskChainLog(const Callback &cb);                                     ///< GET /task/chain/taskLog
 
     // ========== 音频接口 (端口 8048) ==========
     void listAudio(const Callback &cb);                                    ///< GET  /robot/audio/list
