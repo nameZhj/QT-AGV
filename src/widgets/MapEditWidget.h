@@ -142,7 +142,7 @@ private:
     static int nextIdNum(const QJsonArray &arr, const QString &prefix);
 
 
-    enum DrawStatus { Drag=0, Point=1, Line=2, Curve=3, Brush=4, Eraser=5, Charge=6, HighPrecision=7 };
+    enum DrawStatus { Drag=0, Point=1, Line=2, Curve=3, Brush=4, Eraser=5, Charge=6, HighPrecision=7, Area=8 };
 
     // Map view
     MapCanvas            *m_mapView      = nullptr;
@@ -157,6 +157,10 @@ private:
     // 站点类型子工具条: 站点 / 工作站 / 特殊工作站 (对应 mode Point / HighPrecision / Charge)
     QWidget                  *m_stationBar = nullptr;
     QMap<int, QPushButton*>   m_stationBtns;
+
+    // 区域类型子工具条: 高级区域 (对应 mode Area)
+    QWidget                  *m_areaBar    = nullptr;
+    QPushButton              *m_areaAdvBtn = nullptr;
     QPushButton *m_saveBtn       = nullptr;
     QPushButton *m_teleopBtn     = nullptr;
     class DirectionPadWidget *m_directionPad = nullptr;
@@ -244,6 +248,34 @@ private:
     QCheckBox      *m_chkLineObsDecelWid = nullptr;
     QDoubleSpinBox *m_lineObsDecelWidSpin = nullptr; // 侧向减速膨胀半径 (m)
 
+    // --- 高级区域专属属性组 ---
+    QWidget        *m_areaPropGroup       = nullptr;
+    QCheckBox      *m_chkAreaName         = nullptr;
+    QLineEdit      *m_areaNameEdit        = nullptr;
+    QLabel         *m_areaBoundsLabel     = nullptr;
+    QCheckBox      *m_chkAreaMaxSpeed     = nullptr;
+    QDoubleSpinBox *m_areaMaxSpeedSpin    = nullptr;
+    QCheckBox      *m_chkAreaMaxAcc       = nullptr;
+    QDoubleSpinBox *m_areaMaxAccSpin      = nullptr;
+    QCheckBox      *m_chkAreaMaxRot       = nullptr;
+    QDoubleSpinBox *m_areaMaxRotSpin      = nullptr;
+    QCheckBox      *m_chkAreaMaxRotAcc    = nullptr;
+    QDoubleSpinBox *m_areaMaxRotAccSpin   = nullptr;
+    QCheckBox      *m_chkAreaReachDist    = nullptr;
+    QDoubleSpinBox *m_areaReachDistSpin   = nullptr;
+    QCheckBox      *m_chkAreaReachAngle   = nullptr;
+    QDoubleSpinBox *m_areaReachAngleSpin  = nullptr;
+    QCheckBox      *m_chkAreaRoadWidth    = nullptr;
+    QDoubleSpinBox *m_areaRoadWidthSpin   = nullptr;
+    QCheckBox      *m_chkAreaObsStopLen   = nullptr;
+    QDoubleSpinBox *m_areaObsStopLenSpin  = nullptr;
+    QCheckBox      *m_chkAreaObsStopWid   = nullptr;
+    QDoubleSpinBox *m_areaObsStopWidSpin  = nullptr;
+    QCheckBox      *m_chkAreaObsDecelLen  = nullptr;
+    QDoubleSpinBox *m_areaObsDecelLenSpin = nullptr;
+    QCheckBox      *m_chkAreaObsDecelWid  = nullptr;
+    QDoubleSpinBox *m_areaObsDecelWidSpin = nullptr;
+
     // 操作按钮
     QPushButton    *m_propApplyBtn       = nullptr;
     QPushButton    *m_propDeleteBtn      = nullptr;
@@ -258,6 +290,33 @@ private:
     QList<QImage> m_undoStack;
     QList<QImage> m_redoStack;
     QJsonArray m_points, m_lines, m_curves, m_charges, m_highPrecisionPoints;
+    QJsonArray m_highLevelAreas; // 高级区域对象列表 (支持多个高级区域)
+    bool       m_isDrawingArea = false;
+    QPointF    m_areaStartScenePos;
+    QGraphicsRectItem *m_areaPreviewItem = nullptr;
+
+    // 高级区域拖拽移动与拉伸调整状态
+    enum AreaHitPart {
+        AreaHit_None = 0,
+        AreaHit_TopLeft,
+        AreaHit_TopRight,
+        AreaHit_BottomLeft,
+        AreaHit_BottomRight,
+        AreaHit_TopEdge,
+        AreaHit_BottomEdge,
+        AreaHit_LeftEdge,
+        AreaHit_RightEdge,
+        AreaHit_Body
+    };
+    bool        m_isDraggingArea         = false;
+    AreaHitPart m_areaDragPart           = AreaHit_None;
+    QPointF     m_areaDragStartScenePos;
+    double      m_areaDragStartMinX      = 0.0;
+    double      m_areaDragStartMaxX      = 0.0;
+    double      m_areaDragStartMinY      = 0.0;
+    double      m_areaDragStartMaxY      = 0.0;
+
+    AreaHitPart getAreaHitPart(const QPointF &sp, const QJsonObject &areaObj) const;
 
     // Coordinate transform (world extent + thumbnail size)
     double m_worldL = 0, m_worldB = 0, m_worldR = 0, m_worldT = 0;

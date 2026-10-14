@@ -8,6 +8,7 @@
 #include <QStyleOption>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QStyledItemDelegate>
 #include <QApplication>
 
@@ -197,101 +198,100 @@ void TaskLogWidget::loadLogData(const QJsonArray &data)
 {
     m_tree->clear();
     for (const auto &val : data) {
-        if (val.isObject()) {
-            parseJsonNode(val.toObject(), nullptr);
+        if (!val.isObject()) continue;
+        const QJsonObject obj = val.toObject();
+        if (obj.contains("rootNodes") && obj.value("rootNodes").isArray()) {
+            const QJsonArray rootNodes = obj.value("rootNodes").toArray();
+            for (const auto &rVal : rootNodes) {
+                if (rVal.isObject()) {
+                    parseJsonNode(rVal.toObject(), nullptr);
+                }
+            }
+        } else {
+            parseJsonNode(obj, nullptr);
         }
     }
 }
 
 void TaskLogWidget::parseJsonNode(const QJsonObject &nodeObj, QTreeWidgetItem *parentItem)
 {
-    // 1. 若为包含 fileName 的日志文件根对象 (层级最顶层)
-    if (nodeObj.contains("fileName")) {
-        const QString fileName = nodeObj.value("fileName").toString();
-        const QString filePath = nodeObj.value("filePath").toString();
+    // 提取除了 level, children, rootNodes 之外的业务键值
+    QString keyText;
+    QString valText;
 
-        auto *item = parentItem ? new QTreeWidgetItem(parentItem) : new QTreeWidgetItem(m_tree);
-        item->setText(0, fileName);
-        item->setText(1, filePath);
-        item->setToolTip(0, fileName);
-        item->setToolTip(1, filePath);
+    const int level = nodeObj.value("level").toInt(parentItem ? (parentItem->data(0, Qt::UserRole).toInt() + 1) : 0);
 
-        // 文件根项设为高亮科技青蓝
-        item->setForeground(0, QColor("#00a8ff"));
-        item->setForeground(1, QColor("#858585"));
-
-        // 递归解析其下子节点集合 (rootNodes 或 children)
-        const QJsonArray children = nodeObj.contains("rootNodes") ? nodeObj.value("rootNodes").toArray()
-                                                                  : nodeObj.value("children").toArray();
-        for (const auto &cVal : children) {
-            if (cVal.isObject()) {
-                parseJsonNode(cVal.toObject(), item);
-            }
+    for (auto it = nodeObj.constBegin(); it != nodeObj.constEnd(); ++it) {
+        const QString k = it.key();
+        if (k == "level" || k == "children" || k == "rootNodes") {
+            continue;
         }
 
-        item->setExpanded(false);
-        return;
-    }
+        const QJsonValue v = it.value();
+        QString s;
+        if (v.isString()) {
+            s = v.toString();
+        } else if (v.isDouble()) {
+            s = QString::number(v.toDouble(), 'g', 15);
+        } else if (v.isBool()) {
+            s = v.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+        } else if (v.isNull()) {
+            s = QString();
+        } else if (v.isObject()) {
+            s = QString::fromUtf8(QJsonDocument(v.toObject()).toJson(QJsonDocument::Compact));
+        } else if (v.isArray()) {
+            s = QString::fromUtf8(QJsonDocument(v.toArray()).toJson(QJsonDocument::Compact));
+        }
 
-    // 2. 若为包含 rawText 的具体动作/事件节点
-    if (nodeObj.contains("rawText")) {
-        const QString rawText = nodeObj.value("rawText").toString();
-        auto *item = parentItem ? new QTreeWidgetItem(parentItem) : new QTreeWidgetItem(m_tree);
-
-        int splitIdx = rawText.indexOf(" | ");
-        if (splitIdx != -1) {
-            item->setText(0, rawText.left(splitIdx).trimmed());
-            item->setText(1, rawText.mid(splitIdx + 3).trimmed());
+        if (keyText.isEmpty()) {
+            keyText = k;
+            valText = s;
         } else {
-            item->setText(0, rawText.trimmed());
-            item->setText(1, QString());
+            keyText += " | " + k;
+            valText += " | " + s;
         }
-        item->setToolTip(0, item->text(0));
-        item->setToolTip(1, item->text(1));
+    }
 
-        // 语义化终端着色
-        QColor color("#d4d4d4");
-        if (rawText.contains("完成")) {
-            color = QColor("#38e168");  // 亮绿色
-        } else if (rawText.contains("【任务开始】")) {
-            color = QColor("#00a8ff");  // 科技青蓝
-        } else if (rawText.contains("【动作】")) {
-            color = QColor("#79c0ff");  // 淡天蓝
-        } else if (rawText.contains("取消") || rawText.contains("失败") || rawText.contains("错误")) {
-            color = QColor("#f87171");  // 亮红警示
-        }
+    // 若当前节点无其他字段（兜底处理）
+    if (keyText.isEmpty()) {
+        keyText = QStringLiteral("Node (L%1)").arg(level);
+    }
 
-        item->setForeground(0, color);
-        item->setForeground(1, color);
+    auto *item = parentItem ? new QTreeWidgetItem(parentItem) : new QTreeWidgetItem(m_tree);
+    item->setText(0, keyText);
+    item->setText(1, valText);
+    item->setToolTip(0, keyText);
+    item->setToolTip(1, valText);
+    item->setData(0, Qt::UserRole, level);
 
-        // 递归解析任意深度子节点 (无限层级支持)
-        const QJsonArray children = nodeObj.contains("children") ? nodeObj.value("children").toArray()
-                                                                 : nodeObj.value("rootNodes").toArray();
+    // 语义化终端着色：
+    // - 包含“完成”：高亮亮绿色 (#38e168)
+    // - 包含“取消/失败/错误”：亮红警示 (#f87171)
+    // - TaskStart 节点：科技青蓝 (#00a8ff)
+    // - 其他常规参数/数值：终端浅灰 (#d4d4d4)
+    QColor color("#d4d4d4");
+    const QString combined = keyText + " " + valText;
+    if (combined.contains("完成")) {
+        color = QColor("#38e168");
+    } else if (combined.contains("取消") || combined.contains("失败") || combined.contains("错误")) {
+        color = QColor("#f87171");
+    } else if (keyText == "TaskStart" || combined.contains("【任务开始】")) {
+        color = QColor("#00a8ff");
+    }
+
+    item->setForeground(0, color);
+    item->setForeground(1, color);
+
+    // 递归解析任意深度子节点 (无限层级支持)
+    if (nodeObj.contains("children") && nodeObj.value("children").isArray()) {
+        const QJsonArray children = nodeObj.value("children").toArray();
         for (const auto &cVal : children) {
             if (cVal.isObject()) {
                 parseJsonNode(cVal.toObject(), item);
             }
         }
-
-        item->setExpanded(false);
-        return;
     }
 
-    // 3. 通用兜底解析：支持任意嵌套结构
-    auto *item = parentItem ? new QTreeWidgetItem(parentItem) : new QTreeWidgetItem(m_tree);
-    const QString key = nodeObj.contains("name") ? nodeObj.value("name").toString() : nodeObj.value("key").toString();
-    const QString val = nodeObj.value("value").toString();
-    item->setText(0, key);
-    item->setText(1, val);
-    item->setForeground(0, QColor("#d4d4d4"));
-    item->setForeground(1, QColor("#d4d4d4"));
-
-    const QJsonArray children = nodeObj.contains("children") ? nodeObj.value("children").toArray()
-                                                             : nodeObj.value("rootNodes").toArray();
-    for (const auto &cVal : children) {
-        if (cVal.isObject()) {
-            parseJsonNode(cVal.toObject(), item);
-        }
-    }
+    // 默认折叠子节点
     item->setExpanded(false);
 }

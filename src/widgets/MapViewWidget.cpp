@@ -1092,6 +1092,72 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     m_routeContentWidget->setVisible(false);
     lay->addWidget(m_routeGroup);
 
+    // ── 2c. Area info (高级区域属性) ──────────────────────────────────────────
+    m_areaGroup = mkGroup("高级区域属性");
+    auto *areaMainLay = new QVBoxLayout(m_areaGroup);
+    areaMainLay->setContentsMargins(8, 12, 8, 8);
+    areaMainLay->setSpacing(6);
+
+    auto *areaBadgeRow = new QHBoxLayout;
+    areaBadgeRow->addStretch();
+    m_areaBadge = new QLabel;
+    m_areaBadge->setStyleSheet("background:#3b1d5c; color:#c084fc; border:1px solid #7c3aed; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
+    m_areaBadge->setVisible(false);
+    areaBadgeRow->addWidget(m_areaBadge);
+    areaMainLay->addLayout(areaBadgeRow);
+
+    m_areaEmptyHint = new QLabel("点击地图上的高级区域\n查看区域属性");
+    m_areaEmptyHint->setAlignment(Qt::AlignCenter);
+    m_areaEmptyHint->setStyleSheet("color:#556677; font-size:12px; padding:14px 0;");
+    areaMainLay->addWidget(m_areaEmptyHint);
+
+    m_areaContentWidget = new QWidget;
+    m_areaContentWidget->setStyleSheet("background:transparent; border:none;");
+    auto *arLay = new QVBoxLayout(m_areaContentWidget);
+    arLay->setContentsMargins(0, 0, 0, 0);
+    arLay->setSpacing(4);
+
+    m_areaNameVal        = mkInfoLabel();
+    m_areaBoundsVal      = mkInfoLabel();
+    m_areaMaxSpeedVal    = mkInfoLabel();
+    m_areaMaxAccVal      = mkInfoLabel();
+    m_areaMaxRotVal      = mkInfoLabel();
+    m_areaMaxRotAccVal   = mkInfoLabel();
+    m_areaReachDistVal   = mkInfoLabel();
+    m_areaReachAngleVal  = mkInfoLabel();
+    m_areaWidthVal       = mkInfoLabel();
+    m_areaObsRangeVal    = mkInfoLabel();
+
+    arLay->addWidget(mkReadOnlyCheckableRow(m_chkAreaName,       "区域名称:",     m_areaNameVal));
+    auto *bRow = new QHBoxLayout;
+    bRow->setContentsMargins(0, 0, 0, 0);
+    bRow->setSpacing(4);
+    auto *bLbl = new QLabel("范围坐标:");
+    bLbl->setFixedWidth(90);
+    bLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    bLbl->setStyleSheet("color: #8fa6bf; font-size: 11px; background: transparent; border: none;");
+    m_areaBoundsVal->setStyleSheet("color: #c8d0d8; font-size: 11px; background: transparent; border: none;");
+    bRow->addWidget(bLbl);
+    bRow->addWidget(m_areaBoundsVal, 1);
+    auto *bRowW = new QWidget;
+    bRowW->setLayout(bRow);
+    bRowW->setStyleSheet("background:transparent; border:none;");
+    arLay->addWidget(bRowW);
+
+    arLay->addWidget(mkReadOnlyCheckableRow(m_chkAreaMaxSpeed,   "最大速度:",     m_areaMaxSpeedVal));
+    arLay->addWidget(mkReadOnlyCheckableRow(m_chkAreaMaxAcc,     "最大加速度:",   m_areaMaxAccVal));
+    arLay->addWidget(mkReadOnlyCheckableRow(m_chkAreaMaxRot,     "最大角速度:",   m_areaMaxRotVal));
+    arLay->addWidget(mkReadOnlyCheckableRow(m_chkAreaMaxRotAcc,  "最大角加减:",   m_areaMaxRotAccVal));
+    arLay->addWidget(mkReadOnlyCheckableRow(m_chkAreaReachDist,  "到达距离精度:", m_areaReachDistVal));
+    arLay->addWidget(mkReadOnlyCheckableRow(m_chkAreaReachAngle, "到达角度精度:", m_areaReachAngleVal));
+    arLay->addWidget(mkReadOnlyCheckableRow(m_chkAreaWidth,      "路线宽度:",     m_areaWidthVal));
+    arLay->addWidget(mkReadOnlyCheckableRow(m_chkAreaObsRange,   "避障范围:",     m_areaObsRangeVal));
+
+    areaMainLay->addWidget(m_areaContentWidget);
+    m_areaContentWidget->setVisible(false);
+    lay->addWidget(m_areaGroup);
+    m_areaGroup->setVisible(false);
+
     // ── 3. Map info (点击地图空白处显示) ───────────────────────────────────────
     auto *infoGroup = mkGroup("地图属性");
     m_mapPropsGroup = infoGroup;
@@ -1124,11 +1190,13 @@ void MapViewWidget::setupRightPanel(QWidget *parent)
     m_mapCountChargeVal = mkInfoLabel("0");
     m_mapCountLineVal   = mkInfoLabel("0");
     m_mapCountCurveVal  = mkInfoLabel("0");
+    m_mapCountAreaVal   = mkInfoLabel("0");
     countForm->addRow("普通点:",   m_mapCountPointVal);
     countForm->addRow("高精定位点:", m_mapCountHpVal);
     countForm->addRow("充电桩:",   m_mapCountChargeVal);
     countForm->addRow("路线:",     m_mapCountLineVal);
     countForm->addRow("曲线:",     m_mapCountCurveVal);
+    countForm->addRow("高级区域:", m_mapCountAreaVal);
     lay->addWidget(m_mapCountGroup);
     addMapGroup(m_mapCountGroup);
 
@@ -1253,6 +1321,7 @@ void MapViewWidget::switchPropsView(int view)
     }
     if (m_stationGroup) m_stationGroup->setVisible(onProps && view == ViewStation);
     if (m_routeGroup)   m_routeGroup->setVisible(onProps && view == ViewRoute);
+    if (m_areaGroup)    m_areaGroup->setVisible(onProps && view == ViewArea);
     for (QWidget *g : m_mapGroups) {
         if (g) g->setVisible(onProps && view == ViewMap);
     }
@@ -1413,6 +1482,7 @@ void MapViewWidget::updateMapPropsView()
     if (m_mapCountChargeVal) m_mapCountChargeVal->setText(QString::number(m_charges.size()));
     if (m_mapCountLineVal)   m_mapCountLineVal->setText(QString::number(m_lines.size()));
     if (m_mapCountCurveVal)  m_mapCountCurveVal->setText(QString::number(m_curves.size()));
+    if (m_mapCountAreaVal)   m_mapCountAreaVal->setText(QString::number(m_highLevelAreas.size()));
 }
 
 // ── 图元列表 ─────────────────────────────────────────────────────────────────
@@ -1440,6 +1510,11 @@ void MapViewWidget::refreshElementList()
     for (const auto &v : m_charges)             { QJsonObject o = v.toObject(); add(o, "charge",        label(o)); }
     for (const auto &v : m_lines)               { QJsonObject o = v.toObject(); add(o, "line",  routeFeatureName(o)); }
     for (const auto &v : m_curves)              { QJsonObject o = v.toObject(); add(o, "curve", routeFeatureName(o)); }
+    for (const auto &v : m_highLevelAreas) {
+        QJsonObject o = v.toObject();
+        QString aname = o.value("name").toString("AdvancedArea");
+        add(o, "highLevelArea", aname + " (高级区域)");
+    }
 
     // 保持搜索过滤状态
     const QString kw = m_elemSearchEdit ? m_elemSearchEdit->text() : QString();
@@ -1488,7 +1563,19 @@ void MapViewWidget::selectFeatureOnMap(const QString &type, const QString &id, b
     RouteFeatureSelect::applySelectColor(found);
 
     // 属性页内容跟随选中图元切换
-    if (type == "line" || type == "curve") {
+    if (type == "highLevelArea") {
+        QJsonObject targetArea;
+        for (const auto &v : m_highLevelAreas) {
+            if (v.toObject().value("id").toString() == id) {
+                targetArea = v.toObject();
+                break;
+            }
+        }
+        if (targetArea.isEmpty() && !m_highLevelAreas.isEmpty()) targetArea = m_highLevelAreas.first().toObject();
+        showAreaDetails(targetArea);
+        if (m_rightTab != TabProps) setRightTab(TabProps);
+        switchPropsView(ViewArea);
+    } else if (type == "line" || type == "curve") {
         const QJsonArray &arr = (type == "line") ? m_lines : m_curves;
         QJsonObject obj;
         for (const auto &v : arr) {
@@ -1557,9 +1644,32 @@ void MapViewWidget::onSceneDoubleClicked(const QPointF &scenePos, Qt::MouseButto
     if (btn != Qt::LeftButton || m_rightTab != TabProps || !m_scene) return;
 
     QGraphicsItem *picked = RouteFeatureSelect::pickItem(m_scene, scenePos, hitTolScene(12.0));
+    if (!picked && !m_highLevelAreas.isEmpty()) {
+        double tol = hitTolScene(8.0);
+        for (const auto &v : m_highLevelAreas) {
+            QJsonObject aObj = v.toObject();
+            double minX = aObj.value("minX").toDouble();
+            double maxX = aObj.value("maxX").toDouble();
+            double minY = aObj.value("minY").toDouble();
+            double maxY = aObj.value("maxY").toDouble();
+            QPointF p1 = worldToScene(minX, maxY);
+            QPointF p2 = worldToScene(maxX, minY);
+            QRectF areaRect = QRectF(p1, p2).normalized();
+            if (areaRect.adjusted(-tol, -tol, tol, tol).contains(scenePos)) {
+                QString aId = aObj.value("id").toString();
+                for (QGraphicsItem *it : m_routeTopLevelItems) {
+                    if (it && it->data(0).toString() == "highLevelArea" && it->data(1).toString() == aId) {
+                        picked = it;
+                        break;
+                    }
+                }
+                if (picked) break;
+            }
+        }
+    }
     if (!picked) return;
     const QString t = picked->data(0).toString();
-    if (t.isEmpty()) return;   // 只处理站点与线路
+    if (t.isEmpty()) return;   // 只处理站点与线路/高级区域
 
     if (m_canvas) {
         m_canvas->scale(1.4, 1.4);
@@ -1831,6 +1941,127 @@ void MapViewWidget::clearRouteDetails()
     if (m_chkRouteObsRange)   m_chkRouteObsRange->setChecked(false);
     if (m_routeContentWidget) m_routeContentWidget->setVisible(false);
     if (m_routeEmptyHint)     m_routeEmptyHint->setVisible(true);
+}
+
+// ── 高级区域属性面板 ─────────────────────────────────────────────────────────
+
+void MapViewWidget::showAreaDetails(const QJsonObject &obj)
+{
+    if (m_areaBadge) {
+        m_areaBadge->setText("高级区域");
+        m_areaBadge->setStyleSheet("background:#3b1d5c; color:#c084fc; border:1px solid #7c3aed; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
+        m_areaBadge->setVisible(true);
+    }
+
+    QSet<QString> chkSet;
+    QJsonArray cpArr = obj.value("checked_props").toArray();
+    for (const auto &v : cpArr) chkSet.insert(v.toString());
+
+    if (m_chkAreaName)       m_chkAreaName->setChecked(chkSet.contains("name"));
+    if (m_areaNameVal)       m_areaNameVal->setText(obj.value("name").toString("AdvancedArea"));
+
+    if (m_areaBoundsVal) {
+        double minX = obj.value("minX").toDouble();
+        double maxX = obj.value("maxX").toDouble();
+        double minY = obj.value("minY").toDouble();
+        double maxY = obj.value("maxY").toDouble();
+        m_areaBoundsVal->setText(QString("X: [%1, %2]  Y: [%3, %4]")
+            .arg(minX, 0, 'f', 2).arg(maxX, 0, 'f', 2).arg(minY, 0, 'f', 2).arg(maxY, 0, 'f', 2));
+    }
+
+    const auto &mc = MotionConfigManager::instance();
+    if (m_chkAreaMaxSpeed)   m_chkAreaMaxSpeed->setChecked(chkSet.contains("maxspeed") || chkSet.contains("max_speed"));
+    if (m_areaMaxSpeedVal) {
+        double spd = obj.contains("max_speed") ? obj.value("max_speed").toDouble() : obj.value("maxspeed").toDouble(mc.maxSpeed());
+        m_areaMaxSpeedVal->setText(QString("%1 m/s").arg(spd, 0, 'f', 2));
+    }
+
+    bool hasAcc = chkSet.contains("maxacc") || chkSet.contains("max_acceleration");
+    if (m_chkAreaMaxAcc)     m_chkAreaMaxAcc->setChecked(hasAcc);
+    if (m_areaMaxAccVal) {
+        double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble() : obj.value("maxacc").toDouble(mc.maxAcceleration());
+        m_areaMaxAccVal->setText(QString("%1 m/s²").arg(acc, 0, 'f', 2));
+    }
+
+    bool hasRot = chkSet.contains("maxrot") || chkSet.contains("max_angular_speed");
+    if (m_chkAreaMaxRot)     m_chkAreaMaxRot->setChecked(hasRot);
+    if (m_areaMaxRotVal) {
+        double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble() : obj.value("maxrot").toDouble(mc.maxAngularSpeedDeg());
+        m_areaMaxRotVal->setText(QString("%1 °/s").arg(rot, 0, 'f', 1));
+    }
+
+    bool hasRotAcc = chkSet.contains("maxrotacc") || chkSet.contains("max_angular_acceleration");
+    if (m_chkAreaMaxRotAcc)  m_chkAreaMaxRotAcc->setChecked(hasRotAcc);
+    if (m_areaMaxRotAccVal) {
+        double rotAcc = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble() : obj.value("maxrotacc").toDouble(mc.maxAngularAccelerationDeg());
+        m_areaMaxRotAccVal->setText(QString("%1 °/s²").arg(rotAcc, 0, 'f', 1));
+    }
+
+    if (m_chkAreaReachDist)  m_chkAreaReachDist->setChecked(chkSet.contains("reachdist") || chkSet.contains("arrival_distance_tolerance"));
+    if (m_areaReachDistVal) {
+        double rd = obj.contains("arrival_distance_tolerance") ? obj.value("arrival_distance_tolerance").toDouble() : obj.value("reachdist").toDouble(mc.arrivalDistanceTolerance());
+        m_areaReachDistVal->setText(QString("%1 m").arg(rd, 0, 'f', 2));
+    }
+
+    if (m_chkAreaReachAngle) m_chkAreaReachAngle->setChecked(chkSet.contains("reachangle") || chkSet.contains("arrival_angle_tolerance"));
+    if (m_areaReachAngleVal) {
+        double ra = obj.contains("arrival_angle_tolerance") ? obj.value("arrival_angle_tolerance").toDouble() : obj.value("reachangle").toDouble(mc.arrivalAngleToleranceDeg());
+        m_areaReachAngleVal->setText(QString("%1 °").arg(ra, 0, 'f', 1));
+    }
+
+    if (m_chkAreaWidth)      m_chkAreaWidth->setChecked(chkSet.contains("width") || chkSet.contains("route_width"));
+    if (m_areaWidthVal) {
+        double w = obj.contains("route_width") ? obj.value("route_width").toDouble() : obj.value("width").toDouble(mc.routeWidth());
+        m_areaWidthVal->setText(QString("%1 m").arg(w, 0, 'f', 2));
+    }
+
+    bool hasObs = chkSet.contains("intrusion_stop_length") || chkSet.contains("intrusion_stop_width") ||
+                  chkSet.contains("intrusion_deceleration_length") || chkSet.contains("intrusion_deceleration_width");
+    if (m_chkAreaObsRange)   m_chkAreaObsRange->setChecked(hasObs);
+    if (m_areaObsRangeVal) {
+        double sl = obj.value("intrusion_stop_length").toDouble(0.0);
+        double sw = obj.value("intrusion_stop_width").toDouble(0.0);
+        double dl = obj.value("intrusion_deceleration_length").toDouble(0.0);
+        double dw = obj.value("intrusion_deceleration_width").toDouble(0.0);
+        auto fmtVal = [](double v) -> QString {
+            if (qFuzzyIsNull(v)) return "0";
+            QString s = QString::number(v, 'f', 2);
+            while (s.contains('.') && (s.endsWith('0') || s.endsWith('.'))) {
+                if (s.endsWith('.')) { s.chop(1); break; }
+                s.chop(1);
+            }
+            return s;
+        };
+        m_areaObsRangeVal->setText(QString("[%1,%2,%3,%4]")
+                                    .arg(fmtVal(sl))
+                                    .arg(fmtVal(sw))
+                                    .arg(fmtVal(dl))
+                                    .arg(fmtVal(dw)));
+        m_areaObsRangeVal->setToolTip(QString("正向停止: %1m, 侧向停止: %2m\n正向减速: %3m, 侧向减速: %4m")
+                                       .arg(sl).arg(sw).arg(dl).arg(dw));
+    }
+
+    if (m_areaEmptyHint)     m_areaEmptyHint->setVisible(false);
+    if (m_areaContentWidget) m_areaContentWidget->setVisible(true);
+}
+
+void MapViewWidget::clearAreaDetails()
+{
+    if (m_areaBadge) {
+        m_areaBadge->setText("");
+        m_areaBadge->setVisible(false);
+    }
+    if (m_chkAreaName)        m_chkAreaName->setChecked(false);
+    if (m_chkAreaMaxSpeed)    m_chkAreaMaxSpeed->setChecked(false);
+    if (m_chkAreaMaxAcc)      m_chkAreaMaxAcc->setChecked(false);
+    if (m_chkAreaMaxRot)      m_chkAreaMaxRot->setChecked(false);
+    if (m_chkAreaMaxRotAcc)   m_chkAreaMaxRotAcc->setChecked(false);
+    if (m_chkAreaReachDist)   m_chkAreaReachDist->setChecked(false);
+    if (m_chkAreaReachAngle)  m_chkAreaReachAngle->setChecked(false);
+    if (m_chkAreaWidth)       m_chkAreaWidth->setChecked(false);
+    if (m_chkAreaObsRange)    m_chkAreaObsRange->setChecked(false);
+    if (m_areaContentWidget)  m_areaContentWidget->setVisible(false);
+    if (m_areaEmptyHint)      m_areaEmptyHint->setVisible(true);
 }
 
 // ── Show / hide ──────────────────────────────────────────────────────────────
@@ -2386,6 +2617,7 @@ void MapViewWidget::loadRoute()
         m_curves = QJsonArray();
         m_charges = QJsonArray();
         m_highPrecisionPoints = QJsonArray();
+        m_highLevelAreas = QJsonArray();
 
         QString jsonStr = data.value("json").toString();
         if (!jsonStr.isEmpty()) {
@@ -2399,7 +2631,34 @@ void MapViewWidget::loadRoute()
 
             QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
             if (doc.isObject()) {
-                QJsonArray features = doc.object().value("features").toArray();
+                QJsonObject root = doc.object();
+                auto parseAreasFromVal = [&](const QJsonValue &v) {
+                    if (v.isArray()) {
+                        m_highLevelAreas = v.toArray();
+                    } else if (v.isObject() && !v.toObject().isEmpty()) {
+                        m_highLevelAreas.append(v.toObject());
+                    }
+                };
+
+                if (root.contains("highLevel Area")) {
+                    parseAreasFromVal(root.value("highLevel Area"));
+                } else if (root.contains("highLevelArea")) {
+                    parseAreasFromVal(root.value("highLevelArea"));
+                } else if (root.contains("highLevelAreas")) {
+                    parseAreasFromVal(root.value("highLevelAreas"));
+                }
+
+                for (int i = 0; i < m_highLevelAreas.size(); ++i) {
+                    QJsonObject a = m_highLevelAreas[i].toObject();
+                    if (a.value("id").toString().isEmpty()) {
+                        a["id"] = QString("highLevelArea_%1").arg(i + 1);
+                    }
+                    if (a.value("name").toString().isEmpty()) {
+                        a["name"] = QString("AdvancedArea %1").arg(i + 1);
+                    }
+                    m_highLevelAreas[i] = a;
+                }
+                QJsonArray features = root.value("features").toArray();
                 for (const auto &fv : features) {
                     QJsonObject f = fv.toObject();
                     QJsonObject props = f.value("properties").toObject();
@@ -2539,12 +2798,64 @@ void MapViewWidget::renderRoute()
     clearRouteItems();
 
     if (m_points.isEmpty() && m_lines.isEmpty() && m_curves.isEmpty()
-        && m_charges.isEmpty() && m_highPrecisionPoints.isEmpty()) {
+        && m_charges.isEmpty() && m_highPrecisionPoints.isEmpty() && m_highLevelAreas.isEmpty()) {
         m_selItem = nullptr;
         m_layerHiddenItem = nullptr;
         refreshElementList();
         updateMapPropsView();
         return;
+    }
+
+    // 渲染高级区域列表 (Z = -10，高于底图，低于点线；精细边框+1/4缩小文字，无中心菱形块)
+    m_areaItem = nullptr;
+    for (int idx = 0; idx < m_highLevelAreas.size(); ++idx) {
+        QJsonObject areaObj = m_highLevelAreas[idx].toObject();
+        QString areaId = areaObj.value("id").toString();
+        if (areaId.isEmpty()) {
+            areaId = QString("highLevelArea_%1").arg(idx + 1);
+            areaObj["id"] = areaId;
+            m_highLevelAreas[idx] = areaObj;
+        }
+
+        double minX = areaObj.value("minX").toDouble();
+        double maxX = areaObj.value("maxX").toDouble();
+        double minY = areaObj.value("minY").toDouble();
+        double maxY = areaObj.value("maxY").toDouble();
+        QPointF p1 = worldToScene(minX, maxY);
+        QPointF p2 = worldToScene(maxX, minY);
+        QRectF rect = QRectF(p1, p2).normalized();
+
+        bool isSelected = (m_selItem && m_selItem->data(0).toString() == "highLevelArea" && m_selItem->data(1).toString() == areaId);
+        // 线条缩小为原 1/4 (原 2.0 -> 0.5, 选中原 3.0 -> 0.8)
+        QColor borderCol = isSelected ? QColor("#00e676") : QColor("#8b5cf6");
+        double penWidth = isSelected ? 0.8 : 0.5;
+        QColor fillCol = isSelected ? QColor(0, 230, 118, 30) : QColor(139, 92, 246, 20);
+
+        auto *rectItem = m_scene->addRect(rect, QPen(borderCol, penWidth), QBrush(fillCol));
+        rectItem->setZValue(-10);
+        rectItem->setData(0, "highLevelArea");
+        rectItem->setData(1, areaId);
+        rectItem->setData(2, QColor("#8b5cf6"));
+        m_routeTopLevelItems.append(rectItem);
+        if (isSelected) {
+            m_selItem = rectItem;
+            m_areaItem = rectItem;
+        } else if (!m_areaItem) {
+            m_areaItem = rectItem;
+        }
+
+        // 中心文字 (缩小为原 1/4，文字居中，去除红色菱形块)
+        QString name = areaObj.value("name").toString("AdvancedArea");
+        auto *textItem = m_scene->addSimpleText(name);
+        textItem->setBrush(QBrush(isSelected ? QColor("#00e676") : QColor("#8b5cf6")));
+        QFont tf("Segoe UI", 11, QFont::Bold);
+        textItem->setFont(tf);
+        textItem->setScale(0.25); // 精确缩小为原 1/4
+        textItem->setParentItem(rectItem);
+        textItem->setZValue(-9);
+        QRectF tb = textItem->boundingRect();
+        QPointF center = rect.center();
+        textItem->setPos(center.x() - (tb.width() * 0.25) / 2.0, center.y() - (tb.height() * 0.25) / 2.0);
     }
 
     // 图元 data 约定与"启用编辑"完全一致: data(0)=类型串, data(1)=ID, data(2)=原始配色
@@ -3155,6 +3466,32 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
     QString fType = picked ? picked->data(0).toString() : QString();
     QString fId   = picked ? picked->data(1).toString() : QString();
 
+    if (!picked && !m_highLevelAreas.isEmpty()) {
+        double tol = hitTolScene(8.0);
+        for (int i = m_highLevelAreas.size() - 1; i >= 0; --i) {
+            QJsonObject a = m_highLevelAreas[i].toObject();
+            double minX = a.value("minX").toDouble();
+            double maxX = a.value("maxX").toDouble();
+            double minY = a.value("minY").toDouble();
+            double maxY = a.value("maxY").toDouble();
+            QPointF p1 = worldToScene(minX, maxY);
+            QPointF p2 = worldToScene(maxX, minY);
+            QRectF areaRect = QRectF(p1, p2).normalized();
+            if (areaRect.adjusted(-tol, -tol, tol, tol).contains(scenePos)) {
+                QString aId = a.value("id").toString(QString("highLevelArea_%1").arg(i + 1));
+                for (QGraphicsItem *it : m_routeTopLevelItems) {
+                    if (it && it->data(0).toString() == "highLevelArea" && it->data(1).toString() == aId) {
+                        picked = it;
+                        break;
+                    }
+                }
+                fType = "highLevelArea";
+                fId = aId;
+                break;
+            }
+        }
+    }
+
     auto findIn = [](const QJsonArray &arr, const QString &id) -> QJsonObject {
         for (const auto &v : arr) {
             QJsonObject o = v.toObject();
@@ -3165,7 +3502,9 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
 
     QGraphicsItem *stationItem = nullptr;
     QGraphicsItem *routeItem   = nullptr;
+    QGraphicsItem *areaItem    = nullptr;
     if (fType == "line" || fType == "curve")  routeItem   = picked;
+    else if (fType == "highLevelArea")        areaItem    = picked;
     else if (!fType.isEmpty())                stationItem = picked;
 
     if (picked != m_selItem) {
@@ -3174,6 +3513,7 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
     }
 
     if (stationItem) {
+        clearAreaDetails();
         QJsonObject ptObj;
         if (fType == "charge")             ptObj = findIn(m_charges, fId);
         else if (fType == "highPrecision") ptObj = findIn(m_highPrecisionPoints, fId);
@@ -3186,16 +3526,36 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
             syncElementListSelection(fType, fId);
         }
     } else if (routeItem) {
+        clearAreaDetails();
         QJsonObject rObj = (fType == "line") ? findIn(m_lines, fId) : findIn(m_curves, fId);
         if (rObj.isEmpty()) rObj["id"] = fId;
         RouteFeatureSelect::applySelectColor(routeItem);
         showRouteDetails(rObj, fType);
         switchPropsView(ViewRoute);
         syncElementListSelection(fType, fId);
+    } else if (areaItem) {
+        clearStationDetails();
+        clearRouteDetails();
+        RouteFeatureSelect::applySelectColor(areaItem);
+        QJsonObject targetArea;
+        for (const auto &v : m_highLevelAreas) {
+            QJsonObject a = v.toObject();
+            if (a.value("id").toString() == fId) {
+                targetArea = a;
+                break;
+            }
+        }
+        if (targetArea.isEmpty() && !m_highLevelAreas.isEmpty()) {
+            targetArea = m_highLevelAreas.first().toObject();
+        }
+        showAreaDetails(targetArea);
+        switchPropsView(ViewArea);
+        syncElementListSelection("highLevelArea", fId);
     } else {
         if (!m_navMode && !m_moveMode && !m_relocMode) {
             clearStationDetails();
             clearRouteDetails();
+            clearAreaDetails();
             // 点击设备图标 → 设备数据监视; 点击空白 → 地图属性
             switchPropsView(onRobot ? ViewDevice : ViewMap);
             if (onRobot) {

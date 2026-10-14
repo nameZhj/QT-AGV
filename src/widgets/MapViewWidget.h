@@ -143,8 +143,8 @@ private:
 
     // ══ 右侧面板: 属性 / 图元 / 图层 三个标签页 ══════════════════════════════
     enum RightTab  { TabProps = 0, TabElements = 1, TabLayers = 2 };
-    // 属性页的四种内容: 设备 / 站点 / 线路 / 地图
-    enum PropsView { ViewDevice = 0, ViewStation = 1, ViewRoute = 2, ViewMap = 3 };
+    // 属性页的五种内容: 设备 / 站点 / 线路 / 地图 / 高级区域
+    enum PropsView { ViewDevice = 0, ViewStation = 1, ViewRoute = 2, ViewMap = 3, ViewArea = 4 };
 
     void setRightTab(int tab);            // 切换 属性/图元/图层
     void switchPropsView(int view);       // 切换属性页显示的内容
@@ -213,6 +213,7 @@ private:
     QLabel  *m_mapCountChargeVal=nullptr;
     QLabel  *m_mapCountLineVal = nullptr;
     QLabel  *m_mapCountCurveVal= nullptr;
+    QLabel  *m_mapCountAreaVal = nullptr;
 
     // 图元页
     QLineEdit   *m_elemSearchEdit = nullptr;
@@ -246,6 +247,8 @@ private:
     QJsonArray m_curves;
     QJsonArray m_charges;
     QJsonArray m_highPrecisionPoints;
+    QJsonArray m_highLevelAreas;
+    QGraphicsItem *m_areaItem = nullptr;
 
     // Robot state
     struct RobotState {
@@ -413,6 +416,34 @@ private:
     QLabel               *m_routeWidthVal      = nullptr;
     QCheckBox            *m_chkRouteObsRange   = nullptr;
     QLabel               *m_routeObsRangeVal   = nullptr;
+
+    // Area info (对齐"启用编辑"高级区域属性面板)
+    void showAreaDetails(const QJsonObject &obj);
+    void clearAreaDetails();
+
+    QGroupBox            *m_areaGroup          = nullptr;
+    QLabel               *m_areaBadge          = nullptr;
+    QLabel               *m_areaEmptyHint      = nullptr;
+    QWidget              *m_areaContentWidget  = nullptr;
+    QCheckBox            *m_chkAreaName        = nullptr;
+    QLabel               *m_areaNameVal        = nullptr;
+    QLabel               *m_areaBoundsVal      = nullptr;
+    QCheckBox            *m_chkAreaMaxSpeed    = nullptr;
+    QLabel               *m_areaMaxSpeedVal    = nullptr;
+    QCheckBox            *m_chkAreaMaxAcc      = nullptr;
+    QLabel               *m_areaMaxAccVal      = nullptr;
+    QCheckBox            *m_chkAreaMaxRot      = nullptr;
+    QLabel               *m_areaMaxRotVal      = nullptr;
+    QCheckBox            *m_chkAreaMaxRotAcc   = nullptr;
+    QLabel               *m_areaMaxRotAccVal   = nullptr;
+    QCheckBox            *m_chkAreaReachDist   = nullptr;
+    QLabel               *m_areaReachDistVal   = nullptr;
+    QCheckBox            *m_chkAreaReachAngle  = nullptr;
+    QLabel               *m_areaReachAngleVal  = nullptr;
+    QCheckBox            *m_chkAreaWidth       = nullptr;
+    QLabel               *m_areaWidthVal       = nullptr;
+    QCheckBox            *m_chkAreaObsRange    = nullptr;
+    QLabel               *m_areaObsRangeVal    = nullptr;
 
     QGraphicsItem        *m_selItem            = nullptr;
     QGraphicsItem        *m_layerHiddenItem    = nullptr;   // 图层-隐藏选中图元 所隐藏的图元

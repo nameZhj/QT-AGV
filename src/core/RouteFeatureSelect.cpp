@@ -8,6 +8,7 @@
 #include <QGraphicsLineItem>
 #include <QGraphicsPathItem>
 #include <QGraphicsPolygonItem>
+#include <QGraphicsRectItem>
 #include <cmath>
 #include <algorithm>
 
@@ -18,6 +19,7 @@ QColor itemOriginalColor(QGraphicsItem *item)
 {
     if (auto *e = qgraphicsitem_cast<QGraphicsEllipseItem*>(item)) return e->brush().color();
     if (auto *l = qgraphicsitem_cast<QGraphicsLineItem*>(item))    return l->pen().color();
+    if (auto *r = qgraphicsitem_cast<QGraphicsRectItem*>(item))    return r->pen().color();
     if (auto *p = qgraphicsitem_cast<QGraphicsPathItem*>(item)) {
         if (item->data(0).toString() == "curve") return p->pen().color();
         return p->brush().color().isValid() ? p->brush().color() : p->pen().color();
@@ -69,6 +71,12 @@ void setItemColor(QGraphicsItem *item, const QColor &col, bool selected)
                 p->setBrush(QBrush(baseCol));
             }
         }
+    } else if (auto *r = qgraphicsitem_cast<QGraphicsRectItem*>(item)) {
+        QPen pen = r->pen();
+        pen.setColor(col);
+        pen.setWidthF(selected ? 0.8 : 0.5);
+        r->setPen(pen);
+        r->setBrush(QBrush(selected ? QColor(0, 230, 118, 30) : QColor(139, 92, 246, 20)));
     }
 }
 
@@ -161,6 +169,7 @@ QGraphicsItem *pickItem(QGraphicsScene *scene, const QPointF &scenePos, double t
             target = target->parentItem();
         }
         if (!target || target->data(0).toString().isEmpty()) continue;
+        if (target->data(0).toString() == "highLevelArea") continue; // 高级区域不参与点线几何拾取，由外部专属优先级判定
         if (!candidates.contains(target)) {
             candidates.append(target);
         }
