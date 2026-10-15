@@ -55,45 +55,46 @@
 
 ## 软件架构与目录结构
 
+系统严格遵循单向依赖架构规范：`ui -> core -> network -> app / utils`。详细架构指南与 AI 编程助手准则见 [AGENT.md](AGENT.md)。
+
 ```
 QT-AGV/
-├── CMakeLists.txt              # CMake 构建配置文件
-├── CMakePresets.json           # CMake 预设配置
-├── main.cpp                    # 应用入口、日志初始化、代理设置与全局事件处理
+├── CMakeLists.txt              # CMake 构建配置
+├── main.cpp                    # 程序主入口与样式加载
+├── AGENT.md                    # AI 编程助手与开发者架构规范
+├── docs/                       # 业务与接口规范文档
+│   └── device_flow_apis.md     # 机器人硬件/服务端接口规范
 ├── src/
-│   ├── core/                   # 核心服务、网络通信与业务控制器
-│   │   ├── ApiService.h/.cpp           # REST API 通信服务 (QNetworkAccessManager)
-│   │   ├── AppConfig.h/.cpp            # 应用配置单例 (设置持久化、IP/卡号管理)
-│   │   ├── ButtonClickEffect.h/.cpp    # 全局 UI 按钮点击动画事件过滤器
-│   │   ├── DeviceManagerDialog.h/.cpp  # 启动设备扫描与连接管理对话框
-│   │   ├── LoadingDialog.h/.cpp        # 全局加载指示对话框
-│   │   ├── MainWindow.h/.cpp           # 主窗口框架及多页面切换
-│   │   ├── MapPgmUtil.h/.cpp           # PGM 地图文件解析与渲染转换工具
-│   │   ├── MqttService.h/.cpp          # Qt MQTT 客户端封装 (实时遥测与控制指令)
-│   │   ├── TeleopController.h/.cpp     # 键盘遥控与安全刹车控制器
-│   │   ├── Toast.h/.cpp                # 全局消息浮层提示框
-│   │   ├── ToggleSwitch.h/.cpp         # 自定义开关控件
-│   │   └── WebSocketService.h/.cpp     # WebSocket 实时推流通信服务
-│   ├── widgets/                # 业务UI视图与交互组件
-│   │   ├── AgvInfoWidget.h/.cpp        # AGV 硬件与系统信息展示
-│   │   ├── CarWidget.h/.cpp            # 车辆仪表盘与主控制面板
-│   │   ├── CreateMapWidget.h/.cpp      # 建图控制与地图创建组件
-│   │   ├── EditConfigWidget.h/.cpp     # 系统参数树形编辑面板
-│   │   ├── MapCanvas.h/.cpp            # 地图底层画布控件
-│   │   ├── MapEditWidget.h/.cpp        # 地图站点与路径在线编辑器
-│   │   ├── MapImageEditWidget.h/.cpp   # 地图图像处理与裁切编辑
-│   │   ├── MapPaintCanvas.h/.cpp       # 地图矢量标绘画布
-│   │   ├── MapShowWidget.h/.cpp        # 地图展示与点云位姿渲染
-│   │   ├── MapViewWidget.h/.cpp        # 综合地图视图控制主组件
-│   │   ├── MapWidget.h/.cpp            # 地图模块外层容器组件
-│   │   ├── TaskEditWidget.h/.cpp       # 任务动作与路线编排组件
-│   │   ├── TaskLogWidget.h/.cpp        # 任务执行日志面板
-│   │   └── TaskWidget.h/.cpp           # 任务管理主页面容器
-│   └── resources/              # 矢量图标与资源文件 (.rc / .ico / .svg)
-└── installer/                  # 打包工具目录
-    ├── build_installer.bat     # Inno Setup 自动化打包脚本
-    ├── installer.iss           # Inno Setup 安装包配置文件
-    └── Languages/              # 界面语言扩展配置文件
+│   ├── app/                    # 全局应用配置与常量
+│   │   ├── AppConfig.h/.cpp            # 设置持久化与网络参数配置
+│   │   └── AppConstants.h              # 窗口尺寸、定时器轮询间隔常量
+│   ├── network/                # 网络通信层 (REST API 与 MQTT)
+│   │   ├── ApiService.h/.cpp           # REST API 核心服务单例
+│   │   ├── MqttService.h/.cpp          # Qt MQTT 客户端服务
+│   │   ├── RouteNetworkApi.h/.cpp      # 路网 GeoJSON 通信接口
+│   │   └── NetworkConstants.h          # 集中收拢所有 HTTP/MQTT 常量与 JSON 键名
+│   ├── core/                   # 核心数据管理与控制算法 (零 UI 依赖)
+│   │   ├── MotionConfigManager.h/.cpp  # 运动控制参数管理与持久化
+│   │   ├── AlignConfigManager.h/.cpp   # 二次对位与货架参数管理
+│   │   ├── RobotInfoManager.h/.cpp     # 机器人状态数据池
+│   │   ├── TaskChainManager.h/.cpp     # 任务链与调度业务流
+│   │   └── TeleopController.h/.cpp     # 键盘遥控与安全刹车保护
+│   ├── utils/                  # 独立基础工具库
+│   │   ├── JsonUtil.h/.cpp             # JSON 读写与安全字段提取
+│   │   ├── MapPgmUtil.h/.cpp           # PGM / YAML 地图文件二进制解析
+│   │   └── ZipUtil.h/.cpp              # 资源包解压工具
+│   ├── ui/                     # 用户交互与界面展示层
+│   │   ├── mainwindow/                 # 顶层主窗口框架
+│   │   ├── common/                     # 通用组件与工厂 (UiHelper, StyleLoader, BaseDialog, ThemeColors)
+│   │   ├── dialogs/                    # 业务对话框 (BaseDialog 派生)
+│   │   ├── map/                        # 地图监控与拓扑编辑 (MapDrawHelper 坐标运算)
+│   │   ├── task/                       # 任务链编排与执行日志
+│   │   └── control/                    # 仪表盘、十字摇杆与参数配置树 (ConfigMetadataHelper)
+│   └── resources/              # 资源与模块化 QSS 样式表
+│       ├── resources.qrc               # 资源清单
+│       ├── qss/                        # 模块化 QSS (base, mainwindow, dialogs, map, task, control)
+│       └── icons/                      # 统一矢量图标库 (.svg / .ico)
+└── installer/                  # Inno Setup 自动化打包目录
 ```
 
 ---
@@ -102,33 +103,24 @@ QT-AGV/
 
 ### 1. 开发环境要求
 
-- **操作系统**: Windows 10 / 11 (64-bit) 或 Linux
-- **编译器**: MSVC 2019/2022 (64-bit) 或 MinGW 64-bit (推荐 C++17 支持)
-- **Qt 版本**: Qt 6.2+ (需包含 `Core`, `Gui`, `Widgets`, `Network`, `WebSockets`, `Mqtt`, `Svg` 模块)
-- **构建工具**: CMake 3.16+ & Ninja / NMake
+- **操作系统**: Windows 10 / 11 (64-bit)
+- **编译器**: MinGW 64-bit (推荐 GCC 13.1.0+, 支持 C++17)
+- **Qt 版本**: Qt 6.2+ (当前基于 Qt 6.11.0 MinGW 64 构建)
+- **构建工具**: CMake 3.20+ & MinGW Makefiles
 
-### 2. CMake 编译步骤
+### 2. 命令行快速构建 (Windows PowerShell)
 
-#### 命令行构建 (Windows MSVC / MinGW / Ninja)
+```powershell
+# 1. 设置 Qt 与 MinGW 环境变量
+$env:PATH = "F:\Qt\6.11.0\mingw_64\bin;F:\Qt\Tools\mingw1310_64\bin;" + $env:PATH
 
-```bash
-# 1. 克隆代码仓库
-git clone http://180.201.6.137:3000/zanghongjie/AGV-QT.git
-cd AGV-QT/QT-AGV
+# 2. 进入项目目录并配置
+cd QT-AGV
+cmake -B build -G "MinGW Makefiles"
 
-# 2. 创建并配置构建目录 (例如使用 Release 模式)
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-
-# 3. 执行编译
-cmake --build build --config Release
+# 3. 编译可执行程序
+cmake --build build --config Release -j4
 ```
-
-#### Qt Creator 构建
-
-1. 打开 Qt Creator，选择 `Open File or Project...`。
-2. 选择 `QT-AGV/CMakeLists.txt`。
-3. 选择配置好的 Qt 6 Kit (如 Qt 6.5.3 MSVC2019 64bit)。
-4. 点击 `Build` (Ctrl+B) 与 `Run` (Ctrl+R)。
 
 ---
 
