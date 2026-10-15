@@ -1,7 +1,7 @@
 #include "TeleopController.h"
-#include "core/AppConfig.h"
-#include "core/ApiService.h"
-#include "core/MqttService.h"
+#include "app/AppConfig.h"
+#include "network/ApiService.h"
+#include "network/MqttService.h"
 #include "core/MotionConfigManager.h"
 
 #include <QApplication>

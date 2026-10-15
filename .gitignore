@@ -1,8 +1,56 @@
+# CMake & Build Artifacts
 build/
+build-*/
 build-release/
-.cache/
+out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.ninja
+.ninja_deps
+.ninja_log
 compile_commands.json
+
+# Qt & Compiler Generated
+*_autogen/
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.app
+
+# IDE & Editor Directories
+.vscode/
+.vs/
+.idea/
+.cache/
+.clangd/
+*.pro.user*
+CMakeLists.txt.user*
 CMakeUserPresets.json
 *.autosave
-installer/dist/
+
+# Installer & Packaging Outputs
+installer/Output/
 installer/output/
+installer/dist/
+*.zip
+*.7z
+*.rar
+
+# Runtime Logs, Temp & OS Files
+*.log
+*.tmp
+*.bak
+*.swp
+.DS_Store
+Thumbs.db

@@ -26,7 +26,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\app-icon.ico
-SetupIconFile=..\src\resources\app-icon.ico
+SetupIconFile=..\src\resources\icons\app-icon.ico
 
 [Languages]
 ; Inno Setup 官方安装包默认不附带简体中文翻译文件，这里用 build_installer.bat
@@ -37,7 +37,7 @@ Name: "chinesesimp"; MessagesFile: "Languages\ChineseSimplified.isl"
 ; dist\ 由 build_installer.bat 用 windeployqt 生成，包含 exe + 所有依赖 DLL/插件
 Source: "dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; 图标文件：安装到 {app}，供桌面/开始菜单快捷方式引用
-Source: "..\src\resources\app-icon.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\src\resources\icons\app-icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务:"

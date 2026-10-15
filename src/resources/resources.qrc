@@ -1,0 +1,9 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/">
+    <file alias="ic-robot.svg">icons/ic-robot.svg</file>
+    <file alias="ic-robot1.svg">icons/ic-robot1.svg</file>
+    <file alias="app-icon.svg">icons/app-icon.svg</file>
+    <file alias="ic-reset-view.svg">icons/ic-reset-view.svg</file>
+    <file alias="check.svg">icons/check.svg</file>
+</qresource>
+</RCC>
