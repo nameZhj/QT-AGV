@@ -14,6 +14,7 @@
 #include "ui/common/ButtonClickEffect.h"
 #include "ui/common/SpinBoxWheelFilter.h"
 #include "ui/common/StyleLoader.h"
+#include "app/AppConstants.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -100,7 +101,7 @@ int main(int argc, char *argv[])
     }
 
     // 设置应用图标
-    app.setWindowIcon(QIcon(":/app-icon.svg"));
+    app.setWindowIcon(QIcon(AppConstants::Resources::AppIconSvg));
 
     // 应用全局样式表 (加载 resources/qss/ 下所有模块化样式)
     StyleLoader::applyApplicationStyle();
@@ -112,7 +113,7 @@ int main(int argc, char *argv[])
     app.installEventFilter(new SpinBoxWheelFilter(&app));
 
     // Log file
-    QString logPath = app.applicationDirPath() + "/qt-agv.log";
+    QString logPath = app.applicationDirPath() + "/" + AppConstants::LogFileName;
     bool fileExisted = QFile::exists(logPath);
     g_logFile = new QFile(logPath);
     if (g_logFile->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {

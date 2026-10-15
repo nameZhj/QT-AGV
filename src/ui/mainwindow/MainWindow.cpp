@@ -9,6 +9,7 @@
 #include "ui/task/TaskLogWidget.h"
 #include "ui/task/TaskChainWidget.h"
 #include "app/AppConfig.h"
+#include "app/AppConstants.h"
 #include "network/MqttService.h"
 #include "ui/dialogs/DeviceManagerDialog.h"
 #include "ui/common/Toast.h"
@@ -61,11 +62,11 @@ void MainWindow::showEvent(QShowEvent *event)
 void MainWindow::setupGlobalStyle()
 {
     StyleLoader::applyApplicationStyle();
-    setWindowTitle("QT-AGV  移动机器人管理平台");
-    resize(1440, 900);
+    setWindowTitle(AppConstants::AppTitle);
+    resize(AppConstants::Window::DefaultWidth, AppConstants::Window::DefaultHeight);
 
     // 设置应用图标
-    setWindowIcon(QIcon(":/app-icon.svg"));
+    setWindowIcon(QIcon(AppConstants::Resources::AppIconSvg));
 
     // 设置深色Palette，让Windows原生标题栏匹配主题色
     QPalette darkPalette;

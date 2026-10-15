@@ -32,8 +32,13 @@ public:
     // Coordinate transformation setup
     void setWorldInfo(double left, double bottom, double right, double top, double width, double height);
     
-    // MQTT Robot Tracking
     void setCarId(const QString &carId); // Single tracking
+
+    // ── 地图缩放与视图控制常量 ──
+    static constexpr double kMinScale      = 0.05;  ///< 最小缩放比例 (5%)
+    static constexpr double kMaxScale      = 20.0;  ///< 最大缩放比例 (2000%)
+    static constexpr double kZoomFactorIn  = 1.15;  ///< 单步放大比例系数
+    static constexpr double kZoomFactorOut = 1.0 / 1.15; ///< 单步缩小比例系数
     
 signals:
     void transformChanged();
