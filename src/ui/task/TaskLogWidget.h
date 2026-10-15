@@ -1,5 +1,4 @@
-#ifndef TASKLOGWIDGET_H
-#define TASKLOGWIDGET_H
+#pragma once
 
 #include <QWidget>
 #include <QTreeWidget>
@@ -27,4 +26,3 @@ private:
     QTreeWidget *m_tree = nullptr;
 };
 
-#endif // TASKLOGWIDGET_H

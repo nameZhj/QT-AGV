@@ -1,5 +1,4 @@
-#ifndef MAPPGMUTIL_H
-#define MAPPGMUTIL_H
+#pragma once
 
 #include <QString>
 #include <QByteArray>
@@ -181,4 +180,3 @@ public:
                               QJsonObject *outHeader = nullptr);
 };
 
-#endif // MAPPGMUTIL_H

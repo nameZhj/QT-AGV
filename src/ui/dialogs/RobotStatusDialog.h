@@ -1,5 +1,4 @@
-#ifndef ROBOTSTATUSDIALOG_H
-#define ROBOTSTATUSDIALOG_H
+#pragma once
 
 #include <QDialog>
 #include <QTabWidget>
@@ -160,4 +159,3 @@ private:
     bool       m_hasMqttData      = false;
 };
 
-#endif // ROBOTSTATUSDIALOG_H

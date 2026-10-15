@@ -1,5 +1,4 @@
-#ifndef APISERVICE_H
-#define APISERVICE_H
+#pragma once
 
 #include <QObject>
 #include <QNetworkAccessManager>
@@ -218,4 +217,3 @@ private:
     QNetworkAccessManager *m_manager = nullptr;
 };
 
-#endif // APISERVICE_H

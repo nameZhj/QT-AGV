@@ -1,5 +1,4 @@
-#ifndef NETWORKCONFIGDIALOG_H
-#define NETWORKCONFIGDIALOG_H
+#pragma once
 
 #include <QDialog>
 #include <QLineEdit>
@@ -83,4 +82,3 @@ private:
     bool m_isBusy = false;
 };
 
-#endif // NETWORKCONFIGDIALOG_H

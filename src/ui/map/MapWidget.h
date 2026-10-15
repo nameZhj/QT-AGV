@@ -1,5 +1,4 @@
-#ifndef MAPWIDGET_H
-#define MAPWIDGET_H
+#pragma once
 
 #include <QWidget>
 #include <QJsonObject>
@@ -47,4 +46,3 @@ private:
     int m_total = 0;
 };
 
-#endif // MAPWIDGET_H

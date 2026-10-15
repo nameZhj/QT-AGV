@@ -1,5 +1,4 @@
-#ifndef MAPIMAGEEDITWIDGET_H
-#define MAPIMAGEEDITWIDGET_H
+#pragma once
 
 #include <QWidget>
 
@@ -49,4 +48,3 @@ private:
     QString m_mapName;
 };
 
-#endif // MAPIMAGEEDITWIDGET_H

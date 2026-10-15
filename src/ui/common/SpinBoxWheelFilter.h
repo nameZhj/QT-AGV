@@ -1,5 +1,4 @@
-#ifndef SPINBOXWHEELFILTER_H
-#define SPINBOXWHEELFILTER_H
+#pragma once
 
 #include <QObject>
 
@@ -23,4 +22,3 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 };
 
-#endif // SPINBOXWHEELFILTER_H

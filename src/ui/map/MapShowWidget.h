@@ -1,5 +1,4 @@
-#ifndef MAPSHOWWIDGET_H
-#define MAPSHOWWIDGET_H
+#pragma once
 
 #include <QWidget>
 #include <QGraphicsView>
@@ -127,4 +126,3 @@ private:
     QPixmap m_robotPix;
 };
 
-#endif // MAPSHOWWIDGET_H

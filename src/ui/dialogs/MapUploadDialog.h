@@ -1,5 +1,4 @@
-#ifndef MAPUPLOADDIALOG_H
-#define MAPUPLOADDIALOG_H
+#pragma once
 
 #include <QDialog>
 #include <QLineEdit>
@@ -38,4 +37,3 @@ private:
     QPushButton *m_cancelBtn = nullptr;
 };
 
-#endif // MAPUPLOADDIALOG_H

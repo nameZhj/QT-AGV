@@ -1,5 +1,4 @@
-#ifndef MAPCANVAS_H
-#define MAPCANVAS_H
+#pragma once
 
 #include <QGraphicsView>
 #include <QGraphicsScene>
@@ -98,4 +97,3 @@ private:
     bool m_gestureRotateActive = false; // 原生旋转手势进行中
 };
 
-#endif // MAPCANVAS_H

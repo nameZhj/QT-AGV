@@ -1,5 +1,4 @@
-#ifndef CARWIDGET_H
-#define CARWIDGET_H
+#pragma once
 
 #include <QWidget>
 #include <QTableWidget>
@@ -57,4 +56,3 @@ private:
     QString m_certId;
 };
 
-#endif // CARWIDGET_H

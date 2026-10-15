@@ -1,5 +1,4 @@
-#ifndef ROUTEFEATURESELECT_H
-#define ROUTEFEATURESELECT_H
+#pragma once
 
 #include <QColor>
 #include <QPointF>
@@ -30,4 +29,3 @@ QGraphicsItem *pickItem(QGraphicsScene *scene, const QPointF &scenePos, double t
 
 } // namespace RouteFeatureSelect
 
-#endif // ROUTEFEATURESELECT_H

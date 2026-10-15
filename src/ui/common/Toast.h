@@ -1,5 +1,4 @@
-#ifndef TOAST_H
-#define TOAST_H
+#pragma once
 
 #include <QWidget>
 #include <QPointer>
@@ -68,4 +67,3 @@ private:
     static QList<QPointer<Toast>> s_active;
 };
 
-#endif // TOAST_H

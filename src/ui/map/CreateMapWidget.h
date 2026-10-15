@@ -1,5 +1,4 @@
-#ifndef CREATEMAPWIDGET_H
-#define CREATEMAPWIDGET_H
+#pragma once
 
 #include <QWidget>
 #include <QPushButton>
@@ -241,4 +240,3 @@ private:
     int m_cellSize = 4;
 };
 
-#endif // CREATEMAPWIDGET_H

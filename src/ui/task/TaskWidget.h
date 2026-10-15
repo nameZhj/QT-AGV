@@ -1,5 +1,4 @@
-#ifndef TASKWIDGET_H
-#define TASKWIDGET_H
+#pragma once
 
 #include <QWidget>
 #include <QTableWidget>
@@ -177,4 +176,3 @@ private:
     bool m_taskPolling = false;       // 轮询是否活跃(防止重入)
 };
 
-#endif // TASKWIDGET_H

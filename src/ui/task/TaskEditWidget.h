@@ -1,5 +1,4 @@
-#ifndef TASKEDITWIDGET_H
-#define TASKEDITWIDGET_H
+#pragma once
 
 #include <QWidget>
 #include "MapCanvas.h"
@@ -166,4 +165,3 @@ private:
     QGraphicsEllipseItem *m_snapIndicator = nullptr;
 };
 
-#endif // TASKEDITWIDGET_H

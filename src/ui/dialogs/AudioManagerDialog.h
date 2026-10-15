@@ -1,5 +1,4 @@
-#ifndef AUDIOMANAGERDIALOG_H
-#define AUDIOMANAGERDIALOG_H
+#pragma once
 
 #include <QDialog>
 #include <QStringList>
@@ -67,4 +66,3 @@ private:
     PlayState     m_playState = PlayState::Stopped;
 };
 
-#endif // AUDIOMANAGERDIALOG_H

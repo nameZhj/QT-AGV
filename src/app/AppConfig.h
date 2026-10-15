@@ -1,5 +1,4 @@
-#ifndef APPCONFIG_H
-#define APPCONFIG_H
+#pragma once
 
 #include <QObject>
 #include <QString>
@@ -121,4 +120,3 @@ private:
     mutable QSettings      m_settings;
 };
 
-#endif // APPCONFIG_H

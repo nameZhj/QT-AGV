@@ -1,5 +1,4 @@
-#ifndef TASKCHAINWIDGET_H
-#define TASKCHAINWIDGET_H
+#pragma once
 
 #include <QWidget>
 #include <QPushButton>
@@ -235,4 +234,3 @@ protected:
     ChainData   importChainFromJson(const QJsonObject &json) const;
 };
 
-#endif // TASKCHAINWIDGET_H

@@ -1,5 +1,4 @@
-#ifndef SMAPUPLOADDIALOG_H
-#define SMAPUPLOADDIALOG_H
+#pragma once
 
 #include <QDialog>
 #include <QLineEdit>
@@ -29,4 +28,3 @@ private:
     QPushButton *m_cancelBtn = nullptr;
 };
 
-#endif // SMAPUPLOADDIALOG_H

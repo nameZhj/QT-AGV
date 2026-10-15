@@ -1,5 +1,4 @@
-#ifndef MAPEDITWIDGET_H
-#define MAPEDITWIDGET_H
+#pragma once
 
 #include <QWidget>
 #include <QJsonObject>
@@ -447,4 +446,3 @@ private:
     QPointer<MapCheckResultDialog> m_checkResultDlg;
 };
 
-#endif // MAPEDITWIDGET_H

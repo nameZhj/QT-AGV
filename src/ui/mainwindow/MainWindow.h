@@ -1,5 +1,4 @@
-#ifndef MAINWINDOW_H
-#define MAINWINDOW_H
+#pragma once
 
 #include <QMainWindow>
 #include <QStackedWidget>
@@ -88,4 +87,3 @@ protected:
     QTimer *m_statusTimer = nullptr;
 };
 
-#endif // MAINWINDOW_H

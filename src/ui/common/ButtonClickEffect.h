@@ -1,5 +1,4 @@
-#ifndef BUTTONCLICKEFFECT_H
-#define BUTTONCLICKEFFECT_H
+#pragma once
 
 #include <QObject>
 
@@ -44,4 +43,3 @@ private:
     bool m_enabled = true;
 };
 
-#endif // BUTTONCLICKEFFECT_H

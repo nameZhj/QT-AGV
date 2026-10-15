@@ -1,5 +1,4 @@
-#ifndef TOGGLESWITCH_H
-#define TOGGLESWITCH_H
+#pragma once
 
 #include <QAbstractButton>
 #include <QColor>
@@ -61,4 +60,3 @@ private:
     QColor m_knobColor{Qt::white};
 };
 
-#endif // TOGGLESWITCH_H

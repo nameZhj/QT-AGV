@@ -1,5 +1,4 @@
-#ifndef DEVICEMANAGERDIALOG_H
-#define DEVICEMANAGERDIALOG_H
+#pragma once
 
 #include <QDialog>
 #include <QFrame>
@@ -141,4 +140,3 @@ private:
     QList<DeviceCard *> m_cards;
 };
 
-#endif // DEVICEMANAGERDIALOG_H

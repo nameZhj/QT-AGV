@@ -1,7 +1,6 @@
-#include "MapCanvas.h"
-#ifndef MAPVIEWWIDGET_H
-#define MAPVIEWWIDGET_H
+#pragma once
 
+#include "MapCanvas.h"
 #include <QWidget>
 #include <QGraphicsView>
 #include <QGraphicsScene>
@@ -479,5 +478,3 @@ public:
         return "#eab308";
     }
 };
-
-#endif // MAPVIEWWIDGET_H

@@ -1,5 +1,4 @@
-#ifndef ZIPUTIL_H
-#define ZIPUTIL_H
+#pragma once
 
 #include <QString>
 
@@ -48,4 +47,3 @@ public:
                             int timeoutMs = 30000);
 };
 
-#endif // ZIPUTIL_H

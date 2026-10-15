@@ -1,5 +1,4 @@
-#ifndef MAPPAINTCANVAS_H
-#define MAPPAINTCANVAS_H
+#pragma once
 
 #include <QWidget>
 #include <QImage>
@@ -76,4 +75,3 @@ private:
     static constexpr double kMaxScale = 8.0;
 };
 
-#endif // MAPPAINTCANVAS_H
