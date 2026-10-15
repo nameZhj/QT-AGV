@@ -90,6 +90,31 @@ static const QString kBtnPrimary = "background:#2980b9; color:white; border-radi
 // ── Toolbar icon helpers ─────────────────────────────────────────────────────
 namespace {
 
+static void extractAreaBounds(const QJsonObject &obj, double &minX, double &maxX, double &minY, double &maxY) {
+    if (obj.contains("coordinates")) {
+        QJsonArray coords = obj.value("coordinates").toArray();
+        if (coords.size() >= 2) {
+            QJsonArray pTL = coords[0].toArray();
+            QJsonArray pBR = coords[1].toArray();
+            if (pTL.size() >= 2 && pBR.size() >= 2) {
+                double x1 = pTL[0].toDouble();
+                double y1 = pTL[1].toDouble();
+                double x2 = pBR[0].toDouble();
+                double y2 = pBR[1].toDouble();
+                minX = qMin(x1, x2);
+                maxX = qMax(x1, x2);
+                minY = qMin(y1, y2);
+                maxY = qMax(y1, y2);
+                return;
+            }
+        }
+    }
+    minX = obj.value("minX").toDouble();
+    maxX = obj.value("maxX").toDouble();
+    minY = obj.value("minY").toDouble();
+    maxY = obj.value("maxY").toDouble();
+}
+
 // 与 Vue 一致：carId/mapId 在 Vue store 中是数字(parseInt)，发送 MQTT 时需要
 // 以数字类型出现在 JSON 中，否则后端无法识别。此函数把数字字符串转为 QJsonValue
 // 数字，非数字字符串保持为字符串。
@@ -1648,10 +1673,8 @@ void MapViewWidget::onSceneDoubleClicked(const QPointF &scenePos, Qt::MouseButto
         double tol = hitTolScene(8.0);
         for (const auto &v : m_highLevelAreas) {
             QJsonObject aObj = v.toObject();
-            double minX = aObj.value("minX").toDouble();
-            double maxX = aObj.value("maxX").toDouble();
-            double minY = aObj.value("minY").toDouble();
-            double maxY = aObj.value("maxY").toDouble();
+            double minX = 0, maxX = 0, minY = 0, maxY = 0;
+            extractAreaBounds(aObj, minX, maxX, minY, maxY);
             QPointF p1 = worldToScene(minX, maxY);
             QPointF p2 = worldToScene(maxX, minY);
             QRectF areaRect = QRectF(p1, p2).normalized();
@@ -1961,10 +1984,8 @@ void MapViewWidget::showAreaDetails(const QJsonObject &obj)
     if (m_areaNameVal)       m_areaNameVal->setText(obj.value("name").toString("AdvancedArea"));
 
     if (m_areaBoundsVal) {
-        double minX = obj.value("minX").toDouble();
-        double maxX = obj.value("maxX").toDouble();
-        double minY = obj.value("minY").toDouble();
-        double maxY = obj.value("maxY").toDouble();
+        double minX = 0, maxX = 0, minY = 0, maxY = 0;
+        extractAreaBounds(obj, minX, maxX, minY, maxY);
         m_areaBoundsVal->setText(QString("X: [%1, %2]  Y: [%3, %4]")
             .arg(minX, 0, 'f', 2).arg(maxX, 0, 'f', 2).arg(minY, 0, 'f', 2).arg(maxY, 0, 'f', 2));
     }
@@ -2640,10 +2661,10 @@ void MapViewWidget::loadRoute()
                     }
                 };
 
-                if (root.contains("highLevel Area")) {
-                    parseAreasFromVal(root.value("highLevel Area"));
-                } else if (root.contains("highLevelArea")) {
+                if (root.contains("highLevelArea")) {
                     parseAreasFromVal(root.value("highLevelArea"));
+                } else if (root.contains("highLevel Area")) {
+                    parseAreasFromVal(root.value("highLevel Area"));
                 } else if (root.contains("highLevelAreas")) {
                     parseAreasFromVal(root.value("highLevelAreas"));
                 }
@@ -2656,6 +2677,22 @@ void MapViewWidget::loadRoute()
                     if (a.value("name").toString().isEmpty()) {
                         a["name"] = QString("AdvancedArea %1").arg(i + 1);
                     }
+
+                    double minX = 0, maxX = 0, minY = 0, maxY = 0;
+                    extractAreaBounds(a, minX, maxX, minY, maxY);
+
+                    QJsonArray coords;
+                    QJsonArray pTL, pBR;
+                    pTL.append(minX); pTL.append(maxY);
+                    pBR.append(maxX); pBR.append(minY);
+                    coords.append(pTL); coords.append(pBR);
+                    a["coordinates"] = coords;
+
+                    a.remove("minX");
+                    a.remove("maxX");
+                    a.remove("minY");
+                    a.remove("maxY");
+
                     m_highLevelAreas[i] = a;
                 }
                 QJsonArray features = root.value("features").toArray();
@@ -2817,10 +2854,8 @@ void MapViewWidget::renderRoute()
             m_highLevelAreas[idx] = areaObj;
         }
 
-        double minX = areaObj.value("minX").toDouble();
-        double maxX = areaObj.value("maxX").toDouble();
-        double minY = areaObj.value("minY").toDouble();
-        double maxY = areaObj.value("maxY").toDouble();
+        double minX = 0, maxX = 0, minY = 0, maxY = 0;
+        extractAreaBounds(areaObj, minX, maxX, minY, maxY);
         QPointF p1 = worldToScene(minX, maxY);
         QPointF p2 = worldToScene(maxX, minY);
         QRectF rect = QRectF(p1, p2).normalized();
@@ -3470,10 +3505,8 @@ void MapViewWidget::onSceneClicked(const QPointF &scenePos, Qt::MouseButton btn)
         double tol = hitTolScene(8.0);
         for (int i = m_highLevelAreas.size() - 1; i >= 0; --i) {
             QJsonObject a = m_highLevelAreas[i].toObject();
-            double minX = a.value("minX").toDouble();
-            double maxX = a.value("maxX").toDouble();
-            double minY = a.value("minY").toDouble();
-            double maxY = a.value("maxY").toDouble();
+            double minX = 0, maxX = 0, minY = 0, maxY = 0;
+            extractAreaBounds(a, minX, maxX, minY, maxY);
             QPointF p1 = worldToScene(minX, maxY);
             QPointF p2 = worldToScene(maxX, minY);
             QRectF areaRect = QRectF(p1, p2).normalized();
@@ -4924,6 +4957,27 @@ void MapViewWidget::saveRouteToServer(std::function<void(bool ok)> onDone)
     geojson["features"] = features;
     geojson["mapId"]    = m_mapId;
     geojson["mapName"]  = m_mapName;
+
+    for (int i = 0; i < m_highLevelAreas.size(); ++i) {
+        QJsonObject areaObj = m_highLevelAreas[i].toObject();
+        double minX = 0, maxX = 0, minY = 0, maxY = 0;
+        extractAreaBounds(areaObj, minX, maxX, minY, maxY);
+
+        QJsonArray coords;
+        QJsonArray pTL, pBR;
+        pTL.append(minX); pTL.append(maxY);
+        pBR.append(maxX); pBR.append(minY);
+        coords.append(pTL); coords.append(pBR);
+        areaObj["coordinates"] = coords;
+
+        areaObj.remove("minX");
+        areaObj.remove("maxX");
+        areaObj.remove("minY");
+        areaObj.remove("maxY");
+
+        m_highLevelAreas[i] = areaObj;
+    }
+    geojson["highLevelArea"] = m_highLevelAreas;
 
     QPointer<MapViewWidget> self = this;
     ApiService::instance().saveEditedMap(geojson, [self, geojson, onDone](int code, const QJsonObject &resp) {

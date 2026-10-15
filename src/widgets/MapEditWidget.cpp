@@ -18,6 +18,8 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QCheckBox>
+#include <QDoubleSpinBox>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
@@ -27,10 +29,13 @@
 #include <QHeaderView>
 #include <QDirIterator>
 #include <QMessageBox>
+#include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsLineItem>
 #include <QGraphicsPathItem>
+#include <QGraphicsRectItem>
+#include <QGraphicsPolygonItem>
 #include <QPainterPath>
 #include <QWheelEvent>
 #include <QMouseEvent>
@@ -56,6 +61,51 @@
 #include <QShortcut>
 #include <QKeySequence>
 #include <QDebug>
+
+static void extractAreaBounds(const QJsonObject &obj, double &minX, double &maxX, double &minY, double &maxY) {
+    if (obj.contains("coordinates")) {
+        QJsonArray coords = obj.value("coordinates").toArray();
+        if (coords.size() >= 2) {
+            QJsonArray pTL = coords[0].toArray();
+            QJsonArray pBR = coords[1].toArray();
+            if (pTL.size() >= 2 && pBR.size() >= 2) {
+                double x1 = pTL[0].toDouble();
+                double y1 = pTL[1].toDouble();
+                double x2 = pBR[0].toDouble();
+                double y2 = pBR[1].toDouble();
+                minX = qMin(x1, x2);
+                maxX = qMax(x1, x2);
+                minY = qMin(y1, y2);
+                maxY = qMax(y1, y2);
+                return;
+            }
+        }
+    }
+    minX = obj.value("minX").toDouble();
+    maxX = obj.value("maxX").toDouble();
+    minY = obj.value("minY").toDouble();
+    maxY = obj.value("maxY").toDouble();
+}
+
+static void restoreCheckedProps(const QJsonArray &cpArr, const QList<QPair<QCheckBox*, QString>> &mapping) {
+    QSet<QString> chkSet;
+    for (const auto &v : cpArr) chkSet.insert(v.toString());
+    for (const auto &pair : mapping) {
+        if (pair.first) {
+            pair.first->setChecked(chkSet.contains(pair.second));
+        }
+    }
+}
+
+static QJsonArray collectCheckedProps(const QList<QPair<QCheckBox*, QString>> &mapping) {
+    QJsonArray arr;
+    for (const auto &pair : mapping) {
+        if (pair.first && pair.first->isChecked()) {
+            arr.append(pair.second);
+        }
+    }
+    return arr;
+}
 
 // ── Style constants ───────────────────────────────────────────────────────────
 
@@ -487,6 +537,102 @@ bool MapEditWidget::checkUnsavedChanges()
 
 // ── UI Setup ──────────────────────────────────────────────────────────────────
 
+// ── UI Card & Form Helpers ────────────────────────────────────────────────────
+
+static QWidget* mkFormRow(const QString &label, QWidget *editor, const QString &unit = QString())
+{
+    auto *w = new QWidget;
+    w->setStyleSheet("background:transparent; border:none;");
+    auto *h = new QHBoxLayout(w);
+    h->setContentsMargins(0, 1, 2, 1);
+    h->setSpacing(6);
+    auto *lbl = new QLabel(label);
+    lbl->setFixedWidth(110);
+    lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    lbl->setStyleSheet("color:#7e96b0; font-size:11px; background:transparent; border:none;");
+    h->addWidget(lbl);
+    h->addWidget(editor, 1);
+    if (!unit.isEmpty()) {
+        auto *unitLbl = new QLabel(unit);
+        unitLbl->setMinimumWidth(32);
+        unitLbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none; padding-left:2px;");
+        h->addWidget(unitLbl);
+    }
+    return w;
+}
+
+static QWidget* mkCheckableRow(QCheckBox *&chk, const QString &label, QWidget *editor, const QString &unit = QString())
+{
+    auto *w = new QWidget;
+    w->setStyleSheet("background:transparent; border:none;");
+    auto *h = new QHBoxLayout(w);
+    h->setContentsMargins(0, 1, 2, 1);
+    h->setSpacing(6);
+
+    auto *leftCont = new QWidget;
+    leftCont->setFixedWidth(110);
+    leftCont->setStyleSheet("background:transparent; border:none;");
+    auto *lh = new QHBoxLayout(leftCont);
+    lh->setContentsMargins(0, 0, 0, 0);
+    lh->setSpacing(4);
+
+    chk = new QCheckBox;
+    chk->setFixedSize(16, 16);
+    chk->setStyleSheet(
+        "QCheckBox { background: transparent; }"
+        "QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #3d4a5d; border-radius: 2px; background: #171c26; }"
+        "QCheckBox::indicator:checked { background: #1e6fd4; border-color: #1e6fd4; image: url(:/check.svg); }"
+    );
+    lh->addWidget(chk, 0, Qt::AlignVCenter);
+
+    auto *lbl = new QLabel(label);
+    lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    lbl->setStyleSheet("color: #8fa6bf; font-size: 11px; background: transparent; border: none;");
+    lh->addWidget(lbl, 1, Qt::AlignVCenter);
+
+    h->addWidget(leftCont, 0, Qt::AlignLeft | Qt::AlignVCenter);
+
+    auto *editorCont = new QWidget;
+    editorCont->setStyleSheet("background:transparent; border:none;");
+    auto *eh = new QHBoxLayout(editorCont);
+    eh->setContentsMargins(0, 0, 0, 0);
+    eh->setSpacing(4);
+    eh->addWidget(editor, 1);
+    if (!unit.isEmpty()) {
+        auto *unitLbl = new QLabel(unit);
+        unitLbl->setMinimumWidth(32);
+        unitLbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none; padding-left:2px;");
+        eh->addWidget(unitLbl);
+    }
+    h->addWidget(editorCont, 1);
+
+    chk->setChecked(false);
+    editorCont->setVisible(false);
+
+    QObject::connect(chk, &QCheckBox::toggled, editorCont, [editorCont](bool checked) {
+        editorCont->setVisible(checked);
+    });
+
+    return w;
+}
+
+static QPair<QWidget*, QVBoxLayout*> mkCardContainer(const QString &title)
+{
+    auto *container = new QWidget;
+    container->setStyleSheet("background:#1b2230; border:1px solid #263348; border-radius:6px;");
+    auto *l = new QVBoxLayout(container);
+    l->setContentsMargins(8,6,8,8);
+    l->setSpacing(5);
+    auto *lbl = new QLabel(title);
+    lbl->setStyleSheet("color:#627e9e; font-size:11px; font-weight:bold; background:transparent; border:none;");
+    l->addWidget(lbl);
+    return {container, l};
+}
+
+// ── UI Setup ──────────────────────────────────────────────────────────────────
+
 void MapEditWidget::setupUI()
 {
     setContentsMargins(0,0,0,0);
@@ -504,7 +650,58 @@ void MapEditWidget::setupUI()
     root->setContentsMargins(0,0,0,0);
     root->setSpacing(0);
 
-    // ── Top bar ───────────────────────────────────────────────────────────────
+    // 1. 顶部工具栏
+    setupTopBar(root);
+
+    // 2. 站点类型与区域类型子工具条
+    setupSubToolBars(root);
+
+    // 3. 内容主体容器
+    QWidget *content = new QWidget;
+    QHBoxLayout *cl  = new QHBoxLayout(content);
+    cl->setContentsMargins(0,0,0,0);
+    cl->setSpacing(0);
+
+    // 4. 左侧绘图模式工具栏
+    setupLeftToolbar(cl);
+
+    // 5. 中间画布与右侧面板分割器
+    auto *editSplitter = new QSplitter(Qt::Horizontal);
+    editSplitter->setChildrenCollapsible(false);
+    editSplitter->setHandleWidth(5);
+    editSplitter->setStyleSheet(
+        "QSplitter::handle{background:#232733;}"
+        "QSplitter::handle:hover{background:#3b82f6;}"
+        "QSplitter::handle:pressed{background:#1d4ed8;}");
+
+    // 6. 地图视口与标尺
+    setupMapViewArea(editSplitter);
+
+    // 7. 右侧面板
+    setupRightPanel(editSplitter);
+
+    editSplitter->setStretchFactor(0, 1);
+    editSplitter->setStretchFactor(1, 0);
+    editSplitter->setSizes({880, 360});
+    cl->addWidget(editSplitter, 1);
+    root->addWidget(content, 1);
+
+    setFocusPolicy(Qt::StrongFocus);
+    setupShortcuts();
+
+    // 抢占控制权与遥控状态同步
+    connect(&TeleopController::instance(), &TeleopController::activeChanged,
+            this, &MapEditWidget::onTeleopActiveChanged);
+    onTeleopActiveChanged(TeleopController::instance().isActive());
+
+    // 监听全局运动控制参数变化，统一动态调整各输入控件的范围与 ToolTip
+    connect(&MotionConfigManager::instance(), &MotionConfigManager::configChanged,
+            this, &MapEditWidget::syncMotionSpinBoxRanges);
+    syncMotionSpinBoxRanges();
+}
+
+void MapEditWidget::setupTopBar(QVBoxLayout *root)
+{
     QWidget *topBar = new QWidget;
     topBar->setFixedHeight(44);
     topBar->setStyleSheet(S_TOPBAR);
@@ -671,9 +868,11 @@ void MapEditWidget::setupUI()
     tl->addWidget(helpBtn);
 
     root->addWidget(topBar);
+}
 
+void MapEditWidget::setupSubToolBars(QVBoxLayout *root)
+{
     // ── 站点类型子工具条: 站点 / 工作站 / 特殊工作站 ────────────────────────────
-    // 对应现有三类点位: 普通点(LM) / 高精度点(AP, typeName=ActionPoint) / 充电桩点(CP_, typeName=ChargePoint)
     m_stationBar = new QWidget;
     m_stationBar->setStyleSheet("background:#1e2d3d; border-bottom:1px solid rgba(255,255,255,0.06);");
     {
@@ -709,7 +908,7 @@ void MapEditWidget::setupUI()
     m_stationBar->setVisible(false);
     root->addWidget(m_stationBar);
 
-    // ── 区域类型子工具条: 高级区域 (对齐截图红框) ───────────────────────────────────
+    // ── 区域类型子工具条: 高级区域 ────────────────────────────────────────────────
     m_areaBar = new QWidget;
     m_areaBar->setStyleSheet("background:#1e2d3d; border-bottom:1px solid rgba(255,255,255,0.06);");
     {
@@ -738,14 +937,10 @@ void MapEditWidget::setupUI()
     }
     m_areaBar->setVisible(false);
     root->addWidget(m_areaBar);
+}
 
-    // ── Content row ───────────────────────────────────────────────────────────
-    QWidget *content = new QWidget;
-    QHBoxLayout *cl  = new QHBoxLayout(content);
-    cl->setContentsMargins(0,0,0,0);
-    cl->setSpacing(0);
-
-    // ── Left toolbar ──────────────────────────────────────────────────────────
+void MapEditWidget::setupLeftToolbar(QHBoxLayout *contentLayout)
+{
     QWidget *toolbar = new QWidget;
     toolbar->setFixedWidth(46);
     toolbar->setStyleSheet(S_TOOLBAR);
@@ -833,9 +1028,11 @@ void MapEditWidget::setupUI()
     tbLayout->addWidget(m_tableModeBtn, 0, Qt::AlignHCenter);
 
     m_toolBtns[Drag]->setChecked(true);
-    cl->addWidget(toolbar);
+    contentLayout->addWidget(toolbar);
+}
 
-    // ── Map view with ruler strips ────────────────────────────────────────────
+void MapEditWidget::setupMapViewArea(QSplitter *splitter)
+{
     m_scene   = new QGraphicsScene(this);
     m_mapView = new MapCanvas(m_scene, this);
     connect(m_mapView, &MapCanvas::transformChanged, this, [this]() { updateRulers(); });
@@ -845,8 +1042,6 @@ void MapEditWidget::setupUI()
     m_mapView->setAlignment(Qt::AlignCenter);
     m_mapView->setFrameStyle(QFrame::NoFrame);
     m_mapView->setBackgroundBrush(QColor("#0f1520"));
-    // NoDrag: 平移由 MapCanvas(Ctrl+左键旋转/中键/Alt+左键平移)和 eventFilter 手动处理，
-    // 避免 ScrollHandDrag 拦截鼠标事件导致手柄拖拽失效
     m_mapView->setDragMode(QGraphicsView::NoDrag);
     m_mapView->installEventFilter(this);
     m_mapView->viewport()->installEventFilter(this);
@@ -862,7 +1057,7 @@ void MapEditWidget::setupUI()
     m_coordLabel->adjustSize();
     m_coordLabel->raise();
 
-    // 虚拟遥控舵盘 (浮动于编辑地图左下角，支持鼠标直观遥控与实时按键状态反馈)
+    // 虚拟遥控舵盘
     m_directionPad = new DirectionPadWidget(m_mapView);
     m_directionPad->move(16, qMax(16, m_mapView->height() - m_directionPad->height() - 16));
     m_directionPad->raise();
@@ -877,7 +1072,7 @@ void MapEditWidget::setupUI()
     m_topRuler  = new RulerWidget(RulerWidget::Horizontal);
     m_leftRuler = new RulerWidget(RulerWidget::Vertical);
 
-    // Wrap: [leftRuler | mapView]  (top ruler sits above both)
+    // Wrap: [leftRuler | mapView] (top ruler sits above both)
     QWidget *mapArea = new QWidget;
     mapArea->setContentsMargins(0,0,0,0);
     QVBoxLayout *maVBox = new QVBoxLayout(mapArea);
@@ -890,16 +1085,11 @@ void MapEditWidget::setupUI()
     miHBox->addWidget(m_mapView, 1);
     maVBox->addWidget(mapInner, 1);
 
-    auto *editSplitter = new QSplitter(Qt::Horizontal);
-    editSplitter->setChildrenCollapsible(false);
-    editSplitter->setHandleWidth(5);
-    editSplitter->setStyleSheet(
-        "QSplitter::handle{background:#232733;}"
-        "QSplitter::handle:hover{background:#3b82f6;}"
-        "QSplitter::handle:pressed{background:#1d4ed8;}");
-    editSplitter->addWidget(mapArea);
+    splitter->addWidget(mapArea);
+}
 
-    // ── Right panel ───────────────────────────────────────────────────────────
+void MapEditWidget::setupRightPanel(QSplitter *splitter)
+{
     QWidget *rightOuter = new QWidget;
     rightOuter->setMinimumWidth(340);
     rightOuter->setMaximumWidth(700);
@@ -927,101 +1117,9 @@ void MapEditWidget::setupUI()
     rol->setContentsMargins(0,0,0,0);
     rol->addWidget(sa);
 
-    // 卡片容器辅助函数
-    auto mkCard = [&](const QString &title) -> QPair<QWidget*, QVBoxLayout*> {
-        auto *container = new QWidget;
-        container->setStyleSheet("background:#1b2230; border:1px solid #263348; border-radius:6px;");
-        auto *l = new QVBoxLayout(container);
-        l->setContentsMargins(8,6,8,8);
-        l->setSpacing(5);
-        auto *lbl = new QLabel(title);
-        lbl->setStyleSheet("color:#627e9e; font-size:11px; font-weight:bold; background:transparent; border:none;");
-        l->addWidget(lbl);
-        return {container, l};
-    };
-
-    auto mkFormRow = [](const QString &label, QWidget *editor, const QString &unit = QString()) -> QWidget* {
-        auto *w = new QWidget;
-        w->setStyleSheet("background:transparent; border:none;");
-        auto *h = new QHBoxLayout(w);
-        h->setContentsMargins(0, 1, 2, 1);
-        h->setSpacing(6);
-        auto *lbl = new QLabel(label);
-        lbl->setFixedWidth(110);
-        lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        lbl->setStyleSheet("color:#7e96b0; font-size:11px; background:transparent; border:none;");
-        h->addWidget(lbl);
-        h->addWidget(editor, 1);
-        if (!unit.isEmpty()) {
-            auto *unitLbl = new QLabel(unit);
-            unitLbl->setMinimumWidth(32);
-            unitLbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-            unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none; padding-left:2px;");
-            h->addWidget(unitLbl);
-        }
-        return w;
-    };
-
-    auto mkCheckableRow = [](QCheckBox *&chk, const QString &label, QWidget *editor, const QString &unit = QString()) -> QWidget* {
-        auto *w = new QWidget;
-        w->setStyleSheet("background:transparent; border:none;");
-        auto *h = new QHBoxLayout(w);
-        h->setContentsMargins(0, 1, 2, 1);
-        h->setSpacing(6);
-
-        // 左侧固定宽度 110px: 包含复选框与靠右对齐的文字，确保无论是否勾选文字绝对不发生左右移动
-        auto *leftCont = new QWidget;
-        leftCont->setFixedWidth(110);
-        leftCont->setStyleSheet("background:transparent; border:none;");
-        auto *lh = new QHBoxLayout(leftCont);
-        lh->setContentsMargins(0, 0, 0, 0);
-        lh->setSpacing(4);
-
-        chk = new QCheckBox;
-        chk->setFixedSize(16, 16);
-        chk->setStyleSheet(
-            "QCheckBox { background: transparent; }"
-            "QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #3d4a5d; border-radius: 2px; background: #171c26; }"
-            "QCheckBox::indicator:checked { background: #1e6fd4; border-color: #1e6fd4; image: url(:/check.svg); }"
-        );
-        lh->addWidget(chk, 0, Qt::AlignVCenter);
-
-        auto *lbl = new QLabel(label);
-        lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        lbl->setStyleSheet("color: #8fa6bf; font-size: 11px; background: transparent; border: none;");
-        lh->addWidget(lbl, 1, Qt::AlignVCenter);
-
-        h->addWidget(leftCont, 0, Qt::AlignLeft | Qt::AlignVCenter);
-
-        auto *editorCont = new QWidget;
-        editorCont->setStyleSheet("background:transparent; border:none;");
-        auto *eh = new QHBoxLayout(editorCont);
-        eh->setContentsMargins(0, 0, 0, 0);
-        eh->setSpacing(4);
-        eh->addWidget(editor, 1);
-        if (!unit.isEmpty()) {
-            auto *unitLbl = new QLabel(unit);
-            unitLbl->setMinimumWidth(32);
-            unitLbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-            unitLbl->setStyleSheet("color:#8fa6bf; font-size:11px; background:transparent; border:none; padding-left:2px;");
-            eh->addWidget(unitLbl);
-        }
-        h->addWidget(editorCont, 1);
-
-        // 默认不勾选，右侧编辑输入隐藏 (参考图片1)
-        chk->setChecked(false);
-        editorCont->setVisible(false);
-
-        QObject::connect(chk, &QCheckBox::toggled, editorCont, [editorCont](bool checked) {
-            editorCont->setVisible(checked);
-        });
-
-        return w;
-    };
-
-    // Map info
+    // 1. 地图信息卡片
     {
-        auto [card, l] = mkCard("地图信息");
+        auto [card, l] = mkCardContainer("地图信息");
         auto *idLbl = new QLabel("ID: " + m_mapId);
         idLbl->setStyleSheet("color:#4a7098; font-size:11px; background:transparent; border:none;");
         idLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -1030,15 +1128,15 @@ void MapEditWidget::setupUI()
         rl->addWidget(card);
     }
 
-    // Device (hidden - kept for MQTT robot pose tracking, no UI panel)
+    // 2. 设备选择 (隐藏 - 用于 MQTT 设备姿态追踪)
     {
         m_carCombo = new QComboBox;
         m_carCombo->hide();
     }
 
-    // Properties (hidden until selection)
+    // 3. 要素属性面板卡片 (未选中时隐藏)
     {
-        auto [card, pl] = mkCard("要素属性");
+        auto [card, pl] = mkCardContainer("要素属性");
 
         // 顶栏: 标题 + Badge
         auto *headerBar = new QWidget;
@@ -1054,424 +1152,12 @@ void MapEditWidget::setupUI()
         hbl->addWidget(m_propHeaderBadge);
         pl->addWidget(headerBar);
 
-        // ==========================================
-        // 1. 站点属性组 (WidgetMarkPPTW)
-        // ==========================================
-        m_stationPropGroup = new QWidget;
-        m_stationPropGroup->setStyleSheet("background:transparent; border:none;");
-        auto *sl = new QVBoxLayout(m_stationPropGroup);
-        sl->setContentsMargins(0,0,0,0);
-        sl->setSpacing(4);
+        // 分别构建站点、线路、高级区域属性组
+        setupStationPropsUI(pl);
+        setupLinePropsUI(pl);
+        setupAreaPropsUI(pl);
 
-        // 基础信息
-        m_stationTypeCombo = new QComboBox;
-        m_stationTypeCombo->addItem("普通站点 (LM)", "point");
-        m_stationTypeCombo->addItem("充电桩 (CP)", "charge");
-        m_stationTypeCombo->addItem("高精定位点 (TL)", "highPrecision");
-        sl->addWidget(mkCheckableRow(m_chkStationType, "站点类型:", m_stationTypeCombo));
-
-        m_stationIdEdit = new QLineEdit;
-        m_stationIdEdit->setReadOnly(true);
-        m_stationIdEdit->setStyleSheet("background:#12151e; color:#627284; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
-        sl->addWidget(mkFormRow("站点编号:", m_stationIdEdit));
-
-        m_stationLabelEdit = new QLineEdit;
-        sl->addWidget(mkCheckableRow(m_chkStationLabel, "站点名称:", m_stationLabelEdit));
-
-        // 空间坐标
-        m_stationXSpin = new QDoubleSpinBox;
-        m_stationXSpin->setRange(-99999.0, 99999.0);
-        m_stationXSpin->setDecimals(3);
-        sl->addWidget(mkCheckableRow(m_chkStationX, "X 坐标:", m_stationXSpin, "m"));
-
-        m_stationYSpin = new QDoubleSpinBox;
-        m_stationYSpin->setRange(-99999.0, 99999.0);
-        m_stationYSpin->setDecimals(3);
-        sl->addWidget(mkCheckableRow(m_chkStationY, "Y 坐标:", m_stationYSpin, "m"));
-
-        m_stationYawSpin = new QDoubleSpinBox;
-        m_stationYawSpin->setRange(-360.0, 360.0);
-        m_stationYawSpin->setDecimals(1);
-        sl->addWidget(mkCheckableRow(m_chkStationYaw, "朝向角度:", m_stationYawSpin, "°"));
-
-        // 站点特性复选框
-        m_stationDockableChk = new QCheckBox("启用");
-        sl->addWidget(mkCheckableRow(m_chkStationDockable, "允许停靠:", m_stationDockableChk));
-
-        m_stationRotateChk = new QCheckBox("启用");
-        sl->addWidget(mkCheckableRow(m_chkStationRotate, "允许转身:", m_stationRotateChk));
-
-        m_stationPgvChk = new QCheckBox("启用");
-        sl->addWidget(mkCheckableRow(m_chkStationPgv, "使用下视PGV:", m_stationPgvChk));
-
-        // EPC 相对定位数据
-        m_stationEpcGroup = new QWidget;
-        m_stationEpcGroup->setStyleSheet("background:#141a26; border:1px solid #222b3c; border-radius:4px;");
-        auto *el = new QVBoxLayout(m_stationEpcGroup);
-        el->setContentsMargins(6,5,6,5);
-        el->setSpacing(3);
-        auto *epcTitle = new QLabel("设备相对校准 (EPC)");
-        epcTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
-        el->addWidget(epcTitle);
-        m_stationEpcXLabel = new QLabel("--");
-        m_stationEpcXLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
-        m_stationEpcYLabel = new QLabel("--");
-        m_stationEpcYLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
-        el->addWidget(mkFormRow("epc X:", m_stationEpcXLabel));
-        el->addWidget(mkFormRow("epc Y:", m_stationEpcYLabel));
-        sl->addWidget(m_stationEpcGroup);
-        m_stationEpcGroup->setVisible(false);
-
-        pl->addWidget(m_stationPropGroup);
-
-        // ==========================================
-        // 2. 线路属性组 (WidgetBezierPPTW)
-        // ==========================================
-        m_linePropGroup = new QWidget;
-        m_linePropGroup->setStyleSheet("background:transparent; border:none;");
-        auto *ll = new QVBoxLayout(m_linePropGroup);
-        ll->setContentsMargins(0,0,0,0);
-        ll->setSpacing(4);
-
-        // 基础信息
-        m_lineTypeCombo = new QComboBox;
-        m_lineTypeCombo->addItem("直线", "line");
-        m_lineTypeCombo->addItem("贝塞尔曲线", "curve");
-        ll->addWidget(mkFormRow("线路类型:", m_lineTypeCombo));
-
-        m_lineIdEdit = new QLineEdit;
-        m_lineIdEdit->setReadOnly(true);
-        m_lineIdEdit->setStyleSheet("background:#12151e; color:#627284; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
-        ll->addWidget(mkFormRow("线路编号:", m_lineIdEdit));
-
-        m_lineNameEdit = new QLineEdit;
-        ll->addWidget(mkCheckableRow(m_chkLineName, "线路名称:", m_lineNameEdit));
-
-        // 起止端点
-        m_lineStartLabel = new QLabel("--");
-        m_lineStartLabel->setStyleSheet("background:#12151e; color:#79a2c9; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
-        ll->addWidget(mkFormRow("起点 (Pos1):", m_lineStartLabel));
-
-        m_lineEndLabel = new QLabel("--");
-        m_lineEndLabel->setStyleSheet("background:#12151e; color:#79a2c9; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
-        ll->addWidget(mkFormRow("终点 (Pos2):", m_lineEndLabel));
-
-        // 运动方向
-        auto *dirRow = new QWidget;
-        dirRow->setStyleSheet("background:transparent; border:none;");
-        auto *dirl = new QHBoxLayout(dirRow);
-        dirl->setContentsMargins(0,0,0,0);
-        dirl->setSpacing(4);
-        m_lineDirectCombo = new QComboBox;
-        m_lineDirectCombo->addItem("双向 ↔", 10);
-        m_lineDirectCombo->addItem("单向前进 →", 0);
-        m_lineDirectCombo->addItem("单向后退 ←", 1);
-        m_lineFlipDirBtn = new QPushButton("⇄ 翻转");
-        m_lineFlipDirBtn->setToolTip("翻转单向行进方向或交换端点");
-        m_lineFlipDirBtn->setFixedWidth(52);
-        m_lineFlipDirBtn->setStyleSheet(
-            "QPushButton{background:#1e2736; border:1px solid #2e3d54; border-radius:3px; color:#8fa6bf; font-size:11px; padding:2px 4px;}"
-            "QPushButton:hover{background:#2a374c; color:#fff;}");
-        connect(m_lineFlipDirBtn, &QPushButton::clicked, this, [this]() {
-            int curDirect = m_lineDirectCombo->currentData().toInt();
-            if (curDirect == 0)      m_lineDirectCombo->setCurrentIndex(2); // forward -> backward
-            else if (curDirect == 1) m_lineDirectCombo->setCurrentIndex(1); // backward -> forward
-            else {
-                // 双向时交换起止显示文本
-                QString t1 = m_lineStartLabel->text();
-                m_lineStartLabel->setText(m_lineEndLabel->text());
-                m_lineEndLabel->setText(t1);
-            }
-        });
-        dirl->addWidget(m_lineDirectCombo, 1);
-        dirl->addWidget(m_lineFlipDirBtn);
-        ll->addWidget(mkCheckableRow(m_chkLineDirect, "运动方向:", dirRow));
-
-        // 运动控制参数卡片
-        auto *motionCard = new QWidget;
-        motionCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
-        auto *mcl = new QVBoxLayout(motionCard);
-        mcl->setContentsMargins(6,5,6,5);
-        mcl->setSpacing(3);
-        auto *mTitle = new QLabel("运动控制参数");
-        mTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
-        mcl->addWidget(mTitle);
-
-        const auto &mc = MotionConfigManager::instance();
-
-        double minSpd = mc.paramMin("max_speed", 0.0);
-        double maxSpd = mc.paramMax("max_speed", 1.0);
-        m_lineMaxSpeedSpin = new QDoubleSpinBox;
-        m_lineMaxSpeedSpin->setRange(minSpd, maxSpd);
-        m_lineMaxSpeedSpin->setSingleStep(0.05);
-        m_lineMaxSpeedSpin->setValue(mc.maxSpeed());
-        m_lineMaxSpeedSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s)").arg(minSpd, 0, 'f', 2).arg(maxSpd, 0, 'f', 2));
-        mcl->addWidget(mkCheckableRow(m_chkLineMaxSpeed, "最大速度:", m_lineMaxSpeedSpin, "m/s"));
-
-        double minAcc = mc.paramMin("max_acceleration", 0.3);
-        double maxAcc = mc.paramMax("max_acceleration", 0.5);
-        m_lineMaxAccSpin = new QDoubleSpinBox;
-        m_lineMaxAccSpin->setRange(minAcc, maxAcc);
-        m_lineMaxAccSpin->setSingleStep(0.05);
-        m_lineMaxAccSpin->setValue(mc.maxAcceleration());
-        m_lineMaxAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s²)").arg(minAcc, 0, 'f', 2).arg(maxAcc, 0, 'f', 2));
-        mcl->addWidget(mkCheckableRow(m_chkLineMaxAcc, "最大加速度:", m_lineMaxAccSpin, "m/s²"));
-
-        double minDec = mc.paramMin("max_deceleration", 0.3);
-        double maxDec = mc.paramMax("max_deceleration", 0.5);
-        m_lineMaxDecSpin = new QDoubleSpinBox;
-        m_lineMaxDecSpin->setRange(minDec, maxDec);
-        m_lineMaxDecSpin->setSingleStep(0.05);
-        m_lineMaxDecSpin->setValue(mc.maxDeceleration());
-        m_lineMaxDecSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s²)").arg(minDec, 0, 'f', 2).arg(maxDec, 0, 'f', 2));
-        QWidget *rowMaxDec = mkFormRow("最大减速度:", m_lineMaxDecSpin, "m/s²");
-        rowMaxDec->setVisible(false); // 隐藏最大减速度 UI
-        mcl->addWidget(rowMaxDec);
-
-        double minRot = mc.paramMin("max_angular_speed", 5.0);
-        double maxRot = mc.paramMax("max_angular_speed", 60.0);
-        m_lineMaxRotSpin = new QDoubleSpinBox;
-        m_lineMaxRotSpin->setRange(minRot, maxRot);
-        m_lineMaxRotSpin->setSingleStep(5.0);
-        m_lineMaxRotSpin->setValue(mc.maxAngularSpeedDeg());
-        m_lineMaxRotSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s)").arg(minRot, 0, 'f', 1).arg(maxRot, 0, 'f', 1));
-        mcl->addWidget(mkCheckableRow(m_chkLineMaxRot, "最大角速度:", m_lineMaxRotSpin, "°/s"));
-
-        double minRotAcc = mc.paramMin("max_angular_acceleration", 10.0);
-        double maxRotAcc = mc.paramMax("max_angular_acceleration", 30.0);
-        m_lineMaxRotAccSpin = new QDoubleSpinBox;
-        m_lineMaxRotAccSpin->setRange(minRotAcc, maxRotAcc);
-        m_lineMaxRotAccSpin->setSingleStep(5.0);
-        m_lineMaxRotAccSpin->setValue(mc.maxAngularAccelerationDeg());
-        m_lineMaxRotAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s²)").arg(minRotAcc, 0, 'f', 1).arg(maxRotAcc, 0, 'f', 1));
-        mcl->addWidget(mkCheckableRow(m_chkLineMaxRotAcc, "最大角加减:", m_lineMaxRotAccSpin, "°/s²"));
-
-        m_lineReachDistSpin = new QDoubleSpinBox;
-        m_lineReachDistSpin->setRange(0.01, qMax(1.0, mc.arrivalDistanceTolerance()));
-        m_lineReachDistSpin->setSingleStep(0.01);
-        m_lineReachDistSpin->setValue(mc.arrivalDistanceTolerance());
-        mcl->addWidget(mkCheckableRow(m_chkLineReachDist, "到达距离精度:", m_lineReachDistSpin, "m"));
-
-        m_lineReachAngleSpin = new QDoubleSpinBox;
-        m_lineReachAngleSpin->setRange(0.1, qMax(45.0, mc.arrivalAngleToleranceDeg()));
-        m_lineReachAngleSpin->setSingleStep(0.1);
-        m_lineReachAngleSpin->setValue(mc.arrivalAngleToleranceDeg());
-        mcl->addWidget(mkCheckableRow(m_chkLineReachAngle, "到达角度精度:", m_lineReachAngleSpin, "°"));
-
-        m_lineRoadWidthSpin = new QDoubleSpinBox;
-        m_lineRoadWidthSpin->setRange(0.5, qMax(10.0, mc.routeWidth()));
-        m_lineRoadWidthSpin->setSingleStep(0.5);
-        m_lineRoadWidthSpin->setValue(mc.routeWidth());
-        mcl->addWidget(mkCheckableRow(m_chkLineRoadWidth, "路线宽度:", m_lineRoadWidthSpin, "m"));
-
-        // 监听全局运动控制参数变化，动态调整各输入控件的范围与 ToolTip
-        connect(&MotionConfigManager::instance(), &MotionConfigManager::configChanged, this, [this]() {
-            const auto &cfg = MotionConfigManager::instance();
-            if (m_lineMaxSpeedSpin) {
-                double minSpd = cfg.paramMin("max_speed", 0.0);
-                double maxSpd = cfg.paramMax("max_speed", 1.0);
-                m_lineMaxSpeedSpin->setRange(minSpd, maxSpd);
-                m_lineMaxSpeedSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s)").arg(minSpd, 0, 'f', 2).arg(maxSpd, 0, 'f', 2));
-                if (m_lineMaxSpeedSpin->value() > maxSpd) m_lineMaxSpeedSpin->setValue(maxSpd);
-                if (m_lineMaxSpeedSpin->value() < minSpd) m_lineMaxSpeedSpin->setValue(minSpd);
-            }
-            if (m_lineMaxAccSpin) {
-                double minAcc = cfg.paramMin("max_acceleration", 0.3);
-                double maxAcc = cfg.paramMax("max_acceleration", 0.5);
-                m_lineMaxAccSpin->setRange(minAcc, maxAcc);
-                m_lineMaxAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s²)").arg(minAcc, 0, 'f', 2).arg(maxAcc, 0, 'f', 2));
-                if (m_lineMaxAccSpin->value() > maxAcc) m_lineMaxAccSpin->setValue(maxAcc);
-                if (m_lineMaxAccSpin->value() < minAcc) m_lineMaxAccSpin->setValue(minAcc);
-            }
-            if (m_lineMaxDecSpin) {
-                double minDec = cfg.paramMin("max_deceleration", 0.3);
-                double maxDec = cfg.paramMax("max_deceleration", 0.5);
-                m_lineMaxDecSpin->setRange(minDec, maxDec);
-                m_lineMaxDecSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] m/s²)").arg(minDec, 0, 'f', 2).arg(maxDec, 0, 'f', 2));
-                if (m_lineMaxDecSpin->value() > maxDec) m_lineMaxDecSpin->setValue(maxDec);
-                if (m_lineMaxDecSpin->value() < minDec) m_lineMaxDecSpin->setValue(minDec);
-            }
-            if (m_lineMaxRotSpin) {
-                double minRot = cfg.paramMin("max_angular_speed", 5.0);
-                double maxRot = cfg.paramMax("max_angular_speed", 60.0);
-                m_lineMaxRotSpin->setRange(minRot, maxRot);
-                m_lineMaxRotSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s)").arg(minRot, 0, 'f', 1).arg(maxRot, 0, 'f', 1));
-                if (m_lineMaxRotSpin->value() > maxRot) m_lineMaxRotSpin->setValue(maxRot);
-                if (m_lineMaxRotSpin->value() < minRot) m_lineMaxRotSpin->setValue(minRot);
-            }
-            if (m_lineMaxRotAccSpin) {
-                double minRotAcc = cfg.paramMin("max_angular_acceleration", 10.0);
-                double maxRotAcc = cfg.paramMax("max_angular_acceleration", 30.0);
-                m_lineMaxRotAccSpin->setRange(minRotAcc, maxRotAcc);
-                m_lineMaxRotAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s²)").arg(minRotAcc, 0, 'f', 1).arg(maxRotAcc, 0, 'f', 1));
-                if (m_lineMaxRotAccSpin->value() > maxRotAcc) m_lineMaxRotAccSpin->setValue(maxRotAcc);
-                if (m_lineMaxRotAccSpin->value() < minRotAcc) m_lineMaxRotAccSpin->setValue(minRotAcc);
-            }
-            if (m_lineReachDistSpin) {
-                m_lineReachDistSpin->setRange(0.01, qMax(1.0, cfg.arrivalDistanceTolerance()));
-            }
-            if (m_lineReachAngleSpin) {
-                m_lineReachAngleSpin->setRange(0.1, qMax(45.0, cfg.arrivalAngleToleranceDeg()));
-            }
-            if (m_lineRoadWidthSpin) {
-                m_lineRoadWidthSpin->setRange(0.5, qMax(10.0, cfg.routeWidth()));
-            }
-        });
-
-        ll->addWidget(motionCard);
-
-        // 实时避障范围卡片 (对齐 base.json 规范)
-        auto *obsCard = new QWidget;
-        obsCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
-        auto *ocl = new QVBoxLayout(obsCard);
-        ocl->setContentsMargins(6,5,6,5);
-        ocl->setSpacing(3);
-        auto *oTitle = new QLabel("实时避障范围");
-        oTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
-        ocl->addWidget(oTitle);
-
-        m_lineObsStopLenSpin = new QDoubleSpinBox;
-        m_lineObsStopLenSpin->setRange(0.00, 5.00);
-        m_lineObsStopLenSpin->setSingleStep(0.05);
-        m_lineObsStopLenSpin->setValue(0.00);
-        m_lineObsStopLenSpin->setToolTip("正向停止膨胀半径 (intrusion_stop_length)");
-        ocl->addWidget(mkCheckableRow(m_chkLineObsStopLen, "正向停止膨胀:", m_lineObsStopLenSpin, "m"));
-
-        m_lineObsStopWidSpin = new QDoubleSpinBox;
-        m_lineObsStopWidSpin->setRange(0.00, 5.00);
-        m_lineObsStopWidSpin->setSingleStep(0.05);
-        m_lineObsStopWidSpin->setValue(0.00);
-        m_lineObsStopWidSpin->setToolTip("侧向停止膨胀半径 (intrusion_stop_width)");
-        ocl->addWidget(mkCheckableRow(m_chkLineObsStopWid, "侧向停止膨胀:", m_lineObsStopWidSpin, "m"));
-
-        m_lineObsDecelLenSpin = new QDoubleSpinBox;
-        m_lineObsDecelLenSpin->setRange(0.00, 5.00);
-        m_lineObsDecelLenSpin->setSingleStep(0.05);
-        m_lineObsDecelLenSpin->setValue(0.00);
-        m_lineObsDecelLenSpin->setToolTip("正向减速膨胀半径 (intrusion_deceleration_length)");
-        ocl->addWidget(mkCheckableRow(m_chkLineObsDecelLen, "正向减速膨胀:", m_lineObsDecelLenSpin, "m"));
-
-        m_lineObsDecelWidSpin = new QDoubleSpinBox;
-        m_lineObsDecelWidSpin->setRange(0.00, 5.00);
-        m_lineObsDecelWidSpin->setSingleStep(0.05);
-        m_lineObsDecelWidSpin->setValue(0.00);
-        m_lineObsDecelWidSpin->setToolTip("侧向减速膨胀半径 (intrusion_deceleration_width)");
-        ocl->addWidget(mkCheckableRow(m_chkLineObsDecelWid, "侧向减速膨胀:", m_lineObsDecelWidSpin, "m"));
-
-        ll->addWidget(obsCard);
-        pl->addWidget(m_linePropGroup);
-
-        // ==========================================
-        // 2c. 高级区域属性组 (WidgetAreaPPTW)
-        // ==========================================
-        m_areaPropGroup = new QWidget;
-        m_areaPropGroup->setStyleSheet("background:transparent; border:none;");
-        auto *al = new QVBoxLayout(m_areaPropGroup);
-        al->setContentsMargins(0,0,0,0);
-        al->setSpacing(4);
-
-        // 基础信息
-        m_areaNameEdit = new QLineEdit("AdvancedArea");
-        al->addWidget(mkCheckableRow(m_chkAreaName, "区域名称:", m_areaNameEdit));
-
-        m_areaBoundsLabel = new QLabel("--");
-        m_areaBoundsLabel->setStyleSheet("background:#12151e; color:#79a2c9; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
-        al->addWidget(mkFormRow("区域范围:", m_areaBoundsLabel));
-
-        // 运动控制参数卡片
-        auto *areaMotionCard = new QWidget;
-        areaMotionCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
-        auto *amcl = new QVBoxLayout(areaMotionCard);
-        amcl->setContentsMargins(6,5,6,5);
-        amcl->setSpacing(3);
-        auto *amTitle = new QLabel("运动控制参数");
-        amTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
-        amcl->addWidget(amTitle);
-
-        m_areaMaxSpeedSpin = new QDoubleSpinBox;
-        m_areaMaxSpeedSpin->setRange(minSpd, maxSpd);
-        m_areaMaxSpeedSpin->setSingleStep(0.05);
-        m_areaMaxSpeedSpin->setValue(mc.maxSpeed());
-        amcl->addWidget(mkCheckableRow(m_chkAreaMaxSpeed, "最大速度:", m_areaMaxSpeedSpin, "m/s"));
-
-        m_areaMaxAccSpin = new QDoubleSpinBox;
-        m_areaMaxAccSpin->setRange(minAcc, maxAcc);
-        m_areaMaxAccSpin->setSingleStep(0.05);
-        m_areaMaxAccSpin->setValue(mc.maxAcceleration());
-        amcl->addWidget(mkCheckableRow(m_chkAreaMaxAcc, "最大加速度:", m_areaMaxAccSpin, "m/s²"));
-
-        m_areaMaxRotSpin = new QDoubleSpinBox;
-        m_areaMaxRotSpin->setRange(minRot, maxRot);
-        m_areaMaxRotSpin->setSingleStep(5.0);
-        m_areaMaxRotSpin->setValue(mc.maxAngularSpeedDeg());
-        amcl->addWidget(mkCheckableRow(m_chkAreaMaxRot, "最大角速度:", m_areaMaxRotSpin, "°/s"));
-
-        m_areaMaxRotAccSpin = new QDoubleSpinBox;
-        m_areaMaxRotAccSpin->setRange(minRotAcc, maxRotAcc);
-        m_areaMaxRotAccSpin->setSingleStep(5.0);
-        m_areaMaxRotAccSpin->setValue(mc.maxAngularAccelerationDeg());
-        amcl->addWidget(mkCheckableRow(m_chkAreaMaxRotAcc, "最大角加减:", m_areaMaxRotAccSpin, "°/s²"));
-
-        m_areaReachDistSpin = new QDoubleSpinBox;
-        m_areaReachDistSpin->setRange(0.01, qMax(1.0, mc.arrivalDistanceTolerance()));
-        m_areaReachDistSpin->setSingleStep(0.01);
-        m_areaReachDistSpin->setValue(mc.arrivalDistanceTolerance());
-        amcl->addWidget(mkCheckableRow(m_chkAreaReachDist, "到达距离精度:", m_areaReachDistSpin, "m"));
-
-        m_areaReachAngleSpin = new QDoubleSpinBox;
-        m_areaReachAngleSpin->setRange(0.1, qMax(45.0, mc.arrivalAngleToleranceDeg()));
-        m_areaReachAngleSpin->setSingleStep(0.1);
-        m_areaReachAngleSpin->setValue(mc.arrivalAngleToleranceDeg());
-        amcl->addWidget(mkCheckableRow(m_chkAreaReachAngle, "到达角度精度:", m_areaReachAngleSpin, "°"));
-
-        m_areaRoadWidthSpin = new QDoubleSpinBox;
-        m_areaRoadWidthSpin->setRange(0.5, qMax(10.0, mc.routeWidth()));
-        m_areaRoadWidthSpin->setSingleStep(0.5);
-        m_areaRoadWidthSpin->setValue(mc.routeWidth());
-        amcl->addWidget(mkCheckableRow(m_chkAreaRoadWidth, "路线宽度:", m_areaRoadWidthSpin, "m"));
-
-        al->addWidget(areaMotionCard);
-
-        // 实时避障范围卡片
-        auto *areaObsCard = new QWidget;
-        areaObsCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
-        auto *aocl = new QVBoxLayout(areaObsCard);
-        aocl->setContentsMargins(6,5,6,5);
-        aocl->setSpacing(3);
-        auto *aoTitle = new QLabel("实时避障范围");
-        aoTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
-        aocl->addWidget(aoTitle);
-
-        m_areaObsStopLenSpin = new QDoubleSpinBox;
-        m_areaObsStopLenSpin->setRange(0.00, 5.00);
-        m_areaObsStopLenSpin->setSingleStep(0.05);
-        m_areaObsStopLenSpin->setValue(0.00);
-        aocl->addWidget(mkCheckableRow(m_chkAreaObsStopLen, "正向停止膨胀:", m_areaObsStopLenSpin, "m"));
-
-        m_areaObsStopWidSpin = new QDoubleSpinBox;
-        m_areaObsStopWidSpin->setRange(0.00, 5.00);
-        m_areaObsStopWidSpin->setSingleStep(0.05);
-        m_areaObsStopWidSpin->setValue(0.00);
-        aocl->addWidget(mkCheckableRow(m_chkAreaObsStopWid, "侧向停止膨胀:", m_areaObsStopWidSpin, "m"));
-
-        m_areaObsDecelLenSpin = new QDoubleSpinBox;
-        m_areaObsDecelLenSpin->setRange(0.00, 5.00);
-        m_areaObsDecelLenSpin->setSingleStep(0.05);
-        m_areaObsDecelLenSpin->setValue(0.00);
-        aocl->addWidget(mkCheckableRow(m_chkAreaObsDecelLen, "正向减速膨胀:", m_areaObsDecelLenSpin, "m"));
-
-        m_areaObsDecelWidSpin = new QDoubleSpinBox;
-        m_areaObsDecelWidSpin->setRange(0.00, 5.00);
-        m_areaObsDecelWidSpin->setSingleStep(0.05);
-        m_areaObsDecelWidSpin->setValue(0.00);
-        aocl->addWidget(mkCheckableRow(m_chkAreaObsDecelWid, "侧向减速膨胀:", m_areaObsDecelWidSpin, "m"));
-
-        al->addWidget(areaObsCard);
-        pl->addWidget(m_areaPropGroup);
-
-        // ==========================================
-        // 3. 操作按钮栏
-        // ==========================================
+        // 操作按钮栏 (应用修改 / 删除图元)
         auto *btnRow = new QHBoxLayout;
         btnRow->setSpacing(6);
         m_propApplyBtn = new QPushButton("应用修改");
@@ -1495,69 +1181,462 @@ void MapEditWidget::setupUI()
         rl->addWidget(m_propsPanel);
     }
 
-    // Feature list (collapsible)
-    {
-        auto [card, tl2] = mkCard("要素列表");
-
-        m_tableTypeCombo = new QComboBox;
-        m_tableTypeCombo->addItem("普通站点", "point");
-        m_tableTypeCombo->addItem("线段",     "line");
-        m_tableTypeCombo->addItem("曲线",     "curve");
-        m_tableTypeCombo->addItem("充电点",   "charge");
-        m_tableTypeCombo->addItem("精定位点", "highPrecision");
-        m_tableTypeCombo->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:2px 4px; font-size:12px;");
-        connect(m_tableTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this]() {
-            m_currentTable = m_tableTypeCombo->currentData().toString();
-            refreshTable();
-        });
-        tl2->addWidget(m_tableTypeCombo);
-
-        m_featureTable = new QTableWidget;
-        m_featureTable->setColumnCount(2);
-        m_featureTable->setHorizontalHeaderLabels({"编号", "名称"});
-        m_featureTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-        m_featureTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-        m_featureTable->setSelectionMode(QAbstractItemView::SingleSelection);
-        m_featureTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        m_featureTable->setMaximumHeight(210);
-        m_featureTable->setStyleSheet(S_TABLE);
-        connect(m_featureTable, &QTableWidget::itemSelectionChanged, this, [this]() {
-            int row = m_featureTable->currentRow();
-            if (row < 0) return;
-            auto *it = m_featureTable->item(row, 0);
-            if (it) showFeatureProperties(m_currentTable, it->text());
-        });
-        tl2->addWidget(m_featureTable);
-
-        auto *delBtn = new QPushButton("删除选中");
-        delBtn->setStyleSheet(
-            "QPushButton{background:rgba(192,57,43,160);color:white;border:none;"
-            "border-radius:4px;padding:5px;font-size:11px;}"
-            "QPushButton:hover{background:rgba(231,76,60,190);}");
-        connect(delBtn, &QPushButton::clicked, this, &MapEditWidget::onDeleteFeature);
-        tl2->addWidget(delBtn);
-
-        m_tablePanel = card;
-        m_tablePanel->setVisible(false);
-        rl->addWidget(m_tablePanel);
-    }
+    // 4. 要素列表面板卡片
+    setupFeatureTableUI(rl);
 
     rl->addStretch();
-    editSplitter->addWidget(rightOuter);
-    editSplitter->setStretchFactor(0, 1);
-    editSplitter->setStretchFactor(1, 0);
-    editSplitter->setSizes({880, 360});
-    cl->addWidget(editSplitter, 1);
-    root->addWidget(content, 1);
+    splitter->addWidget(rightOuter);
+}
 
-    setFocusPolicy(Qt::StrongFocus);
-    setupShortcuts();
+void MapEditWidget::setupStationPropsUI(QVBoxLayout *layout)
+{
+    m_stationPropGroup = new QWidget;
+    m_stationPropGroup->setStyleSheet("background:transparent; border:none;");
+    auto *sl = new QVBoxLayout(m_stationPropGroup);
+    sl->setContentsMargins(0,0,0,0);
+    sl->setSpacing(4);
 
-    // 抢占控制权与遥控状态同步
-    connect(&TeleopController::instance(), &TeleopController::activeChanged,
-            this, &MapEditWidget::onTeleopActiveChanged);
-    onTeleopActiveChanged(TeleopController::instance().isActive());
+    // 基础信息
+    m_stationTypeCombo = new QComboBox;
+    m_stationTypeCombo->addItem("普通站点 (LM)", "point");
+    m_stationTypeCombo->addItem("充电桩 (CP)", "charge");
+    m_stationTypeCombo->addItem("高精定位点 (TL)", "highPrecision");
+    sl->addWidget(mkCheckableRow(m_chkStationType, "站点类型:", m_stationTypeCombo));
+
+    m_stationIdEdit = new QLineEdit;
+    m_stationIdEdit->setReadOnly(true);
+    m_stationIdEdit->setStyleSheet("background:#12151e; color:#627284; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
+    sl->addWidget(mkFormRow("站点编号:", m_stationIdEdit));
+
+    m_stationLabelEdit = new QLineEdit;
+    sl->addWidget(mkCheckableRow(m_chkStationLabel, "站点名称:", m_stationLabelEdit));
+
+    // 空间坐标
+    m_stationXSpin = new QDoubleSpinBox;
+    m_stationXSpin->setRange(-99999.0, 99999.0);
+    m_stationXSpin->setDecimals(3);
+    sl->addWidget(mkCheckableRow(m_chkStationX, "X 坐标:", m_stationXSpin, "m"));
+
+    m_stationYSpin = new QDoubleSpinBox;
+    m_stationYSpin->setRange(-99999.0, 99999.0);
+    m_stationYSpin->setDecimals(3);
+    sl->addWidget(mkCheckableRow(m_chkStationY, "Y 坐标:", m_stationYSpin, "m"));
+
+    m_stationYawSpin = new QDoubleSpinBox;
+    m_stationYawSpin->setRange(-360.0, 360.0);
+    m_stationYawSpin->setDecimals(1);
+    sl->addWidget(mkCheckableRow(m_chkStationYaw, "朝向角度:", m_stationYawSpin, "°"));
+
+    // 站点特性复选框
+    m_stationDockableChk = new QCheckBox("启用");
+    sl->addWidget(mkCheckableRow(m_chkStationDockable, "允许停靠:", m_stationDockableChk));
+
+    m_stationRotateChk = new QCheckBox("启用");
+    sl->addWidget(mkCheckableRow(m_chkStationRotate, "允许转身:", m_stationRotateChk));
+
+    m_stationPgvChk = new QCheckBox("启用");
+    sl->addWidget(mkCheckableRow(m_chkStationPgv, "使用下视PGV:", m_stationPgvChk));
+
+    // EPC 相对定位数据
+    m_stationEpcGroup = new QWidget;
+    m_stationEpcGroup->setStyleSheet("background:#141a26; border:1px solid #222b3c; border-radius:4px;");
+    auto *el = new QVBoxLayout(m_stationEpcGroup);
+    el->setContentsMargins(6,5,6,5);
+    el->setSpacing(3);
+    auto *epcTitle = new QLabel("设备相对校准 (EPC)");
+    epcTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
+    el->addWidget(epcTitle);
+    m_stationEpcXLabel = new QLabel("--");
+    m_stationEpcXLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
+    m_stationEpcYLabel = new QLabel("--");
+    m_stationEpcYLabel->setStyleSheet("color:#79a2c9; font-size:11px; border:none;");
+    el->addWidget(mkFormRow("epc X:", m_stationEpcXLabel));
+    el->addWidget(mkFormRow("epc Y:", m_stationEpcYLabel));
+    sl->addWidget(m_stationEpcGroup);
+    m_stationEpcGroup->setVisible(false);
+
+    layout->addWidget(m_stationPropGroup);
+}
+
+void MapEditWidget::setupLinePropsUI(QVBoxLayout *layout)
+{
+    m_linePropGroup = new QWidget;
+    m_linePropGroup->setStyleSheet("background:transparent; border:none;");
+    auto *ll = new QVBoxLayout(m_linePropGroup);
+    ll->setContentsMargins(0,0,0,0);
+    ll->setSpacing(4);
+
+    // 基础信息
+    m_lineTypeCombo = new QComboBox;
+    m_lineTypeCombo->addItem("直线", "line");
+    m_lineTypeCombo->addItem("贝塞尔曲线", "curve");
+    ll->addWidget(mkFormRow("线路类型:", m_lineTypeCombo));
+
+    m_lineIdEdit = new QLineEdit;
+    m_lineIdEdit->setReadOnly(true);
+    m_lineIdEdit->setStyleSheet("background:#12151e; color:#627284; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
+    ll->addWidget(mkFormRow("线路编号:", m_lineIdEdit));
+
+    m_lineNameEdit = new QLineEdit;
+    ll->addWidget(mkCheckableRow(m_chkLineName, "线路名称:", m_lineNameEdit));
+
+    // 起止端点
+    m_lineStartLabel = new QLabel("--");
+    m_lineStartLabel->setStyleSheet("background:#12151e; color:#79a2c9; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
+    ll->addWidget(mkFormRow("起点 (Pos1):", m_lineStartLabel));
+
+    m_lineEndLabel = new QLabel("--");
+    m_lineEndLabel->setStyleSheet("background:#12151e; color:#79a2c9; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
+    ll->addWidget(mkFormRow("终点 (Pos2):", m_lineEndLabel));
+
+    // 运动方向
+    auto *dirRow = new QWidget;
+    dirRow->setStyleSheet("background:transparent; border:none;");
+    auto *dirl = new QHBoxLayout(dirRow);
+    dirl->setContentsMargins(0,0,0,0);
+    dirl->setSpacing(4);
+    m_lineDirectCombo = new QComboBox;
+    m_lineDirectCombo->addItem("双向 ↔", 10);
+    m_lineDirectCombo->addItem("单向前进 →", 0);
+    m_lineDirectCombo->addItem("单向后退 ←", 1);
+    m_lineFlipDirBtn = new QPushButton("⇄ 翻转");
+    m_lineFlipDirBtn->setToolTip("翻转单向行进方向或交换端点");
+    m_lineFlipDirBtn->setFixedWidth(52);
+    m_lineFlipDirBtn->setStyleSheet(
+        "QPushButton{background:#1e2736; border:1px solid #2e3d54; border-radius:3px; color:#8fa6bf; font-size:11px; padding:2px 4px;}"
+        "QPushButton:hover{background:#2a374c; color:#fff;}");
+    connect(m_lineFlipDirBtn, &QPushButton::clicked, this, [this]() {
+        int curDirect = m_lineDirectCombo->currentData().toInt();
+        if (curDirect == 0)      m_lineDirectCombo->setCurrentIndex(2);
+        else if (curDirect == 1) m_lineDirectCombo->setCurrentIndex(1);
+        else {
+            QString t1 = m_lineStartLabel->text();
+            m_lineStartLabel->setText(m_lineEndLabel->text());
+            m_lineEndLabel->setText(t1);
+        }
+    });
+    dirl->addWidget(m_lineDirectCombo, 1);
+    dirl->addWidget(m_lineFlipDirBtn);
+    ll->addWidget(mkCheckableRow(m_chkLineDirect, "运动方向:", dirRow));
+
+    // 运动控制参数卡片
+    auto *motionCard = new QWidget;
+    motionCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
+    auto *mcl = new QVBoxLayout(motionCard);
+    mcl->setContentsMargins(6,5,6,5);
+    mcl->setSpacing(3);
+    auto *mTitle = new QLabel("运动控制参数");
+    mTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
+    mcl->addWidget(mTitle);
+
+    m_lineMaxSpeedSpin = new QDoubleSpinBox;
+    m_lineMaxSpeedSpin->setSingleStep(0.05);
+    mcl->addWidget(mkCheckableRow(m_chkLineMaxSpeed, "最大速度:", m_lineMaxSpeedSpin, "m/s"));
+
+    m_lineMaxAccSpin = new QDoubleSpinBox;
+    m_lineMaxAccSpin->setSingleStep(0.05);
+    mcl->addWidget(mkCheckableRow(m_chkLineMaxAcc, "最大加速度:", m_lineMaxAccSpin, "m/s²"));
+
+    m_lineMaxDecSpin = new QDoubleSpinBox;
+    m_lineMaxDecSpin->setSingleStep(0.05);
+    QWidget *rowMaxDec = mkFormRow("最大减速度:", m_lineMaxDecSpin, "m/s²");
+    rowMaxDec->setVisible(false); // 隐藏最大减速度 UI
+    mcl->addWidget(rowMaxDec);
+
+    m_lineMaxRotSpin = new QDoubleSpinBox;
+    m_lineMaxRotSpin->setSingleStep(5.0);
+    mcl->addWidget(mkCheckableRow(m_chkLineMaxRot, "最大角速度:", m_lineMaxRotSpin, "°/s"));
+
+    m_lineMaxRotAccSpin = new QDoubleSpinBox;
+    m_lineMaxRotAccSpin->setSingleStep(5.0);
+    mcl->addWidget(mkCheckableRow(m_chkLineMaxRotAcc, "最大角加减:", m_lineMaxRotAccSpin, "°/s²"));
+
+    m_lineReachDistSpin = new QDoubleSpinBox;
+    m_lineReachDistSpin->setSingleStep(0.01);
+    mcl->addWidget(mkCheckableRow(m_chkLineReachDist, "到达距离精度:", m_lineReachDistSpin, "m"));
+
+    m_lineReachAngleSpin = new QDoubleSpinBox;
+    m_lineReachAngleSpin->setSingleStep(0.1);
+    mcl->addWidget(mkCheckableRow(m_chkLineReachAngle, "到达角度精度:", m_lineReachAngleSpin, "°"));
+
+    m_lineRoadWidthSpin = new QDoubleSpinBox;
+    m_lineRoadWidthSpin->setSingleStep(0.5);
+    mcl->addWidget(mkCheckableRow(m_chkLineRoadWidth, "路线宽度:", m_lineRoadWidthSpin, "m"));
+
+    ll->addWidget(motionCard);
+
+    // 实时避障范围卡片 (对齐 base.json 规范)
+    auto *obsCard = new QWidget;
+    obsCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
+    auto *ocl = new QVBoxLayout(obsCard);
+    ocl->setContentsMargins(6,5,6,5);
+    ocl->setSpacing(3);
+    auto *oTitle = new QLabel("实时避障范围");
+    oTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
+    ocl->addWidget(oTitle);
+
+    m_lineObsStopLenSpin = new QDoubleSpinBox;
+    m_lineObsStopLenSpin->setRange(0.00, 5.00);
+    m_lineObsStopLenSpin->setSingleStep(0.05);
+    m_lineObsStopLenSpin->setValue(0.00);
+    m_lineObsStopLenSpin->setToolTip("正向停止膨胀半径 (intrusion_stop_length)");
+    ocl->addWidget(mkCheckableRow(m_chkLineObsStopLen, "正向停止膨胀:", m_lineObsStopLenSpin, "m"));
+
+    m_lineObsStopWidSpin = new QDoubleSpinBox;
+    m_lineObsStopWidSpin->setRange(0.00, 5.00);
+    m_lineObsStopWidSpin->setSingleStep(0.05);
+    m_lineObsStopWidSpin->setValue(0.00);
+    m_lineObsStopWidSpin->setToolTip("侧向停止膨胀半径 (intrusion_stop_width)");
+    ocl->addWidget(mkCheckableRow(m_chkLineObsStopWid, "侧向停止膨胀:", m_lineObsStopWidSpin, "m"));
+
+    m_lineObsDecelLenSpin = new QDoubleSpinBox;
+    m_lineObsDecelLenSpin->setRange(0.00, 5.00);
+    m_lineObsDecelLenSpin->setSingleStep(0.05);
+    m_lineObsDecelLenSpin->setValue(0.00);
+    m_lineObsDecelLenSpin->setToolTip("正向减速膨胀半径 (intrusion_deceleration_length)");
+    ocl->addWidget(mkCheckableRow(m_chkLineObsDecelLen, "正向减速膨胀:", m_lineObsDecelLenSpin, "m"));
+
+    m_lineObsDecelWidSpin = new QDoubleSpinBox;
+    m_lineObsDecelWidSpin->setRange(0.00, 5.00);
+    m_lineObsDecelWidSpin->setSingleStep(0.05);
+    m_lineObsDecelWidSpin->setValue(0.00);
+    m_lineObsDecelWidSpin->setToolTip("侧向减速膨胀半径 (intrusion_deceleration_width)");
+    ocl->addWidget(mkCheckableRow(m_chkLineObsDecelWid, "侧向减速膨胀:", m_lineObsDecelWidSpin, "m"));
+
+    ll->addWidget(obsCard);
+    layout->addWidget(m_linePropGroup);
+}
+
+void MapEditWidget::setupAreaPropsUI(QVBoxLayout *layout)
+{
+    m_areaPropGroup = new QWidget;
+    m_areaPropGroup->setStyleSheet("background:transparent; border:none;");
+    auto *al = new QVBoxLayout(m_areaPropGroup);
+    al->setContentsMargins(0,0,0,0);
+    al->setSpacing(4);
+
+    // 基础信息
+    m_areaNameEdit = new QLineEdit("AdvancedArea");
+    al->addWidget(mkCheckableRow(m_chkAreaName, "区域名称:", m_areaNameEdit));
+
+    m_areaBoundsLabel = new QLabel("--");
+    m_areaBoundsLabel->setStyleSheet("background:#12151e; color:#79a2c9; border:1px solid #232b3b; border-radius:3px; padding:2px 5px; font-size:11px;");
+    al->addWidget(mkFormRow("区域范围:", m_areaBoundsLabel));
+
+    // 运动控制参数卡片
+    auto *areaMotionCard = new QWidget;
+    areaMotionCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
+    auto *amcl = new QVBoxLayout(areaMotionCard);
+    amcl->setContentsMargins(6,5,6,5);
+    amcl->setSpacing(3);
+    auto *amTitle = new QLabel("运动控制参数");
+    amTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
+    amcl->addWidget(amTitle);
+
+    m_areaMaxSpeedSpin = new QDoubleSpinBox;
+    m_areaMaxSpeedSpin->setSingleStep(0.05);
+    amcl->addWidget(mkCheckableRow(m_chkAreaMaxSpeed, "最大速度:", m_areaMaxSpeedSpin, "m/s"));
+
+    m_areaMaxAccSpin = new QDoubleSpinBox;
+    m_areaMaxAccSpin->setSingleStep(0.05);
+    amcl->addWidget(mkCheckableRow(m_chkAreaMaxAcc, "最大加速度:", m_areaMaxAccSpin, "m/s²"));
+
+    m_areaMaxRotSpin = new QDoubleSpinBox;
+    m_areaMaxRotSpin->setSingleStep(5.0);
+    amcl->addWidget(mkCheckableRow(m_chkAreaMaxRot, "最大角速度:", m_areaMaxRotSpin, "°/s"));
+
+    m_areaMaxRotAccSpin = new QDoubleSpinBox;
+    m_areaMaxRotAccSpin->setSingleStep(5.0);
+    amcl->addWidget(mkCheckableRow(m_chkAreaMaxRotAcc, "最大角加减:", m_areaMaxRotAccSpin, "°/s²"));
+
+    m_areaReachDistSpin = new QDoubleSpinBox;
+    m_areaReachDistSpin->setSingleStep(0.01);
+    amcl->addWidget(mkCheckableRow(m_chkAreaReachDist, "到达距离精度:", m_areaReachDistSpin, "m"));
+
+    m_areaReachAngleSpin = new QDoubleSpinBox;
+    m_areaReachAngleSpin->setSingleStep(0.1);
+    amcl->addWidget(mkCheckableRow(m_chkAreaReachAngle, "到达角度精度:", m_areaReachAngleSpin, "°"));
+
+    m_areaRoadWidthSpin = new QDoubleSpinBox;
+    m_areaRoadWidthSpin->setSingleStep(0.5);
+    amcl->addWidget(mkCheckableRow(m_chkAreaRoadWidth, "路线宽度:", m_areaRoadWidthSpin, "m"));
+
+    al->addWidget(areaMotionCard);
+
+    // 实时避障范围卡片
+    auto *areaObsCard = new QWidget;
+    areaObsCard->setStyleSheet("background:#161c28; border:1px solid #232d3e; border-radius:4px;");
+    auto *aocl = new QVBoxLayout(areaObsCard);
+    aocl->setContentsMargins(6,5,6,5);
+    aocl->setSpacing(3);
+    auto *aoTitle = new QLabel("实时避障范围");
+    aoTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
+    aocl->addWidget(aoTitle);
+
+    m_areaObsStopLenSpin = new QDoubleSpinBox;
+    m_areaObsStopLenSpin->setRange(0.00, 5.00);
+    m_areaObsStopLenSpin->setSingleStep(0.05);
+    m_areaObsStopLenSpin->setValue(0.00);
+    aocl->addWidget(mkCheckableRow(m_chkAreaObsStopLen, "正向停止膨胀:", m_areaObsStopLenSpin, "m"));
+
+    m_areaObsStopWidSpin = new QDoubleSpinBox;
+    m_areaObsStopWidSpin->setRange(0.00, 5.00);
+    m_areaObsStopWidSpin->setSingleStep(0.05);
+    m_areaObsStopWidSpin->setValue(0.00);
+    aocl->addWidget(mkCheckableRow(m_chkAreaObsStopWid, "侧向停止膨胀:", m_areaObsStopWidSpin, "m"));
+
+    m_areaObsDecelLenSpin = new QDoubleSpinBox;
+    m_areaObsDecelLenSpin->setRange(0.00, 5.00);
+    m_areaObsDecelLenSpin->setSingleStep(0.05);
+    m_areaObsDecelLenSpin->setValue(0.00);
+    aocl->addWidget(mkCheckableRow(m_chkAreaObsDecelLen, "正向减速膨胀:", m_areaObsDecelLenSpin, "m"));
+
+    m_areaObsDecelWidSpin = new QDoubleSpinBox;
+    m_areaObsDecelWidSpin->setRange(0.00, 5.00);
+    m_areaObsDecelWidSpin->setSingleStep(0.05);
+    m_areaObsDecelWidSpin->setValue(0.00);
+    aocl->addWidget(mkCheckableRow(m_chkAreaObsDecelWid, "侧向减速膨胀:", m_areaObsDecelWidSpin, "m"));
+
+    al->addWidget(areaObsCard);
+    layout->addWidget(m_areaPropGroup);
+}
+
+void MapEditWidget::setupFeatureTableUI(QVBoxLayout *layout)
+{
+    auto [card, tl2] = mkCardContainer("要素列表");
+
+    m_tableTypeCombo = new QComboBox;
+    m_tableTypeCombo->addItem("普通站点", "point");
+    m_tableTypeCombo->addItem("线段",     "line");
+    m_tableTypeCombo->addItem("曲线",     "curve");
+    m_tableTypeCombo->addItem("充电点",   "charge");
+    m_tableTypeCombo->addItem("精定位点", "highPrecision");
+    m_tableTypeCombo->setStyleSheet("background:#1e2d40; color:#b0c8e0; border:1px solid rgba(255,255,255,0.10); border-radius:3px; padding:2px 4px; font-size:12px;");
+    connect(m_tableTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this]() {
+        m_currentTable = m_tableTypeCombo->currentData().toString();
+        refreshTable();
+    });
+    tl2->addWidget(m_tableTypeCombo);
+
+    m_featureTable = new QTableWidget;
+    m_featureTable->setColumnCount(2);
+    m_featureTable->setHorizontalHeaderLabels({"编号", "名称"});
+    m_featureTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_featureTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_featureTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_featureTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_featureTable->setMaximumHeight(210);
+    m_featureTable->setStyleSheet(S_TABLE);
+    connect(m_featureTable, &QTableWidget::itemSelectionChanged, this, [this]() {
+        int row = m_featureTable->currentRow();
+        if (row < 0) return;
+        auto *it = m_featureTable->item(row, 0);
+        if (it) showFeatureProperties(m_currentTable, it->text());
+    });
+    tl2->addWidget(m_featureTable);
+
+    auto *delBtn = new QPushButton("删除选中");
+    delBtn->setStyleSheet(
+        "QPushButton{background:rgba(192,57,43,160);color:white;border:none;"
+        "border-radius:4px;padding:5px;font-size:11px;}"
+        "QPushButton:hover{background:rgba(231,76,60,190);}");
+    connect(delBtn, &QPushButton::clicked, this, &MapEditWidget::onDeleteFeature);
+    tl2->addWidget(delBtn);
+
+    m_tablePanel = card;
+    m_tablePanel->setVisible(false);
+    layout->addWidget(m_tablePanel);
+}
+
+void MapEditWidget::syncMotionSpinBoxRanges()
+{
+    const auto &cfg = MotionConfigManager::instance();
+    double minSpd = cfg.paramMin("max_speed", 0.0);
+    double maxSpd = cfg.paramMax("max_speed", 1.0);
+    double minAcc = cfg.paramMin("max_acceleration", 0.3);
+    double maxAcc = cfg.paramMax("max_acceleration", 0.5);
+    double minDec = cfg.paramMin("max_deceleration", 0.3);
+    double maxDec = cfg.paramMax("max_deceleration", 0.5);
+    double minRot = cfg.paramMin("max_angular_speed", 5.0);
+    double maxRot = cfg.paramMax("max_angular_speed", 60.0);
+    double minRotAcc = cfg.paramMin("max_angular_acceleration", 10.0);
+    double maxRotAcc = cfg.paramMax("max_angular_acceleration", 30.0);
+    double maxReachDist = qMax(1.0, cfg.arrivalDistanceTolerance());
+    double maxReachAngle = qMax(45.0, cfg.arrivalAngleToleranceDeg());
+    double maxRoadWidth = qMax(10.0, cfg.routeWidth());
+
+    auto syncSpin = [](QDoubleSpinBox *spin, double minVal, double maxVal, const QString &tipFmt = QString(), double defVal = 0.0) {
+        if (!spin) return;
+        spin->setRange(minVal, maxVal);
+        if (!tipFmt.isEmpty()) {
+            spin->setToolTip(tipFmt.arg(minVal, 0, 'f', 2).arg(maxVal, 0, 'f', 2));
+        }
+        if (spin->value() == 0.0 && defVal > 0.0) spin->setValue(defVal);
+        else if (spin->value() > maxVal) spin->setValue(maxVal);
+        else if (spin->value() < minVal) spin->setValue(minVal);
+    };
+
+    // 线路参数
+    syncSpin(m_lineMaxSpeedSpin, minSpd, maxSpd, "受全局配置范围控制 (范围: [%1, %2] m/s)", cfg.maxSpeed());
+    syncSpin(m_lineMaxAccSpin, minAcc, maxAcc, "受全局配置范围控制 (范围: [%1, %2] m/s²)", cfg.maxAcceleration());
+    syncSpin(m_lineMaxDecSpin, minDec, maxDec, "受全局配置范围控制 (范围: [%1, %2] m/s²)", cfg.maxDeceleration());
+    if (m_lineMaxRotSpin) {
+        m_lineMaxRotSpin->setRange(minRot, maxRot);
+        m_lineMaxRotSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s)").arg(minRot, 0, 'f', 1).arg(maxRot, 0, 'f', 1));
+        if (m_lineMaxRotSpin->value() == 0.0) m_lineMaxRotSpin->setValue(cfg.maxAngularSpeedDeg());
+        else if (m_lineMaxRotSpin->value() > maxRot) m_lineMaxRotSpin->setValue(maxRot);
+        else if (m_lineMaxRotSpin->value() < minRot) m_lineMaxRotSpin->setValue(minRot);
+    }
+    if (m_lineMaxRotAccSpin) {
+        m_lineMaxRotAccSpin->setRange(minRotAcc, maxRotAcc);
+        m_lineMaxRotAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s²)").arg(minRotAcc, 0, 'f', 1).arg(maxRotAcc, 0, 'f', 1));
+        if (m_lineMaxRotAccSpin->value() == 0.0) m_lineMaxRotAccSpin->setValue(cfg.maxAngularAccelerationDeg());
+        else if (m_lineMaxRotAccSpin->value() > maxRotAcc) m_lineMaxRotAccSpin->setValue(maxRotAcc);
+        else if (m_lineMaxRotAccSpin->value() < minRotAcc) m_lineMaxRotAccSpin->setValue(minRotAcc);
+    }
+    if (m_lineReachDistSpin) {
+        m_lineReachDistSpin->setRange(0.01, maxReachDist);
+        if (m_lineReachDistSpin->value() == 0.0) m_lineReachDistSpin->setValue(cfg.arrivalDistanceTolerance());
+    }
+    if (m_lineReachAngleSpin) {
+        m_lineReachAngleSpin->setRange(0.1, maxReachAngle);
+        if (m_lineReachAngleSpin->value() == 0.0) m_lineReachAngleSpin->setValue(cfg.arrivalAngleToleranceDeg());
+    }
+    if (m_lineRoadWidthSpin) {
+        m_lineRoadWidthSpin->setRange(0.5, maxRoadWidth);
+        if (m_lineRoadWidthSpin->value() == 0.0) m_lineRoadWidthSpin->setValue(cfg.routeWidth());
+    }
+
+    // 区域参数
+    syncSpin(m_areaMaxSpeedSpin, minSpd, maxSpd, "受全局配置范围控制 (范围: [%1, %2] m/s)", cfg.maxSpeed());
+    syncSpin(m_areaMaxAccSpin, minAcc, maxAcc, "受全局配置范围控制 (范围: [%1, %2] m/s²)", cfg.maxAcceleration());
+    if (m_areaMaxRotSpin) {
+        m_areaMaxRotSpin->setRange(minRot, maxRot);
+        m_areaMaxRotSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s)").arg(minRot, 0, 'f', 1).arg(maxRot, 0, 'f', 1));
+        if (m_areaMaxRotSpin->value() == 0.0) m_areaMaxRotSpin->setValue(cfg.maxAngularSpeedDeg());
+        else if (m_areaMaxRotSpin->value() > maxRot) m_areaMaxRotSpin->setValue(maxRot);
+        else if (m_areaMaxRotSpin->value() < minRot) m_areaMaxRotSpin->setValue(minRot);
+    }
+    if (m_areaMaxRotAccSpin) {
+        m_areaMaxRotAccSpin->setRange(minRotAcc, maxRotAcc);
+        m_areaMaxRotAccSpin->setToolTip(QString("受全局配置范围控制 (范围: [%1, %2] °/s²)").arg(minRotAcc, 0, 'f', 1).arg(maxRotAcc, 0, 'f', 1));
+        if (m_areaMaxRotAccSpin->value() == 0.0) m_areaMaxRotAccSpin->setValue(cfg.maxAngularAccelerationDeg());
+        else if (m_areaMaxRotAccSpin->value() > maxRotAcc) m_areaMaxRotAccSpin->setValue(maxRotAcc);
+        else if (m_areaMaxRotAccSpin->value() < minRotAcc) m_areaMaxRotAccSpin->setValue(minRotAcc);
+    }
+    if (m_areaReachDistSpin) {
+        m_areaReachDistSpin->setRange(0.01, maxReachDist);
+        if (m_areaReachDistSpin->value() == 0.0) m_areaReachDistSpin->setValue(cfg.arrivalDistanceTolerance());
+    }
+    if (m_areaReachAngleSpin) {
+        m_areaReachAngleSpin->setRange(0.1, maxReachAngle);
+        if (m_areaReachAngleSpin->value() == 0.0) m_areaReachAngleSpin->setValue(cfg.arrivalAngleToleranceDeg());
+    }
+    if (m_areaRoadWidthSpin) {
+        m_areaRoadWidthSpin->setRange(0.5, maxRoadWidth);
+        if (m_areaRoadWidthSpin->value() == 0.0) m_areaRoadWidthSpin->setValue(cfg.routeWidth());
+    }
 }
 
 // ── Snap helpers ──────────────────────────────────────────────────────────────
@@ -1911,10 +1990,10 @@ void MapEditWidget::loadRouteData()
             }
         };
 
-        if (root.contains("highLevel Area")) {
-            parseAreasFromVal(root.value("highLevel Area"));
-        } else if (root.contains("highLevelArea")) {
+        if (root.contains("highLevelArea")) {
             parseAreasFromVal(root.value("highLevelArea"));
+        } else if (root.contains("highLevel Area")) {
+            parseAreasFromVal(root.value("highLevel Area"));
         } else if (root.contains("highLevelAreas")) {
             parseAreasFromVal(root.value("highLevelAreas"));
         }
@@ -1927,6 +2006,22 @@ void MapEditWidget::loadRouteData()
             if (a.value("name").toString().isEmpty()) {
                 a["name"] = QString("AdvancedArea %1").arg(i + 1);
             }
+
+            double minX = 0, maxX = 0, minY = 0, maxY = 0;
+            extractAreaBounds(a, minX, maxX, minY, maxY);
+
+            QJsonArray coords;
+            QJsonArray pTL, pBR;
+            pTL.append(minX); pTL.append(maxY);
+            pBR.append(maxX); pBR.append(minY);
+            coords.append(pTL); coords.append(pBR);
+            a["coordinates"] = coords;
+
+            a.remove("minX");
+            a.remove("maxX");
+            a.remove("minY");
+            a.remove("maxY");
+
             m_highLevelAreas[i] = a;
         }
 
@@ -2073,24 +2168,8 @@ void MapEditWidget::loadReflectorData()
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-void MapEditWidget::renderMap()
+void MapEditWidget::renderHighLevelAreas()
 {
-    m_scene->clear();
-    m_featureItems.clear();
-    m_curveHandles.clear();
-    m_previewItem   = nullptr;
-    m_previewAids.clear();      // scene->clear() 已删除这些 items，清空指针避免 double-free
-    m_selItem       = nullptr;
-    m_snapIndicator = nullptr;   // scene cleared
-    m_robotItem     = nullptr;  // scene cleared
-    m_mapBgItem     = nullptr;
-
-    if (!m_mapImage.isNull()) {
-        m_mapBgItem = m_scene->addPixmap(QPixmap::fromImage(m_mapImage));
-        m_mapBgItem->setTransformationMode(Qt::SmoothTransformation);
-        m_mapBgItem->setZValue(-100);
-    }
-
     // 渲染高级区域列表 (Z = -10，高于底图，低于点线；精细边框+1/4缩小文字，无中心菱形块)
     for (int idx = 0; idx < m_highLevelAreas.size(); ++idx) {
         QJsonObject areaObj = m_highLevelAreas[idx].toObject();
@@ -2101,10 +2180,8 @@ void MapEditWidget::renderMap()
             m_highLevelAreas[idx] = areaObj;
         }
 
-        double minX = areaObj.value("minX").toDouble();
-        double maxX = areaObj.value("maxX").toDouble();
-        double minY = areaObj.value("minY").toDouble();
-        double maxY = areaObj.value("maxY").toDouble();
+        double minX = 0, maxX = 0, minY = 0, maxY = 0;
+        extractAreaBounds(areaObj, minX, maxX, minY, maxY);
         QPointF p1 = worldToScene(minX, maxY);
         QPointF p2 = worldToScene(maxX, minY);
         QRectF rect = QRectF(p1, p2).normalized();
@@ -2155,7 +2232,10 @@ void MapEditWidget::renderMap()
             }
         }
     }
+}
 
+void MapEditWidget::renderStationNodes()
+{
     double pxPerMeterX = (m_imgW > 0 && (m_worldR > m_worldL)) ? (m_imgW / (m_worldR - m_worldL)) : 20.0;
     double pxPerMeterY = (m_imgH > 0 && (m_worldT > m_worldB)) ? (m_imgH / (m_worldT - m_worldB)) : 20.0;
 
@@ -2244,7 +2324,10 @@ void MapEditWidget::renderMap()
     for (const auto &v : m_points)              addNode(v.toObject(), QColor(210, 230, 250, 235), QColor(41, 128, 185, 240), "point");
     for (const auto &v : m_charges)             addNode(v.toObject(), QColor(254, 243, 199, 235), QColor(217, 119, 6, 240), "charge");
     for (const auto &v : m_highPrecisionPoints) addNode(v.toObject(), QColor(254, 226, 226, 235), QColor(220, 38, 38, 240), "highPrecision", true);
+}
 
+void MapEditWidget::renderRouteLines()
+{
     for (const auto &v : m_lines) {
         QJsonObject ln = v.toObject();
         QPointF a = worldToScene(ln.value("x1").toDouble(), ln.value("y1").toDouble());
@@ -2272,7 +2355,10 @@ void MapEditWidget::renderMap()
             }
         }
     }
+}
 
+void MapEditWidget::renderRouteCurves()
+{
     for (const auto &v : m_curves) {
         QJsonObject cv = v.toObject();
         QString id     = cv.value("id").toString();
@@ -2317,23 +2403,51 @@ void MapEditWidget::renderMap()
 
         rebuildCurveHandles(id);
     }
+}
 
+void MapEditWidget::renderReflectorPoles()
+{
     // 反光柱：开关控制显示，标准 GeoJSON Feature 数组，geometry.coordinates=[x,y]
-    if (m_showReflectors) {
-        auto toDbl = [](const QJsonValue &v) {
-            return v.isString() ? v.toString().toDouble() : v.toDouble();
-        };
-        for (const auto &v : m_reflectorPoles) {
-            QJsonObject f = v.toObject();
-            QJsonArray coords = f.value("geometry").toObject().value("coordinates").toArray();
-            if (coords.size() < 2) continue;
-            QPointF sp = worldToScene(toDbl(coords[0]), toDbl(coords[1]));
-            auto *e = m_scene->addEllipse(-5, -5, 10, 10,
-                QPen(QColor("#caa020"), 1.5), QBrush(QColor("#f0c040")));
-            e->setPos(sp);
-            e->setZValue(8);
-        }
+    if (!m_showReflectors) return;
+
+    auto toDbl = [](const QJsonValue &v) {
+        return v.isString() ? v.toString().toDouble() : v.toDouble();
+    };
+    for (const auto &v : m_reflectorPoles) {
+        QJsonObject f = v.toObject();
+        QJsonArray coords = f.value("geometry").toObject().value("coordinates").toArray();
+        if (coords.size() < 2) continue;
+        QPointF sp = worldToScene(toDbl(coords[0]), toDbl(coords[1]));
+        auto *e = m_scene->addEllipse(-5, -5, 10, 10,
+            QPen(QColor("#caa020"), 1.5), QBrush(QColor("#f0c040")));
+        e->setPos(sp);
+        e->setZValue(8);
     }
+}
+
+void MapEditWidget::renderMap()
+{
+    m_scene->clear();
+    m_featureItems.clear();
+    m_curveHandles.clear();
+    m_previewItem   = nullptr;
+    m_previewAids.clear();      // scene->clear() 已删除这些 items，清空指针避免 double-free
+    m_selItem       = nullptr;
+    m_snapIndicator = nullptr;   // scene cleared
+    m_robotItem     = nullptr;  // scene cleared
+    m_mapBgItem     = nullptr;
+
+    if (!m_mapImage.isNull()) {
+        m_mapBgItem = m_scene->addPixmap(QPixmap::fromImage(m_mapImage));
+        m_mapBgItem->setTransformationMode(Qt::SmoothTransformation);
+        m_mapBgItem->setZValue(-100);
+    }
+
+    renderHighLevelAreas();
+    renderStationNodes();
+    renderRouteLines();
+    renderRouteCurves();
+    renderReflectorPoles();
 
     if (m_showGrid) updateGrid();
     m_scene->setSceneRect(0, 0, m_imgW, m_imgH);
@@ -3201,10 +3315,8 @@ void MapEditWidget::selectFeatureAt(const QPointF &sp)
     for (int idx = m_highLevelAreas.size() - 1; idx >= 0; --idx) {
         QJsonObject areaObj = m_highLevelAreas[idx].toObject();
         QString areaId = areaObj.value("id").toString();
-        double minX = areaObj.value("minX").toDouble();
-        double maxX = areaObj.value("maxX").toDouble();
-        double minY = areaObj.value("minY").toDouble();
-        double maxY = areaObj.value("maxY").toDouble();
+        double minX = 0, maxX = 0, minY = 0, maxY = 0;
+        extractAreaBounds(areaObj, minX, maxX, minY, maxY);
         QPointF p1 = worldToScene(minX, maxY);
         QPointF p2 = worldToScene(maxX, minY);
         QRectF areaRect = QRectF(p1, p2).normalized();
@@ -3224,6 +3336,222 @@ void MapEditWidget::clearSelection()
     m_propsPanel->setVisible(false);
 }
 
+void MapEditWidget::populateAreaProps(const QJsonObject &obj)
+{
+    m_propHeaderTitle->setText("高级区域属性");
+    m_propHeaderBadge->setText("AA");
+    m_propHeaderBadge->setStyleSheet("background:#3b1d5c; color:#c084fc; border:1px solid #7c3aed; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
+
+    m_stationPropGroup->setVisible(false);
+    m_linePropGroup->setVisible(false);
+    m_areaPropGroup->setVisible(true);
+
+    m_areaNameEdit->setText(obj.value("name").toString("AdvancedArea"));
+    double minX = 0, maxX = 0, minY = 0, maxY = 0;
+    extractAreaBounds(obj, minX, maxX, minY, maxY);
+    m_areaBoundsLabel->setText(QString("X: [%1, %2]  Y: [%3, %4]")
+        .arg(minX, 0, 'f', 2).arg(maxX, 0, 'f', 2).arg(minY, 0, 'f', 2).arg(maxY, 0, 'f', 2));
+
+    const auto &mc = MotionConfigManager::instance();
+    syncMotionSpinBoxRanges();
+
+    double spd = obj.contains("max_speed") ? obj.value("max_speed").toDouble(mc.maxSpeed()) : mc.maxSpeed();
+    double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble(mc.maxAcceleration()) : mc.maxAcceleration();
+    double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble(mc.maxAngularSpeedDeg()) : mc.maxAngularSpeedDeg();
+    double rotAcc = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble(mc.maxAngularAccelerationDeg()) : mc.maxAngularAccelerationDeg();
+    double reachDist = obj.contains("arrival_distance_tolerance") ? obj.value("arrival_distance_tolerance").toDouble(mc.arrivalDistanceTolerance()) : mc.arrivalDistanceTolerance();
+    double reachAngle = obj.contains("arrival_angle_tolerance") ? obj.value("arrival_angle_tolerance").toDouble(mc.arrivalAngleToleranceDeg()) : mc.arrivalAngleToleranceDeg();
+    double roadWidth = obj.contains("route_width") ? obj.value("route_width").toDouble(mc.routeWidth()) : mc.routeWidth();
+
+    m_areaMaxSpeedSpin->setValue(spd);
+    m_areaMaxAccSpin->setValue(acc);
+    m_areaMaxRotSpin->setValue(rot);
+    m_areaMaxRotAccSpin->setValue(rotAcc);
+    m_areaReachDistSpin->setValue(reachDist);
+    m_areaReachAngleSpin->setValue(reachAngle);
+    m_areaRoadWidthSpin->setValue(roadWidth);
+
+    double sl = obj.contains("intrusion_stop_length") ? obj.value("intrusion_stop_length").toDouble(0.0) : 0.0;
+    double sw = obj.contains("intrusion_stop_width") ? obj.value("intrusion_stop_width").toDouble(0.0) : 0.0;
+    double dl = obj.contains("intrusion_deceleration_length") ? obj.value("intrusion_deceleration_length").toDouble(0.0) : 0.0;
+    double dw = obj.contains("intrusion_deceleration_width") ? obj.value("intrusion_deceleration_width").toDouble(0.0) : 0.0;
+
+    m_areaObsStopLenSpin->setValue(sl);
+    m_areaObsStopWidSpin->setValue(sw);
+    m_areaObsDecelLenSpin->setValue(dl);
+    m_areaObsDecelWidSpin->setValue(dw);
+
+    // 恢复勾选状态 (通过 checked_props 数组控制)
+    restoreCheckedProps(obj.value("checked_props").toArray(), {
+        {m_chkAreaName, "name"},
+        {m_chkAreaMaxSpeed, "maxspeed"},
+        {m_chkAreaMaxAcc, "maxacc"},
+        {m_chkAreaMaxRot, "maxrot"},
+        {m_chkAreaMaxRotAcc, "maxrotacc"},
+        {m_chkAreaReachDist, "reachdist"},
+        {m_chkAreaReachAngle, "reachangle"},
+        {m_chkAreaRoadWidth, "width"},
+        {m_chkAreaObsStopLen, "intrusion_stop_length"},
+        {m_chkAreaObsStopWid, "intrusion_stop_width"},
+        {m_chkAreaObsDecelLen, "intrusion_deceleration_length"},
+        {m_chkAreaObsDecelWid, "intrusion_deceleration_width"}
+    });
+}
+
+void MapEditWidget::populateStationProps(const QJsonObject &obj, const QString &type, const QString &id)
+{
+    m_propHeaderTitle->setText("站点属性");
+    QString badgeText = (type == "point") ? "LM" : ((type == "charge") ? "CP" : "TL");
+    QString badgeStyle = (type == "point")
+        ? "background:#1e3a5f; color:#60a5fa; border:1px solid #2563eb; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;"
+        : ((type == "charge")
+            ? "background:#4d3800; color:#fbbf24; border:1px solid #d97706; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;"
+            : "background:#4d1414; color:#f87171; border:1px solid #dc2626; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
+    m_propHeaderBadge->setText(badgeText);
+    m_propHeaderBadge->setStyleSheet(badgeStyle);
+
+    m_stationPropGroup->setVisible(true);
+    m_linePropGroup->setVisible(false);
+    m_areaPropGroup->setVisible(false);
+
+    int idx = m_stationTypeCombo->findData(type);
+    if (idx >= 0) m_stationTypeCombo->setCurrentIndex(idx);
+    m_stationIdEdit->setText(id);
+    m_stationLabelEdit->setText(obj.value("name").toString());
+    m_stationXSpin->setValue(obj.value("x").toDouble());
+    m_stationYSpin->setValue(obj.value("y").toDouble());
+
+    double yawVal = 0.0;
+    if (obj.contains("yaw")) yawVal = obj.value("yaw").toDouble();
+    else if (obj.contains("robotYaw")) yawVal = obj.value("robotYaw").toDouble();
+    else if (obj.contains("theta")) yawVal = obj.value("theta").toDouble() * M_PI / 180.0;
+    m_stationYawSpin->setValue(yawVal * 180.0 / M_PI);
+
+    m_stationDockableChk->setChecked(obj.value("rdsDockable").toBool(true));
+    m_stationRotateChk->setChecked(obj.value("allowRotate").toBool(true));
+    m_stationPgvChk->setChecked(obj.value("useDownPGV").toBool(false));
+
+    bool isDevicePoint = (type == "charge" || type == "highPrecision");
+    m_stationXSpin->setReadOnly(false);
+    m_stationYSpin->setReadOnly(false);
+    m_stationYawSpin->setReadOnly(false);
+
+    QString rwStyle = "background:#131722; color:#cfddea; border:1px solid #2b384e; border-radius:4px; padding:2px 6px; font-size:12px;";
+    m_stationXSpin->setStyleSheet(rwStyle);
+    m_stationYSpin->setStyleSheet(rwStyle);
+    m_stationYawSpin->setStyleSheet(rwStyle);
+
+    if (isDevicePoint) {
+        double epcX = obj.contains("epc_x") ? obj.value("epc_x").toDouble()
+                                             : obj.value("epcX").toDouble();
+        double epcY = obj.contains("epc_y") ? obj.value("epc_y").toDouble()
+                                             : obj.value("epcY").toDouble();
+        m_stationEpcXLabel->setText(QString::number(epcX, 'f', 4) + " m");
+        m_stationEpcYLabel->setText(QString::number(epcY, 'f', 4) + " m");
+        m_stationEpcGroup->setVisible(true);
+    } else {
+        m_stationEpcGroup->setVisible(false);
+    }
+
+    // 恢复选中状态 (若未保存过自定义属性，则默认全为非选中状态)
+    restoreCheckedProps(obj.value("checked_props").toArray(), {
+        {m_chkStationType, "stationType"},
+        {m_chkStationLabel, "name"},
+        {m_chkStationX, "x"},
+        {m_chkStationY, "y"},
+        {m_chkStationYaw, "yaw"},
+        {m_chkStationDockable, "rdsDockable"},
+        {m_chkStationRotate, "allowRotate"},
+        {m_chkStationPgv, "useDownPGV"}
+    });
+}
+
+void MapEditWidget::populateLineProps(const QJsonObject &obj, const QString &type, const QString &id)
+{
+    m_propHeaderTitle->setText("线路属性");
+    m_propHeaderBadge->setText(type == "line" ? "直线" : "贝塞尔曲线");
+    m_propHeaderBadge->setStyleSheet("background:#17344f; color:#38bdf8; border:1px solid #0284c7; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
+
+    m_stationPropGroup->setVisible(false);
+    m_linePropGroup->setVisible(true);
+    m_areaPropGroup->setVisible(false);
+
+    m_lineTypeCombo->setCurrentIndex(type == "line" ? 0 : 1);
+    m_lineIdEdit->setText(id);
+    m_lineNameEdit->setText(obj.value("name").toString());
+
+    QString sId = obj.value("startid").toString();
+    QString eId = obj.value("endid").toString();
+    m_lineStartLabel->setText(sId.isEmpty() ? "--" : sId);
+    m_lineEndLabel->setText(eId.isEmpty() ? "--" : eId);
+
+    int direct = obj.value("direct").toInt(10);
+    int dIdx = (direct == 10) ? 0 : ((direct == 0) ? 1 : 2);
+    m_lineDirectCombo->setCurrentIndex(dIdx);
+
+    const auto &mc = MotionConfigManager::instance();
+    syncMotionSpinBoxRanges();
+
+    double minSpd = mc.paramMin("max_speed", 0.0);
+    double maxSpd = mc.paramMax("max_speed", 1.0);
+    double minAcc = mc.paramMin("max_acceleration", 0.3);
+    double maxAcc = mc.paramMax("max_acceleration", 0.5);
+    double minDec = mc.paramMin("max_deceleration", 0.3);
+    double maxDec = mc.paramMax("max_deceleration", 0.5);
+    double minRot = mc.paramMin("max_angular_speed", 5.0);
+    double maxRot = mc.paramMax("max_angular_speed", 60.0);
+    double minRotAcc = mc.paramMin("max_angular_acceleration", 10.0);
+    double maxRotAcc = mc.paramMax("max_angular_acceleration", 30.0);
+
+    double defSpd = mc.maxSpeed();
+    double defAcc = mc.maxAcceleration();
+    double defDec = mc.maxDeceleration();
+    double defRot = mc.maxAngularSpeedDeg();
+    double defRotAcc = mc.maxAngularAccelerationDeg();
+
+    double curSpd = obj.contains("maxspeed") ? obj.value("maxspeed").toDouble() : defSpd;
+    double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble() : (obj.contains("maxacc") ? obj.value("maxacc").toDouble() : defAcc);
+    double dec = obj.contains("max_deceleration") ? obj.value("max_deceleration").toDouble() : (obj.contains("maxdec") ? obj.value("maxdec").toDouble() : defDec);
+    double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble() : (obj.contains("maxrot") ? obj.value("maxrot").toDouble() : defRot);
+    double rotAcc = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble() : (obj.contains("maxrotacc") ? obj.value("maxrotacc").toDouble() : defRotAcc);
+
+    m_lineMaxSpeedSpin->setValue(qBound(minSpd, curSpd, maxSpd));
+    m_lineMaxAccSpin->setValue(qBound(minAcc, acc, maxAcc));
+    m_lineMaxDecSpin->setValue(qBound(minDec, dec, maxDec));
+    m_lineMaxRotSpin->setValue(qBound(minRot, rot, maxRot));
+    m_lineMaxRotAccSpin->setValue(qBound(minRotAcc, rotAcc, maxRotAcc));
+    m_lineReachDistSpin->setValue(obj.value("reachdist").toDouble(mc.arrivalDistanceTolerance()));
+    m_lineReachAngleSpin->setValue(obj.value("reachangle").toDouble(mc.arrivalAngleToleranceDeg()));
+    m_lineRoadWidthSpin->setValue(obj.value("width").toDouble(mc.routeWidth()));
+
+    double sl = obj.contains("intrusion_stop_length") ? obj.value("intrusion_stop_length").toDouble(0.0) : mc.defaultObsStopLength();
+    double sw = obj.contains("intrusion_stop_width") ? obj.value("intrusion_stop_width").toDouble(0.0) : mc.defaultObsStopWidth();
+    double dl = obj.contains("intrusion_deceleration_length") ? obj.value("intrusion_deceleration_length").toDouble(0.0) : mc.defaultObsDecelLength();
+    double dw = obj.contains("intrusion_deceleration_width") ? obj.value("intrusion_deceleration_width").toDouble(0.0) : mc.defaultObsDecelWidth();
+
+    m_lineObsStopLenSpin->setValue(sl);
+    m_lineObsStopWidSpin->setValue(sw);
+    m_lineObsDecelLenSpin->setValue(dl);
+    m_lineObsDecelWidSpin->setValue(dw);
+
+    // 恢复选中状态 (若未保存过自定义属性，则默认全为非选中状态)
+    restoreCheckedProps(obj.value("checked_props").toArray(), {
+        {m_chkLineName, "name"},
+        {m_chkLineDirect, "direct"},
+        {m_chkLineMaxSpeed, "maxspeed"},
+        {m_chkLineMaxAcc, "maxacc"},
+        {m_chkLineMaxRot, "maxrot"},
+        {m_chkLineMaxRotAcc, "maxrotacc"},
+        {m_chkLineReachDist, "reachdist"},
+        {m_chkLineReachAngle, "reachangle"},
+        {m_chkLineRoadWidth, "width"},
+        {m_chkLineObsStopLen, "intrusion_stop_length"},
+        {m_chkLineObsStopWid, "intrusion_stop_width"},
+        {m_chkLineObsDecelLen, "intrusion_deceleration_length"},
+        {m_chkLineObsDecelWid, "intrusion_deceleration_width"}
+    });
+}
+
 void MapEditWidget::showFeatureProperties(const QString &type, const QString &id)
 {
     auto find = [&](const QJsonArray &arr) {
@@ -3236,7 +3564,6 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
     QString realId   = id;
     // 点击 epc 点 → 选中对应的父点(charge/highPrecision)
     if (type == "chargeEpc" || type == "highPrecisionEpc") {
-        // epc 点的 id 与父点相同，只是 type 不同
         realType = (type == "chargeEpc") ? "charge" : "highPrecision";
     }
     if      (realType == "point")         obj = find(m_points);
@@ -3266,235 +3593,11 @@ void MapEditWidget::showFeatureProperties(const QString &type, const QString &id
     RouteFeatureSelect::applySelectColor(m_selItem);
 
     if (realType == "highLevelArea") {
-        m_propHeaderTitle->setText("高级区域属性");
-        m_propHeaderBadge->setText("AA");
-        m_propHeaderBadge->setStyleSheet("background:#3b1d5c; color:#c084fc; border:1px solid #7c3aed; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
-
-        m_stationPropGroup->setVisible(false);
-        m_linePropGroup->setVisible(false);
-        m_areaPropGroup->setVisible(true);
-
-        m_areaNameEdit->setText(obj.value("name").toString("AdvancedArea"));
-        double minX = obj.value("minX").toDouble();
-        double maxX = obj.value("maxX").toDouble();
-        double minY = obj.value("minY").toDouble();
-        double maxY = obj.value("maxY").toDouble();
-        m_areaBoundsLabel->setText(QString("X: [%1, %2]  Y: [%3, %4]")
-            .arg(minX, 0, 'f', 2).arg(maxX, 0, 'f', 2).arg(minY, 0, 'f', 2).arg(maxY, 0, 'f', 2));
-
-        const auto &mc = MotionConfigManager::instance();
-        double spd = obj.contains("max_speed") ? obj.value("max_speed").toDouble(mc.maxSpeed()) : mc.maxSpeed();
-        double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble(mc.maxAcceleration()) : mc.maxAcceleration();
-        double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble(mc.maxAngularSpeedDeg()) : mc.maxAngularSpeedDeg();
-        double rotAcc = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble(mc.maxAngularAccelerationDeg()) : mc.maxAngularAccelerationDeg();
-        double reachDist = obj.contains("arrival_distance_tolerance") ? obj.value("arrival_distance_tolerance").toDouble(mc.arrivalDistanceTolerance()) : mc.arrivalDistanceTolerance();
-        double reachAngle = obj.contains("arrival_angle_tolerance") ? obj.value("arrival_angle_tolerance").toDouble(mc.arrivalAngleToleranceDeg()) : mc.arrivalAngleToleranceDeg();
-        double roadWidth = obj.contains("route_width") ? obj.value("route_width").toDouble(mc.routeWidth()) : mc.routeWidth();
-
-        m_areaMaxSpeedSpin->setValue(spd);
-        m_areaMaxAccSpin->setValue(acc);
-        m_areaMaxRotSpin->setValue(rot);
-        m_areaMaxRotAccSpin->setValue(rotAcc);
-        m_areaReachDistSpin->setValue(reachDist);
-        m_areaReachAngleSpin->setValue(reachAngle);
-        m_areaRoadWidthSpin->setValue(roadWidth);
-
-        double sl = obj.contains("intrusion_stop_length") ? obj.value("intrusion_stop_length").toDouble(0.0) : 0.0;
-        double sw = obj.contains("intrusion_stop_width") ? obj.value("intrusion_stop_width").toDouble(0.0) : 0.0;
-        double dl = obj.contains("intrusion_deceleration_length") ? obj.value("intrusion_deceleration_length").toDouble(0.0) : 0.0;
-        double dw = obj.contains("intrusion_deceleration_width") ? obj.value("intrusion_deceleration_width").toDouble(0.0) : 0.0;
-
-        m_areaObsStopLenSpin->setValue(sl);
-        m_areaObsStopWidSpin->setValue(sw);
-        m_areaObsDecelLenSpin->setValue(dl);
-        m_areaObsDecelWidSpin->setValue(dw);
-
-        // 恢复勾选状态 (通过 checked_props 数组控制)
-        QSet<QString> chkSet;
-        QJsonArray cpArr = obj.value("checked_props").toArray();
-        for (const auto &v : cpArr) chkSet.insert(v.toString());
-
-        if (m_chkAreaName)        m_chkAreaName->setChecked(chkSet.contains("name"));
-        if (m_chkAreaMaxSpeed)    m_chkAreaMaxSpeed->setChecked(chkSet.contains("maxspeed"));
-        if (m_chkAreaMaxAcc)      m_chkAreaMaxAcc->setChecked(chkSet.contains("maxacc"));
-        if (m_chkAreaMaxRot)      m_chkAreaMaxRot->setChecked(chkSet.contains("maxrot"));
-        if (m_chkAreaMaxRotAcc)   m_chkAreaMaxRotAcc->setChecked(chkSet.contains("maxrotacc"));
-        if (m_chkAreaReachDist)   m_chkAreaReachDist->setChecked(chkSet.contains("reachdist"));
-        if (m_chkAreaReachAngle)  m_chkAreaReachAngle->setChecked(chkSet.contains("reachangle"));
-        if (m_chkAreaRoadWidth)   m_chkAreaRoadWidth->setChecked(chkSet.contains("width"));
-        if (m_chkAreaObsStopLen)  m_chkAreaObsStopLen->setChecked(chkSet.contains("intrusion_stop_length"));
-        if (m_chkAreaObsStopWid)  m_chkAreaObsStopWid->setChecked(chkSet.contains("intrusion_stop_width"));
-        if (m_chkAreaObsDecelLen) m_chkAreaObsDecelLen->setChecked(chkSet.contains("intrusion_deceleration_length"));
-        if (m_chkAreaObsDecelWid) m_chkAreaObsDecelWid->setChecked(chkSet.contains("intrusion_deceleration_width"));
-
-        m_propsPanel->setVisible(true);
-        return;
-    }
-
-    bool isPointKind = (realType == "point" || realType == "highPrecision" || realType == "charge");
-    if (isPointKind) {
-        m_propHeaderTitle->setText("站点属性");
-        QString badgeText = (realType == "point") ? "LM" : ((realType == "charge") ? "CP" : "TL");
-        QString badgeStyle = (realType == "point")
-            ? "background:#1e3a5f; color:#60a5fa; border:1px solid #2563eb; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;"
-            : ((realType == "charge")
-                ? "background:#4d3800; color:#fbbf24; border:1px solid #d97706; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;"
-                : "background:#4d1414; color:#f87171; border:1px solid #dc2626; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
-        m_propHeaderBadge->setText(badgeText);
-        m_propHeaderBadge->setStyleSheet(badgeStyle);
-
-        m_stationPropGroup->setVisible(true);
-        m_linePropGroup->setVisible(false);
-        m_areaPropGroup->setVisible(false);
-
-        int idx = m_stationTypeCombo->findData(realType);
-        if (idx >= 0) m_stationTypeCombo->setCurrentIndex(idx);
-        m_stationIdEdit->setText(realId);
-        m_stationLabelEdit->setText(obj.value("name").toString());
-        m_stationXSpin->setValue(obj.value("x").toDouble());
-        m_stationYSpin->setValue(obj.value("y").toDouble());
-
-        double yawVal = 0.0;
-        if (obj.contains("yaw")) yawVal = obj.value("yaw").toDouble();
-        else if (obj.contains("robotYaw")) yawVal = obj.value("robotYaw").toDouble();
-        else if (obj.contains("theta")) yawVal = obj.value("theta").toDouble() * M_PI / 180.0;
-        m_stationYawSpin->setValue(yawVal * 180.0 / M_PI);
-
-        m_stationDockableChk->setChecked(obj.value("rdsDockable").toBool(true));
-        m_stationRotateChk->setChecked(obj.value("allowRotate").toBool(true));
-        m_stationPgvChk->setChecked(obj.value("useDownPGV").toBool(false));
-
-        bool isDevicePoint = (realType == "charge" || realType == "highPrecision");
-        // 工作站与特殊工作站的 xy 与朝向角均支持自由编辑
-        m_stationXSpin->setReadOnly(false);
-        m_stationYSpin->setReadOnly(false);
-        m_stationYawSpin->setReadOnly(false);
-
-        QString rwStyle = "background:#131722; color:#cfddea; border:1px solid #2b384e; border-radius:4px; padding:2px 6px; font-size:12px;";
-        m_stationXSpin->setStyleSheet(rwStyle);
-        m_stationYSpin->setStyleSheet(rwStyle);
-        m_stationYawSpin->setStyleSheet(rwStyle);
-
-        if (isDevicePoint) {
-            double epcX = obj.contains("epc_x") ? obj.value("epc_x").toDouble()
-                                                 : obj.value("epcX").toDouble();
-            double epcY = obj.contains("epc_y") ? obj.value("epc_y").toDouble()
-                                                 : obj.value("epcY").toDouble();
-            m_stationEpcXLabel->setText(QString::number(epcX, 'f', 4) + " m");
-            m_stationEpcYLabel->setText(QString::number(epcY, 'f', 4) + " m");
-            m_stationEpcGroup->setVisible(true);
-        } else {
-            m_stationEpcGroup->setVisible(false);
-        }
-
-        // 恢复选中状态 (若未保存过自定义属性，则默认全为非选中状态)
-        QSet<QString> chkSet;
-        QJsonArray cpArr = obj.value("checked_props").toArray();
-        for (const auto &v : cpArr) chkSet.insert(v.toString());
-
-        if (m_chkStationType)     m_chkStationType->setChecked(chkSet.contains("stationType"));
-        if (m_chkStationLabel)    m_chkStationLabel->setChecked(chkSet.contains("name"));
-        if (m_chkStationX)        m_chkStationX->setChecked(chkSet.contains("x"));
-        if (m_chkStationY)        m_chkStationY->setChecked(chkSet.contains("y"));
-        if (m_chkStationYaw)      m_chkStationYaw->setChecked(chkSet.contains("yaw"));
-        if (m_chkStationDockable) m_chkStationDockable->setChecked(chkSet.contains("rdsDockable"));
-        if (m_chkStationRotate)   m_chkStationRotate->setChecked(chkSet.contains("allowRotate"));
-        if (m_chkStationPgv)      m_chkStationPgv->setChecked(chkSet.contains("useDownPGV"));
+        populateAreaProps(obj);
+    } else if (realType == "point" || realType == "highPrecision" || realType == "charge") {
+        populateStationProps(obj, realType, realId);
     } else {
-        // Line or Curve
-        m_propHeaderTitle->setText("线路属性");
-        m_propHeaderBadge->setText(realType == "line" ? "直线" : "贝塞尔曲线");
-        m_propHeaderBadge->setStyleSheet("background:#17344f; color:#38bdf8; border:1px solid #0284c7; border-radius:3px; padding:1px 6px; font-size:10px; font-weight:bold;");
-
-        m_stationPropGroup->setVisible(false);
-        m_linePropGroup->setVisible(true);
-        m_areaPropGroup->setVisible(false);
-
-        m_lineTypeCombo->setCurrentIndex(realType == "line" ? 0 : 1);
-        m_lineIdEdit->setText(realId);
-        m_lineNameEdit->setText(obj.value("name").toString());
-
-        QString sId = obj.value("startid").toString();
-        QString eId = obj.value("endid").toString();
-        m_lineStartLabel->setText(sId.isEmpty() ? "--" : sId);
-        m_lineEndLabel->setText(eId.isEmpty() ? "--" : eId);
-
-        int direct = obj.value("direct").toInt(10);
-        int dIdx = (direct == 10) ? 0 : ((direct == 0) ? 1 : 2);
-        m_lineDirectCombo->setCurrentIndex(dIdx);
-
-        const auto &mc = MotionConfigManager::instance();
-        double minSpd = mc.paramMin("max_speed", 0.0);
-        double maxSpd = mc.paramMax("max_speed", 1.0);
-        double minAcc = mc.paramMin("max_acceleration", 0.3);
-        double maxAcc = mc.paramMax("max_acceleration", 0.5);
-        double minDec = mc.paramMin("max_deceleration", 0.3);
-        double maxDec = mc.paramMax("max_deceleration", 0.5);
-        double minRot = mc.paramMin("max_angular_speed", 5.0);
-        double maxRot = mc.paramMax("max_angular_speed", 60.0);
-        double minRotAcc = mc.paramMin("max_angular_acceleration", 10.0);
-        double maxRotAcc = mc.paramMax("max_angular_acceleration", 30.0);
-
-        m_lineMaxSpeedSpin->setRange(minSpd, maxSpd);
-        m_lineMaxAccSpin->setRange(minAcc, maxAcc);
-        m_lineMaxDecSpin->setRange(minDec, maxDec);
-        m_lineMaxRotSpin->setRange(minRot, maxRot);
-        m_lineMaxRotAccSpin->setRange(minRotAcc, maxRotAcc);
-        m_lineReachDistSpin->setRange(0.01, qMax(1.0, mc.arrivalDistanceTolerance()));
-        m_lineReachAngleSpin->setRange(0.1, qMax(45.0, mc.arrivalAngleToleranceDeg()));
-        m_lineRoadWidthSpin->setRange(0.5, qMax(10.0, mc.routeWidth()));
-
-        // 若图元有保存的属性（用户修改过）则以图元为准；若未修改则以“参数”中的全局当前值为准
-        double defSpd = mc.maxSpeed();
-        double defAcc = mc.maxAcceleration();
-        double defDec = mc.maxDeceleration();
-        double defRot = mc.maxAngularSpeedDeg();
-        double defRotAcc = mc.maxAngularAccelerationDeg();
-
-        double curSpd = obj.contains("maxspeed") ? obj.value("maxspeed").toDouble() : defSpd;
-        double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble() : (obj.contains("maxacc") ? obj.value("maxacc").toDouble() : defAcc);
-        double dec = obj.contains("max_deceleration") ? obj.value("max_deceleration").toDouble() : (obj.contains("maxdec") ? obj.value("maxdec").toDouble() : defDec);
-        double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble() : (obj.contains("maxrot") ? obj.value("maxrot").toDouble() : defRot);
-        double rotAcc = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble() : (obj.contains("maxrotacc") ? obj.value("maxrotacc").toDouble() : defRotAcc);
-
-        m_lineMaxSpeedSpin->setValue(qBound(minSpd, curSpd, maxSpd));
-        m_lineMaxAccSpin->setValue(qBound(minAcc, acc, maxAcc));
-        m_lineMaxDecSpin->setValue(qBound(minDec, dec, maxDec));
-        m_lineMaxRotSpin->setValue(qBound(minRot, rot, maxRot));
-        m_lineMaxRotAccSpin->setValue(qBound(minRotAcc, rotAcc, maxRotAcc));
-        m_lineReachDistSpin->setValue(obj.value("reachdist").toDouble(mc.arrivalDistanceTolerance()));
-        m_lineReachAngleSpin->setValue(obj.value("reachangle").toDouble(mc.arrivalAngleToleranceDeg()));
-        m_lineRoadWidthSpin->setValue(obj.value("width").toDouble(mc.routeWidth()));
-
-        // 实时避障范围定向膨胀参数 (m，若已存在则直接加载真实值，不存在才使用默认值)
-        double sl = obj.contains("intrusion_stop_length") ? obj.value("intrusion_stop_length").toDouble(0.0) : mc.defaultObsStopLength();
-        double sw = obj.contains("intrusion_stop_width") ? obj.value("intrusion_stop_width").toDouble(0.0) : mc.defaultObsStopWidth();
-        double dl = obj.contains("intrusion_deceleration_length") ? obj.value("intrusion_deceleration_length").toDouble(0.0) : mc.defaultObsDecelLength();
-        double dw = obj.contains("intrusion_deceleration_width") ? obj.value("intrusion_deceleration_width").toDouble(0.0) : mc.defaultObsDecelWidth();
-
-        m_lineObsStopLenSpin->setValue(sl);
-        m_lineObsStopWidSpin->setValue(sw);
-        m_lineObsDecelLenSpin->setValue(dl);
-        m_lineObsDecelWidSpin->setValue(dw);
-
-        // 恢复选中状态 (若未保存过自定义属性，则默认全为非选中状态)
-        QSet<QString> chkSet;
-        QJsonArray cpArr = obj.value("checked_props").toArray();
-        for (const auto &v : cpArr) chkSet.insert(v.toString());
-
-        if (m_chkLineName)        m_chkLineName->setChecked(chkSet.contains("name"));
-        if (m_chkLineDirect)      m_chkLineDirect->setChecked(chkSet.contains("direct"));
-        if (m_chkLineMaxSpeed)    m_chkLineMaxSpeed->setChecked(chkSet.contains("maxspeed"));
-        if (m_chkLineMaxAcc)      m_chkLineMaxAcc->setChecked(chkSet.contains("maxacc"));
-        if (m_chkLineMaxRot)      m_chkLineMaxRot->setChecked(chkSet.contains("maxrot"));
-        if (m_chkLineMaxRotAcc)   m_chkLineMaxRotAcc->setChecked(chkSet.contains("maxrotacc"));
-        if (m_chkLineReachDist)   m_chkLineReachDist->setChecked(chkSet.contains("reachdist"));
-        if (m_chkLineReachAngle)  m_chkLineReachAngle->setChecked(chkSet.contains("reachangle"));
-        if (m_chkLineRoadWidth)   m_chkLineRoadWidth->setChecked(chkSet.contains("width"));
-        if (m_chkLineObsStopLen)  m_chkLineObsStopLen->setChecked(chkSet.contains("intrusion_stop_length"));
-        if (m_chkLineObsStopWid)  m_chkLineObsStopWid->setChecked(chkSet.contains("intrusion_stop_width"));
-        if (m_chkLineObsDecelLen) m_chkLineObsDecelLen->setChecked(chkSet.contains("intrusion_deceleration_length"));
-        if (m_chkLineObsDecelWid) m_chkLineObsDecelWid->setChecked(chkSet.contains("intrusion_deceleration_width"));
+        populateLineProps(obj, realType, realId);
     }
 
     m_propsPanel->setVisible(true);
@@ -3710,11 +3813,245 @@ void MapEditWidget::syncLineObstaclesToEndpoints()
     resetSpecialPoints(m_highPrecisionPoints);
 }
 
-void MapEditWidget::onSaveMap(std::function<void(bool success)> onFinished)
+void MapEditWidget::focusFeature(const QString &targetType, const QString &targetId)
 {
-    // 同步线路避障参数到端点（与 Vue actions 规范完全一致）
-    syncLineObstaclesToEndpoints();
+    QString key = targetType + "_" + targetId;
+    QGraphicsItem *item = m_featureItems.value(key, nullptr);
+    if (!item) {
+        for (auto *it : m_scene->items()) {
+            if (it && it->data(0).toString() == targetType && it->data(1).toString() == targetId) {
+                item = it;
+                break;
+            }
+        }
+    }
 
+    if (item) {
+        if (m_selItem != item) {
+            RouteFeatureSelect::clearSelectColor(m_selItem);
+            m_selItem = item;
+            RouteFeatureSelect::applySelectColor(m_selItem);
+        }
+        m_selType = targetType;
+        m_selId   = targetId;
+        showFeatureProperties(targetType, targetId);
+        m_mapView->centerOn(item->sceneBoundingRect().center());
+    }
+}
+
+bool MapEditWidget::validateRouteNetwork(QList<CheckResultItem> &results)
+{
+    results.clear();
+
+    const auto &mc = MotionConfigManager::instance();
+
+    struct ParamDef {
+        QString propKey;
+        QString jsonKey1;
+        QString jsonKey2;
+        QString displayName;
+    };
+
+    static const ParamDef kDefs[] = {
+        {"maxspeed", "max_speed", "maxspeed", "maxspeed"},
+        {"maxacc", "max_acceleration", "maxacc", "maxacc"},
+        {"maxrot", "max_angular_speed", "maxrot", "maxrot"},
+        {"maxrotacc", "max_angular_acceleration", "maxrotacc", "maxrotacc"},
+        {"reachdist", "arrival_distance_tolerance", "reachdist", "reachdist"},
+        {"reachangle", "arrival_angle_tolerance", "reachangle", "reachangle"},
+        {"width", "route_width", "width", "width"},
+        {"intrusion_stop_length", "intrusion_stop_length", "", "intrusion_stop_length"},
+        {"intrusion_stop_width", "intrusion_stop_width", "", "intrusion_stop_width"},
+        {"intrusion_deceleration_length", "intrusion_deceleration_length", "", "intrusion_deceleration_length"},
+        {"intrusion_deceleration_width", "intrusion_deceleration_width", "", "intrusion_deceleration_width"}
+    };
+
+    auto isParamEnabled = [](const QJsonObject &obj, const QString &propKey, const QString &k1, const QString &k2) -> bool {
+        if (obj.contains("checked_props")) {
+            QJsonArray cp = obj.value("checked_props").toArray();
+            for (const auto &v : cp) {
+                if (v.toString() == propKey) return true;
+            }
+            return false;
+        }
+        return obj.contains(k1) || (!k2.isEmpty() && obj.contains(k2));
+    };
+
+    auto getParamValue = [](const QJsonObject &obj, const QString &k1, const QString &k2) -> double {
+        if (obj.contains(k1)) return obj.value(k1).toDouble();
+        if (!k2.isEmpty() && obj.contains(k2)) return obj.value(k2).toDouble();
+        return 0.0;
+    };
+
+    // 1. 高级区域之间的交错和重叠校验
+    // 必须遵循以下三种情况之一，否则报错:
+    // (1) 它们的参数值必须相同
+    // (2) 它们的参数都处于不启用状态
+    // (3) 只有一个高级区域的参数处于启用状态，其他高级区域的参数不启用
+    for (int i = 0; i < m_highLevelAreas.size(); ++i) {
+        QJsonObject areaA = m_highLevelAreas[i].toObject();
+        double minXa = 0, maxXa = 0, minYa = 0, maxYa = 0;
+        extractAreaBounds(areaA, minXa, maxXa, minYa, maxYa);
+        QString nameA = areaA.value("name").toString(QString("AdvancedArea%1").arg(i + 1));
+        QString idA = areaA.value("id").toString();
+
+        for (int j = i + 1; j < m_highLevelAreas.size(); ++j) {
+            QJsonObject areaB = m_highLevelAreas[j].toObject();
+            double minXb = 0, maxXb = 0, minYb = 0, maxYb = 0;
+            extractAreaBounds(areaB, minXb, maxXb, minYb, maxYb);
+            QString nameB = areaB.value("name").toString(QString("AdvancedArea%1").arg(j + 1));
+
+            double ox1 = qMax(minXa, minXb);
+            double ox2 = qMin(maxXa, maxXb);
+            double oy1 = qMax(minYa, minYb);
+            double oy2 = qMin(maxYa, maxYb);
+
+            // 判断是否有重叠（交错）
+            if (ox1 < ox2 - 1e-4 && oy1 < oy2 - 1e-4) {
+                for (const auto &p : kDefs) {
+                    bool enA = isParamEnabled(areaA, p.propKey, p.jsonKey1, p.jsonKey2);
+                    bool enB = isParamEnabled(areaB, p.propKey, p.jsonKey1, p.jsonKey2);
+
+                    // 情况2: 都处于不启用状态 -> 合法
+                    if (!enA && !enB) continue;
+
+                    // 情况3: 只有一个高级区域启用，另一个不启用 -> 合法
+                    if (enA != enB) continue;
+
+                    // 情况1: 均处于启用状态，参数值必须相同
+                    double valA = getParamValue(areaA, p.jsonKey1, p.jsonKey2);
+                    double valB = getParamValue(areaB, p.jsonKey1, p.jsonKey2);
+                    if (std::abs(valA - valB) > 1e-4) {
+                        CheckResultItem err;
+                        err.level = CheckResultItem::Error;
+                        err.message = QString("%1 与 %2 有重叠且 %3 不同").arg(nameA, nameB, p.displayName);
+                        err.targetType = "highLevelArea";
+                        err.targetId = idA;
+                        results.append(err);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 高级区域与线路的相交校验 (提示为警告)
+    auto lineIntersectsAABB = [](double x1, double y1, double x2, double y2,
+                                 double minX, double maxX, double minY, double maxY) -> bool {
+        if (x1 >= minX && x1 <= maxX && y1 >= minY && y1 <= maxY) return true;
+        if (x2 >= minX && x2 <= maxX && y2 >= minY && y2 <= maxY) return true;
+
+        auto ccw = [](double ax, double ay, double bx, double by, double cx, double cy) -> bool {
+            return (cy - ay) * (bx - ax) > (by - ay) * (cx - ax);
+        };
+        auto segIntersect = [&](double ax, double ay, double bx, double by,
+                                double cx, double cy, double dx, double dy) -> bool {
+            return (ccw(ax,ay,cx,cy,dx,dy) != ccw(bx,by,cx,cy,dx,dy)) &&
+                   (ccw(ax,ay,bx,by,cx,cy) != ccw(ax,ay,bx,by,dx,dy));
+        };
+
+        if (segIntersect(x1, y1, x2, y2, minX, minY, maxX, minY)) return true;
+        if (segIntersect(x1, y1, x2, y2, maxX, minY, maxX, maxY)) return true;
+        if (segIntersect(x1, y1, x2, y2, maxX, maxY, minX, maxY)) return true;
+        if (segIntersect(x1, y1, x2, y2, minX, maxY, minX, minY)) return true;
+
+        return false;
+    };
+
+    for (int i = 0; i < m_highLevelAreas.size(); ++i) {
+        QJsonObject area = m_highLevelAreas[i].toObject();
+        QString nameA = area.value("name").toString(QString("AdvancedArea%1").arg(i + 1));
+        double minX = 0, maxX = 0, minY = 0, maxY = 0;
+        extractAreaBounds(area, minX, maxX, minY, maxY);
+
+        if (isParamEnabled(area, "maxspeed", "max_speed", "maxspeed")) {
+            double areaSpd = getParamValue(area, "max_speed", "maxspeed");
+
+            // 直线检查
+            for (const auto &v : m_lines) {
+                QJsonObject ln = v.toObject();
+                double x1 = ln.value("x1").toDouble();
+                double y1 = ln.value("y1").toDouble();
+                double x2 = ln.value("x2").toDouble();
+                double y2 = ln.value("y2").toDouble();
+                if (lineIntersectsAABB(x1, y1, x2, y2, minX, maxX, minY, maxY)) {
+                    double lineSpd = ln.contains("maxspeed") ? ln.value("maxspeed").toDouble() : mc.maxSpeed();
+                    if (std::abs(lineSpd - areaSpd) > 1e-4) {
+                        QString sId = ln.value("startid").toString();
+                        QString eId = ln.value("endid").toString();
+                        if (sId.isEmpty()) sId = ln.value("id").toString();
+                        if (eId.isEmpty()) eId = "?";
+                        CheckResultItem warn;
+                        warn.level = CheckResultItem::Warning;
+                        warn.message = QString("%1与%2→%3有重叠且 maxspeed值不同").arg(nameA, sId, eId);
+                        warn.targetType = "line";
+                        warn.targetId = ln.value("id").toString();
+                        results.append(warn);
+                    }
+                }
+            }
+
+            // 贝塞尔曲线检查 (采样 10 个线段)
+            for (const auto &v : m_curves) {
+                QJsonObject cv = v.toObject();
+                QList<QPointF> cPts;
+                QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+                if (!ctrlArr.isEmpty()) {
+                    for (const auto &pv : ctrlArr)
+                        cPts.append(QPointF(pv.toObject().value("x").toDouble(), pv.toObject().value("y").toDouble()));
+                } else {
+                    cPts.append(QPointF(cv.value("x1").toDouble(), cv.value("y1").toDouble()));
+                    cPts.append(QPointF(cv.value("cx").toDouble(), cv.value("cy").toDouble()));
+                    cPts.append(QPointF(cv.value("x2").toDouble(), cv.value("y2").toDouble()));
+                }
+
+                if (cPts.size() >= 2) {
+                    bool hit = false;
+                    const int samples = 10;
+                    QPointF prevPt = cPts.first();
+                    for (int s = 1; s <= samples; ++s) {
+                        double t = static_cast<double>(s) / samples;
+                        QPointF curPt;
+                        if (cPts.size() == 3) {
+                            double u = 1.0 - t;
+                            curPt = u * u * cPts[0] + 2.0 * u * t * cPts[1] + t * t * cPts[2];
+                        } else {
+                            curPt = (1.0 - t) * cPts.first() + t * cPts.last();
+                        }
+                        if (lineIntersectsAABB(prevPt.x(), prevPt.y(), curPt.x(), curPt.y(), minX, maxX, minY, maxY)) {
+                            hit = true;
+                            break;
+                        }
+                        prevPt = curPt;
+                    }
+
+                    if (hit) {
+                        double curveSpd = cv.contains("maxspeed") ? cv.value("maxspeed").toDouble() : mc.maxSpeed();
+                        if (std::abs(curveSpd - areaSpd) > 1e-4) {
+                            QString sId = cv.value("startid").toString();
+                            QString eId = cv.value("endid").toString();
+                            if (sId.isEmpty()) sId = cv.value("id").toString();
+                            if (eId.isEmpty()) eId = "?";
+                            CheckResultItem warn;
+                            warn.level = CheckResultItem::Warning;
+                            warn.message = QString("%1与%2→%3有重叠且 maxspeed值不同").arg(nameA, sId, eId);
+                            warn.targetType = "curve";
+                            warn.targetId = cv.value("id").toString();
+                            results.append(warn);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (const auto &it : results) {
+        if (it.level == CheckResultItem::Error) return false;
+    }
+    return true;
+}
+
+void MapEditWidget::flushCurveHandlesToJson()
+{
     // 1. Flush any dragged handle positions to JSON (支持任意阶贝塞尔)
     for (auto it = m_curveHandles.begin(); it != m_curveHandles.end(); ++it) {
         auto &lst = it.value();
@@ -3757,8 +4094,11 @@ void MapEditWidget::onSaveMap(std::function<void(bool success)> onFinished)
             m_curves[i] = cv; break;
         }
     }
+}
 
-    // 2. Build GeoJSON FeatureCollection
+QJsonObject MapEditWidget::buildRouteGeoJson() const
+{
+    // Build GeoJSON FeatureCollection
     QJsonArray features;
 
     auto makePointFeat = [](const QJsonObject &obj) -> QJsonObject {
@@ -3837,13 +4177,68 @@ void MapEditWidget::onSaveMap(std::function<void(bool success)> onFinished)
     geojson["type"]     = "FeatureCollection";
     geojson["features"] = features;
     geojson["mapId"]    = m_mapId;
-    if (m_highLevelAreas.isEmpty()) {
-        geojson["highLevel Area"] = QJsonObject();
-    } else if (m_highLevelAreas.size() == 1) {
-        geojson["highLevel Area"] = m_highLevelAreas.first().toObject();
-    } else {
-        geojson["highLevel Area"] = m_highLevelAreas;
+    QJsonArray saveHighLevelAreas;
+    for (int i = 0; i < m_highLevelAreas.size(); ++i) {
+        QJsonObject areaObj = m_highLevelAreas[i].toObject();
+        double minX = 0, maxX = 0, minY = 0, maxY = 0;
+        extractAreaBounds(areaObj, minX, maxX, minY, maxY);
+
+        QJsonArray coords;
+        QJsonArray pTL, pBR;
+        pTL.append(minX); pTL.append(maxY);
+        pBR.append(maxX); pBR.append(minY);
+        coords.append(pTL); coords.append(pBR);
+        areaObj["coordinates"] = coords;
+
+        areaObj.remove("minX");
+        areaObj.remove("maxX");
+        areaObj.remove("minY");
+        areaObj.remove("maxY");
+
+        saveHighLevelAreas.append(areaObj);
     }
+    geojson["highLevelArea"] = saveHighLevelAreas;
+    return geojson;
+}
+
+void MapEditWidget::onSaveMap(std::function<void(bool success)> onFinished)
+{
+    // 同步线路避障参数到端点（与 Vue actions 规范完全一致）
+    syncLineObstaclesToEndpoints();
+
+    // 0. 保存前对高级区域及线路重叠进行校验
+    QList<CheckResultItem> checkResults;
+    bool checkPassed = validateRouteNetwork(checkResults);
+
+    if (!checkResults.isEmpty()) {
+        if (!m_checkResultDlg) {
+            m_checkResultDlg = new MapCheckResultDialog(this);
+            connect(m_checkResultDlg, &MapCheckResultDialog::jumpToFeature, this, &MapEditWidget::focusFeature);
+        }
+        m_checkResultDlg->setResults(checkResults);
+        m_checkResultDlg->show();
+        m_checkResultDlg->raise();
+        m_checkResultDlg->activateWindow();
+
+        // 居中靠上显示
+        QPoint centerPt = mapToGlobal(rect().center());
+        m_checkResultDlg->move(centerPt.x() - m_checkResultDlg->width() / 2,
+                               qMax(30, centerPt.y() - m_checkResultDlg->height() / 2 - 80));
+
+        if (!checkPassed) {
+            Toast::error(this, "路网校验未通过，请检查高级区域参数冲突");
+            if (onFinished) onFinished(false);
+            return;
+        }
+    } else if (m_checkResultDlg && m_checkResultDlg->isVisible()) {
+        m_checkResultDlg->hide();
+    }
+
+    // 1. Flush any dragged handle positions to JSON (支持任意阶贝塞尔)
+    flushCurveHandlesToJson();
+
+    // 2. Build GeoJSON FeatureCollection
+    QJsonObject geojson = buildRouteGeoJson();
 
     // 3. Prepare PGM raster data (仅在底图实际修改时才上传栅格地图)
     QByteArray pgmData;
@@ -3944,324 +4339,351 @@ void MapEditWidget::onSaveMap(std::function<void(bool success)> onFinished)
     }
 }
 
-void MapEditWidget::applyPropsEdit()
+void MapEditWidget::updateConnectedRoutesPos(const QString &nodeId, double newX, double newY, bool updateX, bool updateY)
 {
-    if (m_selType.isEmpty()) return;
+    if (!updateX && !updateY) return;
 
-    if (m_selType == "highLevelArea") {
-        int targetIdx = -1;
-        QJsonObject areaObj;
-        for (int i = 0; i < m_highLevelAreas.size(); ++i) {
-            if (m_highLevelAreas[i].toObject().value("id").toString() == m_selId) {
-                targetIdx = i;
-                areaObj = m_highLevelAreas[i].toObject();
-                break;
-            }
+    for (int li = 0; li < m_lines.size(); ++li) {
+        QJsonObject ln = m_lines[li].toObject();
+        bool changed = false;
+        if (ln.value("startid").toString() == nodeId) {
+            if (updateX) ln["x1"] = newX;
+            if (updateY) ln["y1"] = newY;
+            changed = true;
         }
-        if (targetIdx < 0) return;
-
-        if (m_chkAreaName && m_chkAreaName->isChecked())
-            areaObj["name"] = m_areaNameEdit->text().trimmed();
-
-        if (m_chkAreaMaxSpeed && m_chkAreaMaxSpeed->isChecked())
-            areaObj["max_speed"] = m_areaMaxSpeedSpin->value();
-
-        if (m_chkAreaMaxAcc && m_chkAreaMaxAcc->isChecked()) {
-            areaObj["max_acceleration"] = m_areaMaxAccSpin->value();
-            areaObj["maxacc"]           = m_areaMaxAccSpin->value();
+        if (ln.value("endid").toString() == nodeId) {
+            if (updateX) ln["x2"] = newX;
+            if (updateY) ln["y2"] = newY;
+            changed = true;
         }
-
-        if (m_chkAreaMaxRot && m_chkAreaMaxRot->isChecked()) {
-            areaObj["max_angular_speed"] = m_areaMaxRotSpin->value();
-            areaObj["maxrot"]            = m_areaMaxRotSpin->value();
-        }
-
-        if (m_chkAreaMaxRotAcc && m_chkAreaMaxRotAcc->isChecked()) {
-            areaObj["max_angular_acceleration"] = m_areaMaxRotAccSpin->value();
-            areaObj["maxrotacc"]                = m_areaMaxRotAccSpin->value();
-        }
-
-        if (m_chkAreaReachDist && m_chkAreaReachDist->isChecked())
-            areaObj["arrival_distance_tolerance"] = m_areaReachDistSpin->value();
-
-        if (m_chkAreaReachAngle && m_chkAreaReachAngle->isChecked())
-            areaObj["arrival_angle_tolerance"] = m_areaReachAngleSpin->value();
-
-        if (m_chkAreaRoadWidth && m_chkAreaRoadWidth->isChecked())
-            areaObj["route_width"] = m_areaRoadWidthSpin->value();
-
-        if (m_chkAreaObsStopLen && m_chkAreaObsStopLen->isChecked())
-            areaObj["intrusion_stop_length"] = m_areaObsStopLenSpin->value();
-
-        if (m_chkAreaObsStopWid && m_chkAreaObsStopWid->isChecked())
-            areaObj["intrusion_stop_width"] = m_areaObsStopWidSpin->value();
-
-        if (m_chkAreaObsDecelLen && m_chkAreaObsDecelLen->isChecked())
-            areaObj["intrusion_deceleration_length"] = m_areaObsDecelLenSpin->value();
-
-        if (m_chkAreaObsDecelWid && m_chkAreaObsDecelWid->isChecked())
-            areaObj["intrusion_deceleration_width"] = m_areaObsDecelWidSpin->value();
-
-        QJsonArray areaChkProps;
-        if (m_chkAreaName && m_chkAreaName->isChecked()) areaChkProps.append("name");
-        if (m_chkAreaMaxSpeed && m_chkAreaMaxSpeed->isChecked()) areaChkProps.append("maxspeed");
-        if (m_chkAreaMaxAcc && m_chkAreaMaxAcc->isChecked()) areaChkProps.append("maxacc");
-        if (m_chkAreaMaxRot && m_chkAreaMaxRot->isChecked()) areaChkProps.append("maxrot");
-        if (m_chkAreaMaxRotAcc && m_chkAreaMaxRotAcc->isChecked()) areaChkProps.append("maxrotacc");
-        if (m_chkAreaReachDist && m_chkAreaReachDist->isChecked()) areaChkProps.append("reachdist");
-        if (m_chkAreaReachAngle && m_chkAreaReachAngle->isChecked()) areaChkProps.append("reachangle");
-        if (m_chkAreaRoadWidth && m_chkAreaRoadWidth->isChecked()) areaChkProps.append("width");
-        if (m_chkAreaObsStopLen && m_chkAreaObsStopLen->isChecked()) areaChkProps.append("intrusion_stop_length");
-        if (m_chkAreaObsStopWid && m_chkAreaObsStopWid->isChecked()) areaChkProps.append("intrusion_stop_width");
-        if (m_chkAreaObsDecelLen && m_chkAreaObsDecelLen->isChecked()) areaChkProps.append("intrusion_deceleration_length");
-        if (m_chkAreaObsDecelWid && m_chkAreaObsDecelWid->isChecked()) areaChkProps.append("intrusion_deceleration_width");
-        areaObj["checked_props"] = areaChkProps;
-
-        m_highLevelAreas[targetIdx] = areaObj;
-        renderMap();
-        showFeatureProperties("highLevelArea", m_selId);
-        m_dirty = true;
-        Toast::success(this, "高级区域属性已应用");
-        return;
+        if (changed) m_lines[li] = ln;
     }
-    bool isPointKind = (m_selType == "point" || m_selType == "highPrecision" || m_selType == "charge");
 
-    if (isPointKind) {
-        QString newName  = m_stationLabelEdit->text().trimmed();
-        QString newKind  = m_stationTypeCombo->currentData().toString();
-        double newX      = m_stationXSpin->value();
-        double newY      = m_stationYSpin->value();
-        double newYawDeg = m_stationYawSpin->value();
-        double newYawRad = newYawDeg * M_PI / 180.0;
-        bool dockable    = m_stationDockableChk->isChecked();
-        bool rotate      = m_stationRotateChk->isChecked();
-        bool pgv         = m_stationPgvChk->isChecked();
-
-        bool typeChecked = m_chkStationType && m_chkStationType->isChecked();
-        if (typeChecked && newKind != m_selType) {
-            // 类型切换处理 (仅当勾选了站点类型时)
-            QJsonObject pointObj;
-            auto take = [&](QJsonArray &arr) {
-                for (int i = 0; i < arr.size(); ++i) {
-                    QJsonObject o = arr[i].toObject();
-                    if (o.value("id").toString() == m_selId) {
-                        pointObj = o; arr.removeAt(i); return true;
-                    }
-                }
-                return false;
-            };
-            if      (m_selType == "point")         take(m_points);
-            else if (m_selType == "charge")        take(m_charges);
-            else if (m_selType == "highPrecision") take(m_highPrecisionPoints);
-
-            if (!pointObj.isEmpty()) {
-                QString newId, defaultName;
-                if      (newKind == "point")         { int nn = nextIdNum(m_points, "p_");              newId = QString("p_%1").arg(nn);  defaultName = QString("LM%1").arg(nn); }
-                else if (newKind == "charge")        { int nn = nextIdNum(m_charges, "c_");             newId = QString("c_%1").arg(nn);  defaultName = QString("CP%1").arg(nn); }
-                else                                  { int nn = nextIdNum(m_highPrecisionPoints, "hp_"); newId = QString("hp_%1").arg(nn); defaultName = QString("TL%1").arg(nn); }
-
-                pointObj["id"]   = newId;
-                if (m_chkStationLabel && m_chkStationLabel->isChecked()) pointObj["name"] = newName.isEmpty() ? defaultName : newName;
-                if (m_chkStationX && m_chkStationX->isChecked()) pointObj["x"] = newX;
-                if (m_chkStationY && m_chkStationY->isChecked()) pointObj["y"] = newY;
-                if (m_chkStationYaw && m_chkStationYaw->isChecked()) {
-                    pointObj["yaw"] = newYawRad;
-                    pointObj["theta"] = newYawDeg;
-                    pointObj["robotYaw"] = 0.0;
-                }
-                if (m_chkStationDockable && m_chkStationDockable->isChecked()) pointObj["rdsDockable"] = dockable;
-                if (m_chkStationRotate && m_chkStationRotate->isChecked()) pointObj["allowRotate"] = rotate;
-                if (m_chkStationPgv && m_chkStationPgv->isChecked()) pointObj["useDownPGV"] = pgv;
-
-                QJsonArray stChkProps;
-                if (m_chkStationType && m_chkStationType->isChecked()) stChkProps.append("stationType");
-                if (m_chkStationLabel && m_chkStationLabel->isChecked()) stChkProps.append("name");
-                if (m_chkStationX && m_chkStationX->isChecked()) stChkProps.append("x");
-                if (m_chkStationY && m_chkStationY->isChecked()) stChkProps.append("y");
-                if (m_chkStationYaw && m_chkStationYaw->isChecked()) stChkProps.append("yaw");
-                if (m_chkStationDockable && m_chkStationDockable->isChecked()) stChkProps.append("rdsDockable");
-                if (m_chkStationRotate && m_chkStationRotate->isChecked()) stChkProps.append("allowRotate");
-                if (m_chkStationPgv && m_chkStationPgv->isChecked()) stChkProps.append("useDownPGV");
-                pointObj["checked_props"] = stChkProps;
-
-                if      (newKind == "point")         m_points.append(pointObj);
-                else if (newKind == "charge")        m_charges.append(pointObj);
-                else                                  m_highPrecisionPoints.append(pointObj);
-
-                m_selType = newKind;
-                m_selId   = newId;
+    for (int ci = 0; ci < m_curves.size(); ++ci) {
+        QJsonObject cv = m_curves[ci].toObject();
+        bool changed = false;
+        QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+        if (cv.value("startid").toString() == nodeId) {
+            if (updateX) cv["x1"] = newX;
+            if (updateY) cv["y1"] = newY;
+            if (!ctrlArr.isEmpty()) {
+                QJsonObject cp0 = ctrlArr[0].toObject();
+                if (updateX) cp0["x"] = newX;
+                if (updateY) cp0["y"] = newY;
+                ctrlArr[0] = cp0;
+                cv["controlPoints"] = ctrlArr;
             }
-        } else {
-            // 普通更新 (仅修改被勾选的属性，未勾选不覆盖原值)
-            auto upd = [&](QJsonArray &arr) {
-                for (int i = 0; i < arr.size(); ++i) {
-                    QJsonObject o = arr[i].toObject();
-                    if (o.value("id").toString() != m_selId) continue;
-                    if (m_chkStationLabel && m_chkStationLabel->isChecked()) o["name"] = newName;
-                    bool xChecked = m_chkStationX && m_chkStationX->isChecked();
-                    bool yChecked = m_chkStationY && m_chkStationY->isChecked();
-                    if (xChecked) o["x"] = newX;
-                    if (yChecked) o["y"] = newY;
-                    if (m_chkStationYaw && m_chkStationYaw->isChecked()) {
-                        o["yaw"] = newYawRad;
-                        o["theta"] = newYawDeg;
-                        o["robotYaw"] = 0.0;
-                    }
-                    if (m_chkStationDockable && m_chkStationDockable->isChecked()) o["rdsDockable"] = dockable;
-                    if (m_chkStationRotate && m_chkStationRotate->isChecked()) o["allowRotate"] = rotate;
-                    if (m_chkStationPgv && m_chkStationPgv->isChecked()) o["useDownPGV"] = pgv;
+            changed = true;
+        }
+        if (cv.value("endid").toString() == nodeId) {
+            if (updateX) cv["x2"] = newX;
+            if (updateY) cv["y2"] = newY;
+            if (!ctrlArr.isEmpty()) {
+                int lastIdx = ctrlArr.size() - 1;
+                QJsonObject cpLast = ctrlArr[lastIdx].toObject();
+                if (updateX) cpLast["x"] = newX;
+                if (updateY) cpLast["y"] = newY;
+                ctrlArr[lastIdx] = cpLast;
+                cv["controlPoints"] = ctrlArr;
+            }
+            changed = true;
+        }
+        if (changed) m_curves[ci] = cv;
+    }
+}
 
-                    QJsonArray stChkProps;
-                    if (m_chkStationType && m_chkStationType->isChecked()) stChkProps.append("stationType");
-                    if (m_chkStationLabel && m_chkStationLabel->isChecked()) stChkProps.append("name");
-                    if (m_chkStationX && m_chkStationX->isChecked()) stChkProps.append("x");
-                    if (m_chkStationY && m_chkStationY->isChecked()) stChkProps.append("y");
-                    if (m_chkStationYaw && m_chkStationYaw->isChecked()) stChkProps.append("yaw");
-                    if (m_chkStationDockable && m_chkStationDockable->isChecked()) stChkProps.append("rdsDockable");
-                    if (m_chkStationRotate && m_chkStationRotate->isChecked()) stChkProps.append("allowRotate");
-                    if (m_chkStationPgv && m_chkStationPgv->isChecked()) stChkProps.append("useDownPGV");
-                    o["checked_props"] = stChkProps;
+void MapEditWidget::applyAreaPropsEdit()
+{
+    int targetIdx = -1;
+    QJsonObject areaObj;
+    for (int i = 0; i < m_highLevelAreas.size(); ++i) {
+        if (m_highLevelAreas[i].toObject().value("id").toString() == m_selId) {
+            targetIdx = i;
+            areaObj = m_highLevelAreas[i].toObject();
+            break;
+        }
+    }
+    if (targetIdx < 0) return;
 
-                    // 联动更新所有相连线路与曲线的端点坐标 (仅在坐标被勾选修改时)
-                    if (xChecked || yChecked) {
-                        for (int li = 0; li < m_lines.size(); ++li) {
-                            QJsonObject ln = m_lines[li].toObject();
-                            bool changed = false;
-                            if (ln.value("startid").toString() == m_selId) {
-                                if (xChecked) ln["x1"] = newX;
-                                if (yChecked) ln["y1"] = newY;
-                                changed = true;
-                            }
-                            if (ln.value("endid").toString() == m_selId) {
-                                if (xChecked) ln["x2"] = newX;
-                                if (yChecked) ln["y2"] = newY;
-                                changed = true;
-                            }
-                            if (changed) m_lines[li] = ln;
-                        }
-                        for (int ci = 0; ci < m_curves.size(); ++ci) {
-                            QJsonObject cv = m_curves[ci].toObject();
-                            bool changed = false;
-                            if (cv.value("startid").toString() == m_selId) {
-                                if (xChecked) cv["x1"] = newX;
-                                if (yChecked) cv["y1"] = newY;
-                                QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-                                if (!ctrlArr.isEmpty()) {
-                                    QJsonObject cp0 = ctrlArr[0].toObject();
-                                    if (xChecked) cp0["x"] = newX;
-                                    if (yChecked) cp0["y"] = newY;
-                                    ctrlArr[0] = cp0;
-                                    cv["controlPoints"] = ctrlArr;
-                                }
-                                changed = true;
-                            }
-                            if (cv.value("endid").toString() == m_selId) {
-                                if (xChecked) cv["x2"] = newX;
-                                if (yChecked) cv["y2"] = newY;
-                                QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-                                if (!ctrlArr.isEmpty()) {
-                                    int lastIdx = ctrlArr.size() - 1;
-                                    QJsonObject cpLast = ctrlArr[lastIdx].toObject();
-                                    if (xChecked) cpLast["x"] = newX;
-                                    if (yChecked) cpLast["y"] = newY;
-                                    ctrlArr[lastIdx] = cpLast;
-                                    cv["controlPoints"] = ctrlArr;
-                                }
-                                changed = true;
-                            }
-                            if (changed) m_curves[ci] = cv;
-                        }
-                    }
+    if (m_chkAreaName && m_chkAreaName->isChecked())
+        areaObj["name"] = m_areaNameEdit->text().trimmed();
 
-                    arr[i] = o;
-                    break;
+    if (m_chkAreaMaxSpeed && m_chkAreaMaxSpeed->isChecked())
+        areaObj["max_speed"] = m_areaMaxSpeedSpin->value();
+
+    if (m_chkAreaMaxAcc && m_chkAreaMaxAcc->isChecked()) {
+        areaObj["max_acceleration"] = m_areaMaxAccSpin->value();
+        areaObj["maxacc"]           = m_areaMaxAccSpin->value();
+    }
+
+    if (m_chkAreaMaxRot && m_chkAreaMaxRot->isChecked()) {
+        areaObj["max_angular_speed"] = m_areaMaxRotSpin->value();
+        areaObj["maxrot"]            = m_areaMaxRotSpin->value();
+    }
+
+    if (m_chkAreaMaxRotAcc && m_chkAreaMaxRotAcc->isChecked()) {
+        areaObj["max_angular_acceleration"] = m_areaMaxRotAccSpin->value();
+        areaObj["maxrotacc"]                = m_areaMaxRotAccSpin->value();
+    }
+
+    if (m_chkAreaReachDist && m_chkAreaReachDist->isChecked())
+        areaObj["arrival_distance_tolerance"] = m_areaReachDistSpin->value();
+
+    if (m_chkAreaReachAngle && m_chkAreaReachAngle->isChecked())
+        areaObj["arrival_angle_tolerance"] = m_areaReachAngleSpin->value();
+
+    if (m_chkAreaRoadWidth && m_chkAreaRoadWidth->isChecked())
+        areaObj["route_width"] = m_areaRoadWidthSpin->value();
+
+    if (m_chkAreaObsStopLen && m_chkAreaObsStopLen->isChecked())
+        areaObj["intrusion_stop_length"] = m_areaObsStopLenSpin->value();
+
+    if (m_chkAreaObsStopWid && m_chkAreaObsStopWid->isChecked())
+        areaObj["intrusion_stop_width"] = m_areaObsStopWidSpin->value();
+
+    if (m_chkAreaObsDecelLen && m_chkAreaObsDecelLen->isChecked())
+        areaObj["intrusion_deceleration_length"] = m_areaObsDecelLenSpin->value();
+
+    if (m_chkAreaObsDecelWid && m_chkAreaObsDecelWid->isChecked())
+        areaObj["intrusion_deceleration_width"] = m_areaObsDecelWidSpin->value();
+
+    // 收集所有被勾选的属性，并保存到 areaObj["checked_props"] (修复 Bug 2)
+    areaObj["checked_props"] = collectCheckedProps({
+        {m_chkAreaName, "name"},
+        {m_chkAreaMaxSpeed, "maxspeed"},
+        {m_chkAreaMaxAcc, "maxacc"},
+        {m_chkAreaMaxRot, "maxrot"},
+        {m_chkAreaMaxRotAcc, "maxrotacc"},
+        {m_chkAreaReachDist, "reachdist"},
+        {m_chkAreaReachAngle, "reachangle"},
+        {m_chkAreaRoadWidth, "width"},
+        {m_chkAreaObsStopLen, "intrusion_stop_length"},
+        {m_chkAreaObsStopWid, "intrusion_stop_width"},
+        {m_chkAreaObsDecelLen, "intrusion_deceleration_length"},
+        {m_chkAreaObsDecelWid, "intrusion_deceleration_width"}
+    });
+
+    double aMinX = 0, aMaxX = 0, aMinY = 0, aMaxY = 0;
+    extractAreaBounds(areaObj, aMinX, aMaxX, aMinY, aMaxY);
+    QJsonArray aCoords;
+    QJsonArray aTL, aBR;
+    aTL.append(aMinX); aTL.append(aMaxY);
+    aBR.append(aMaxX); aBR.append(aMinY);
+    aCoords.append(aTL); aCoords.append(aBR);
+    areaObj["coordinates"] = aCoords;
+    areaObj.remove("minX");
+    areaObj.remove("maxX");
+    areaObj.remove("minY");
+    areaObj.remove("maxY");
+
+    m_highLevelAreas[targetIdx] = areaObj;
+    renderMap();
+    showFeatureProperties("highLevelArea", m_selId);
+    m_dirty = true;
+    Toast::success(this, "高级区域属性已应用");
+}
+
+void MapEditWidget::applyStationPropsEdit()
+{
+    QString newName  = m_stationLabelEdit->text().trimmed();
+    QString newKind  = m_stationTypeCombo->currentData().toString();
+    double newX      = m_stationXSpin->value();
+    double newY      = m_stationYSpin->value();
+    double newYawDeg = m_stationYawSpin->value();
+    double newYawRad = newYawDeg * M_PI / 180.0;
+    bool dockable    = m_stationDockableChk->isChecked();
+    bool rotate      = m_stationRotateChk->isChecked();
+    bool pgv         = m_stationPgvChk->isChecked();
+
+    const QList<QPair<QCheckBox*, QString>> stationChkMapping = {
+        {m_chkStationType, "stationType"},
+        {m_chkStationLabel, "name"},
+        {m_chkStationX, "x"},
+        {m_chkStationY, "y"},
+        {m_chkStationYaw, "yaw"},
+        {m_chkStationDockable, "rdsDockable"},
+        {m_chkStationRotate, "allowRotate"},
+        {m_chkStationPgv, "useDownPGV"}
+    };
+
+    bool typeChecked = m_chkStationType && m_chkStationType->isChecked();
+    if (typeChecked && newKind != m_selType) {
+        // 类型切换处理 (仅当勾选了站点类型时)
+        QJsonObject pointObj;
+        auto take = [&](QJsonArray &arr) {
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                if (o.value("id").toString() == m_selId) {
+                    pointObj = o; arr.removeAt(i); return true;
                 }
-            };
-            if      (m_selType == "point")         upd(m_points);
-            else if (m_selType == "charge")        upd(m_charges);
-            else if (m_selType == "highPrecision") upd(m_highPrecisionPoints);
+            }
+            return false;
+        };
+        if      (m_selType == "point")         take(m_points);
+        else if (m_selType == "charge")        take(m_charges);
+        else if (m_selType == "highPrecision") take(m_highPrecisionPoints);
+
+        if (!pointObj.isEmpty()) {
+            QString newId, defaultName;
+            if      (newKind == "point")         { int nn = nextIdNum(m_points, "p_");              newId = QString("p_%1").arg(nn);  defaultName = QString("LM%1").arg(nn); }
+            else if (newKind == "charge")        { int nn = nextIdNum(m_charges, "c_");             newId = QString("c_%1").arg(nn);  defaultName = QString("CP%1").arg(nn); }
+            else                                  { int nn = nextIdNum(m_highPrecisionPoints, "hp_"); newId = QString("hp_%1").arg(nn); defaultName = QString("TL%1").arg(nn); }
+
+            pointObj["id"]   = newId;
+            if (m_chkStationLabel && m_chkStationLabel->isChecked()) pointObj["name"] = newName.isEmpty() ? defaultName : newName;
+            if (m_chkStationX && m_chkStationX->isChecked()) pointObj["x"] = newX;
+            if (m_chkStationY && m_chkStationY->isChecked()) pointObj["y"] = newY;
+            if (m_chkStationYaw && m_chkStationYaw->isChecked()) {
+                pointObj["yaw"] = newYawRad;
+                pointObj["theta"] = newYawDeg;
+                pointObj["robotYaw"] = 0.0;
+            }
+            if (m_chkStationDockable && m_chkStationDockable->isChecked()) pointObj["rdsDockable"] = dockable;
+            if (m_chkStationRotate && m_chkStationRotate->isChecked()) pointObj["allowRotate"] = rotate;
+            if (m_chkStationPgv && m_chkStationPgv->isChecked()) pointObj["useDownPGV"] = pgv;
+            pointObj["checked_props"] = collectCheckedProps(stationChkMapping);
+
+            if      (newKind == "point")         m_points.append(pointObj);
+            else if (newKind == "charge")        m_charges.append(pointObj);
+            else                                  m_highPrecisionPoints.append(pointObj);
+
+            m_selType = newKind;
+            m_selId   = newId;
         }
     } else {
-        // Line or Curve
-        QString newName   = m_lineNameEdit->text().trimmed();
-        int newDirect     = m_lineDirectCombo->currentData().toInt();
-        const auto &mc = MotionConfigManager::instance();
-        double minSpd = mc.paramMin("max_speed", 0.0);
-        double limitMaxSpd = mc.paramMax("max_speed", 1.0);
-        double minAcc = mc.paramMin("max_acceleration", 0.3);
-        double limitMaxAcc = mc.paramMax("max_acceleration", 0.5);
-        double minDec = mc.paramMin("max_deceleration", 0.3);
-        double limitMaxDec = mc.paramMax("max_deceleration", 0.5);
-        double minRot = mc.paramMin("max_angular_speed", 5.0);
-        double limitMaxRot = mc.paramMax("max_angular_speed", 60.0);
-        double minRotAcc = mc.paramMin("max_angular_acceleration", 10.0);
-        double limitMaxRotAcc = mc.paramMax("max_angular_acceleration", 30.0);
-
-        double maxSpeed   = qBound(minSpd, m_lineMaxSpeedSpin->value(), limitMaxSpd);
-        double maxAcc     = qBound(minAcc, m_lineMaxAccSpin->value(), limitMaxAcc);
-        double maxDec     = qBound(minDec, m_lineMaxDecSpin->value(), limitMaxDec);
-        double maxRot     = qBound(minRot, m_lineMaxRotSpin->value(), limitMaxRot);
-        double maxRotAcc  = qBound(minRotAcc, m_lineMaxRotAccSpin->value(), limitMaxRotAcc);
-        double reachDist  = m_lineReachDistSpin->value();
-        double reachAngle = m_lineReachAngleSpin->value();
-        double roadWidth  = m_lineRoadWidthSpin->value();
-        double obsStopLen  = m_lineObsStopLenSpin->value();
-        double obsStopWid  = m_lineObsStopWidSpin->value();
-        double obsDecelLen = m_lineObsDecelLenSpin->value();
-        double obsDecelWid = m_lineObsDecelWidSpin->value();
-
-        auto updLine = [&](QJsonArray &arr) {
+        // 普通更新 (仅修改被勾选的属性，未勾选不覆盖原值)
+        auto upd = [&](QJsonArray &arr) {
             for (int i = 0; i < arr.size(); ++i) {
                 QJsonObject o = arr[i].toObject();
                 if (o.value("id").toString() != m_selId) continue;
-                if (m_chkLineName && m_chkLineName->isChecked()) o["name"] = newName;
-                if (m_chkLineDirect && m_chkLineDirect->isChecked()) o["direct"] = newDirect;
-                if (m_chkLineMaxSpeed && m_chkLineMaxSpeed->isChecked()) o["maxspeed"] = maxSpeed;
-                if (m_chkLineMaxAcc && m_chkLineMaxAcc->isChecked()) {
-                    o["max_acceleration"] = maxAcc;
-                    o["maxacc"]           = maxAcc;
+                if (m_chkStationLabel && m_chkStationLabel->isChecked()) o["name"] = newName;
+                bool xChecked = m_chkStationX && m_chkStationX->isChecked();
+                bool yChecked = m_chkStationY && m_chkStationY->isChecked();
+                if (xChecked) o["x"] = newX;
+                if (yChecked) o["y"] = newY;
+                if (m_chkStationYaw && m_chkStationYaw->isChecked()) {
+                    o["yaw"] = newYawRad;
+                    o["theta"] = newYawDeg;
+                    o["robotYaw"] = 0.0;
                 }
-                if (m_chkLineMaxRot && m_chkLineMaxRot->isChecked()) {
-                    o["max_angular_speed"] = maxRot;
-                    o["maxrot"]            = maxRot;
-                }
-                if (m_chkLineMaxRotAcc && m_chkLineMaxRotAcc->isChecked()) {
-                    o["max_angular_acceleration"] = maxRotAcc;
-                    o["maxrotacc"]                = maxRotAcc;
-                }
-                if (m_chkLineReachDist && m_chkLineReachDist->isChecked()) o["reachdist"] = reachDist;
-                if (m_chkLineReachAngle && m_chkLineReachAngle->isChecked()) o["reachangle"] = reachAngle;
-                if (m_chkLineRoadWidth && m_chkLineRoadWidth->isChecked()) o["width"] = roadWidth;
-                bool obsChanged = false;
-                if (m_chkLineObsStopLen && m_chkLineObsStopLen->isChecked())   { o["intrusion_stop_length"] = obsStopLen; obsChanged = true; }
-                if (m_chkLineObsStopWid && m_chkLineObsStopWid->isChecked())   { o["intrusion_stop_width"] = obsStopWid; obsChanged = true; }
-                if (m_chkLineObsDecelLen && m_chkLineObsDecelLen->isChecked()) { o["intrusion_deceleration_length"] = obsDecelLen; obsChanged = true; }
-                if (m_chkLineObsDecelWid && m_chkLineObsDecelWid->isChecked()) { o["intrusion_deceleration_width"] = obsDecelWid; obsChanged = true; }
-                if (obsChanged) o["is_custom_obstacle"] = true;
+                if (m_chkStationDockable && m_chkStationDockable->isChecked()) o["rdsDockable"] = dockable;
+                if (m_chkStationRotate && m_chkStationRotate->isChecked()) o["allowRotate"] = rotate;
+                if (m_chkStationPgv && m_chkStationPgv->isChecked()) o["useDownPGV"] = pgv;
+                o["checked_props"] = collectCheckedProps(stationChkMapping);
 
-                QJsonArray lnChkProps;
-                if (m_chkLineName && m_chkLineName->isChecked()) lnChkProps.append("name");
-                if (m_chkLineDirect && m_chkLineDirect->isChecked()) lnChkProps.append("direct");
-                if (m_chkLineMaxSpeed && m_chkLineMaxSpeed->isChecked()) lnChkProps.append("maxspeed");
-                if (m_chkLineMaxAcc && m_chkLineMaxAcc->isChecked()) lnChkProps.append("maxacc");
-                if (m_chkLineMaxRot && m_chkLineMaxRot->isChecked()) lnChkProps.append("maxrot");
-                if (m_chkLineMaxRotAcc && m_chkLineMaxRotAcc->isChecked()) lnChkProps.append("maxrotacc");
-                if (m_chkLineReachDist && m_chkLineReachDist->isChecked()) lnChkProps.append("reachdist");
-                if (m_chkLineReachAngle && m_chkLineReachAngle->isChecked()) lnChkProps.append("reachangle");
-                if (m_chkLineRoadWidth && m_chkLineRoadWidth->isChecked()) lnChkProps.append("width");
-                if (m_chkLineObsStopLen && m_chkLineObsStopLen->isChecked())   lnChkProps.append("intrusion_stop_length");
-                if (m_chkLineObsStopWid && m_chkLineObsStopWid->isChecked())   lnChkProps.append("intrusion_stop_width");
-                if (m_chkLineObsDecelLen && m_chkLineObsDecelLen->isChecked()) lnChkProps.append("intrusion_deceleration_length");
-                if (m_chkLineObsDecelWid && m_chkLineObsDecelWid->isChecked()) lnChkProps.append("intrusion_deceleration_width");
-                o["checked_props"] = lnChkProps;
+                // 联动更新所有相连线路与曲线的端点坐标 (仅在坐标被勾选修改时)
+                if (xChecked || yChecked) {
+                    updateConnectedRoutesPos(m_selId, newX, newY, xChecked, yChecked);
+                }
 
                 arr[i] = o;
                 break;
             }
         };
-        if (m_selType == "line")       updLine(m_lines);
-        else if (m_selType == "curve") updLine(m_curves);
-        syncLineObstaclesToEndpoints();
+        if      (m_selType == "point")         upd(m_points);
+        else if (m_selType == "charge")        upd(m_charges);
+        else if (m_selType == "highPrecision") upd(m_highPrecisionPoints);
+    }
+}
+
+void MapEditWidget::applyLinePropsEdit()
+{
+    QString newName   = m_lineNameEdit->text().trimmed();
+    int newDirect     = m_lineDirectCombo->currentData().toInt();
+    const auto &mc = MotionConfigManager::instance();
+    double minSpd = mc.paramMin("max_speed", 0.0);
+    double limitMaxSpd = mc.paramMax("max_speed", 1.0);
+    double minAcc = mc.paramMin("max_acceleration", 0.3);
+    double limitMaxAcc = mc.paramMax("max_acceleration", 0.5);
+    double minDec = mc.paramMin("max_deceleration", 0.3);
+    double limitMaxDec = mc.paramMax("max_deceleration", 0.5);
+    double minRot = mc.paramMin("max_angular_speed", 5.0);
+    double limitMaxRot = mc.paramMax("max_angular_speed", 60.0);
+    double minRotAcc = mc.paramMin("max_angular_acceleration", 10.0);
+    double limitMaxRotAcc = mc.paramMax("max_angular_acceleration", 30.0);
+
+    double maxSpeed   = qBound(minSpd, m_lineMaxSpeedSpin->value(), limitMaxSpd);
+    double maxAcc     = qBound(minAcc, m_lineMaxAccSpin->value(), limitMaxAcc);
+    double maxDec     = qBound(minDec, m_lineMaxDecSpin->value(), limitMaxDec);
+    double maxRot     = qBound(minRot, m_lineMaxRotSpin->value(), limitMaxRot);
+    double maxRotAcc  = qBound(minRotAcc, m_lineMaxRotAccSpin->value(), limitMaxRotAcc);
+    double reachDist  = m_lineReachDistSpin->value();
+    double reachAngle = m_lineReachAngleSpin->value();
+    double roadWidth  = m_lineRoadWidthSpin->value();
+    double obsStopLen  = m_lineObsStopLenSpin->value();
+    double obsStopWid  = m_lineObsStopWidSpin->value();
+    double obsDecelLen = m_lineObsDecelLenSpin->value();
+    double obsDecelWid = m_lineObsDecelWidSpin->value();
+
+    const QList<QPair<QCheckBox*, QString>> lineChkMapping = {
+        {m_chkLineName, "name"},
+        {m_chkLineDirect, "direct"},
+        {m_chkLineMaxSpeed, "maxspeed"},
+        {m_chkLineMaxAcc, "maxacc"},
+        {m_chkLineMaxRot, "maxrot"},
+        {m_chkLineMaxRotAcc, "maxrotacc"},
+        {m_chkLineReachDist, "reachdist"},
+        {m_chkLineReachAngle, "reachangle"},
+        {m_chkLineRoadWidth, "width"},
+        {m_chkLineObsStopLen, "intrusion_stop_length"},
+        {m_chkLineObsStopWid, "intrusion_stop_width"},
+        {m_chkLineObsDecelLen, "intrusion_deceleration_length"},
+        {m_chkLineObsDecelWid, "intrusion_deceleration_width"}
+    };
+
+    auto updLine = [&](QJsonArray &arr) {
+        for (int i = 0; i < arr.size(); ++i) {
+            QJsonObject o = arr[i].toObject();
+            if (o.value("id").toString() != m_selId) continue;
+            if (m_chkLineName && m_chkLineName->isChecked()) o["name"] = newName;
+            if (m_chkLineDirect && m_chkLineDirect->isChecked()) o["direct"] = newDirect;
+            if (m_chkLineMaxSpeed && m_chkLineMaxSpeed->isChecked()) o["maxspeed"] = maxSpeed;
+            if (m_chkLineMaxAcc && m_chkLineMaxAcc->isChecked()) {
+                o["max_acceleration"] = maxAcc;
+                o["maxacc"]           = maxAcc;
+            }
+            if (m_chkLineMaxRot && m_chkLineMaxRot->isChecked()) {
+                o["max_angular_speed"] = maxRot;
+                o["maxrot"]            = maxRot;
+            }
+            if (m_chkLineMaxRotAcc && m_chkLineMaxRotAcc->isChecked()) {
+                o["max_angular_acceleration"] = maxRotAcc;
+                o["maxrotacc"]                = maxRotAcc;
+            }
+            if (m_chkLineReachDist && m_chkLineReachDist->isChecked()) o["reachdist"] = reachDist;
+            if (m_chkLineReachAngle && m_chkLineReachAngle->isChecked()) o["reachangle"] = reachAngle;
+            if (m_chkLineRoadWidth && m_chkLineRoadWidth->isChecked()) o["width"] = roadWidth;
+            bool obsChanged = false;
+            if (m_chkLineObsStopLen && m_chkLineObsStopLen->isChecked())   { o["intrusion_stop_length"] = obsStopLen; obsChanged = true; }
+            if (m_chkLineObsStopWid && m_chkLineObsStopWid->isChecked())   { o["intrusion_stop_width"] = obsStopWid; obsChanged = true; }
+            if (m_chkLineObsDecelLen && m_chkLineObsDecelLen->isChecked()) { o["intrusion_deceleration_length"] = obsDecelLen; obsChanged = true; }
+            if (m_chkLineObsDecelWid && m_chkLineObsDecelWid->isChecked()) { o["intrusion_deceleration_width"] = obsDecelWid; obsChanged = true; }
+            if (obsChanged) o["is_custom_obstacle"] = true;
+
+            o["checked_props"] = collectCheckedProps(lineChkMapping);
+            arr[i] = o;
+            break;
+        }
+    };
+    if (m_selType == "line")       updLine(m_lines);
+    else if (m_selType == "curve") updLine(m_curves);
+    syncLineObstaclesToEndpoints();
+}
+
+void MapEditWidget::applyPropsEdit()
+{
+    if (m_selType.isEmpty()) return;
+
+    if (m_selType == "highLevelArea") {
+        applyAreaPropsEdit();
+        return;
+    }
+
+    bool isPointKind = (m_selType == "point" || m_selType == "highPrecision" || m_selType == "charge");
+    if (isPointKind) {
+        applyStationPropsEdit();
+    } else {
+        applyLinePropsEdit();
     }
 
     renderMap();
@@ -4491,6 +4913,636 @@ void MapEditWidget::onEditMap()
 
 // ── Event filter ──────────────────────────────────────────────────────────────
 
+void MapEditWidget::dragMoveArea(const QPointF &sp)
+{
+    int targetIdx = -1;
+    QJsonObject areaObj;
+    for (int i = 0; i < m_highLevelAreas.size(); ++i) {
+        if (m_highLevelAreas[i].toObject().value("id").toString() == m_selId) {
+            targetIdx = i;
+            areaObj = m_highLevelAreas[i].toObject();
+            break;
+        }
+    }
+    if (targetIdx < 0) return;
+
+    QPointF pStart = sceneToWorld(m_areaDragStartScenePos.x(), m_areaDragStartScenePos.y());
+    QPointF pCur   = sceneToWorld(sp.x(), sp.y());
+    double dx = pCur.x() - pStart.x();
+    double dy = pCur.y() - pStart.y();
+
+    double nMinX = m_areaDragStartMinX;
+    double nMaxX = m_areaDragStartMaxX;
+    double nMinY = m_areaDragStartMinY;
+    double nMaxY = m_areaDragStartMaxY;
+
+    switch (m_areaDragPart) {
+    case AreaHit_Body:
+        nMinX += dx; nMaxX += dx;
+        nMinY += dy; nMaxY += dy;
+        break;
+    case AreaHit_LeftEdge:
+        nMinX += dx;
+        if (nMinX > nMaxX - 0.2) nMinX = nMaxX - 0.2;
+        break;
+    case AreaHit_RightEdge:
+        nMaxX += dx;
+        if (nMaxX < nMinX + 0.2) nMaxX = nMinX + 0.2;
+        break;
+    case AreaHit_TopEdge:
+        nMaxY += dy;
+        if (nMaxY < nMinY + 0.2) nMaxY = nMinY + 0.2;
+        break;
+    case AreaHit_BottomEdge:
+        nMinY += dy;
+        if (nMinY > nMaxY - 0.2) nMinY = nMaxY - 0.2;
+        break;
+    case AreaHit_TopLeft:
+        nMinX += dx;
+        nMaxY += dy;
+        if (nMinX > nMaxX - 0.2) nMinX = nMaxX - 0.2;
+        if (nMaxY < nMinY + 0.2) nMaxY = nMinY + 0.2;
+        break;
+    case AreaHit_TopRight:
+        nMaxX += dx;
+        nMaxY += dy;
+        if (nMaxX < nMinX + 0.2) nMaxX = nMinX + 0.2;
+        if (nMaxY < nMinY + 0.2) nMaxY = nMinY + 0.2;
+        break;
+    case AreaHit_BottomLeft:
+        nMinX += dx;
+        nMinY += dy;
+        if (nMinX > nMaxX - 0.2) nMinX = nMaxX - 0.2;
+        if (nMinY > nMaxY - 0.2) nMinY = nMaxY - 0.2;
+        break;
+    case AreaHit_BottomRight:
+        nMaxX += dx;
+        nMinY += dy;
+        if (nMaxX < nMinX + 0.2) nMaxX = nMinX + 0.2;
+        if (nMinY > nMaxY - 0.2) nMinY = nMaxY - 0.2;
+        break;
+    default: break;
+    }
+
+    double fMinX = nMinX;
+    double fMaxX = nMaxX;
+    double fMinY = nMinY;
+    double fMaxY = nMaxY;
+
+    QJsonArray coords;
+    QJsonArray pTL, pBR;
+    pTL.append(fMinX); pTL.append(fMaxY);
+    pBR.append(fMaxX); pBR.append(fMinY);
+    coords.append(pTL); coords.append(pBR);
+
+    areaObj["coordinates"] = coords;
+    areaObj.remove("minX");
+    areaObj.remove("maxX");
+    areaObj.remove("minY");
+    areaObj.remove("maxY");
+
+    m_highLevelAreas[targetIdx] = areaObj;
+
+    renderMap();
+    m_dirty = true;
+    if (m_areaBoundsLabel) {
+        m_areaBoundsLabel->setText(QString("X: [%1, %2]  Y: [%3, %4]")
+            .arg(fMinX, 0, 'f', 2).arg(fMaxX, 0, 'f', 2).arg(fMinY, 0, 'f', 2).arg(fMaxY, 0, 'f', 2));
+    }
+}
+
+void MapEditWidget::dragMoveNode(const QPointF &sp)
+{
+    QPointF newWorld = sceneToWorld(sp.x(), sp.y());
+    // 1. 更新被拖动节点自身的坐标
+    auto updatePointPos = [&](QJsonArray &arr) {
+        for (int i = 0; i < arr.size(); ++i) {
+            QJsonObject o = arr[i].toObject();
+            if (o.value("id").toString() == m_draggingNodeId) {
+                o["x"] = newWorld.x();
+                o["y"] = newWorld.y();
+                arr[i] = o;
+                break;
+            }
+        }
+    };
+    if      (m_draggingNodeType == "point")         updatePointPos(m_points);
+    else if (m_draggingNodeType == "charge")        updatePointPos(m_charges);
+    else if (m_draggingNodeType == "highPrecision") updatePointPos(m_highPrecisionPoints);
+
+    // 2 & 3. 实时拉伸/联动所有连接到该节点的直线和曲线端点 (复用 updateConnectedRoutesPos)
+    updateConnectedRoutesPos(m_draggingNodeId, newWorld.x(), newWorld.y(), true, true);
+
+    // 4. 重绘场景并保持当前节点的高亮选中状态
+    renderMap();
+    m_dirty = true;
+    QString key = m_draggingNodeType + "_" + m_draggingNodeId;
+    if (m_featureItems.contains(key)) {
+        m_selItem = m_featureItems.value(key);
+        RouteFeatureSelect::applySelectColor(m_selItem);
+    }
+}
+
+void MapEditWidget::dragMoveCurveHandle(const QPointF &sp)
+{
+    // 端点手柄(0=起点, 2=终点)拖拽时吸附到附近已有的点，使曲线端点与
+    // 该点共用同一坐标；控制点手柄(1)不吸附，仅跟随鼠标调整曲率。
+    if (m_handleIndex == 0 || m_handleIndex == 2) {
+        SnapResult snap = findSnap(sp);
+        updateSnapIndicator(snap);
+        m_activeHandle->setPos(snap.valid ? snap.scenePos : sp);
+    } else {
+        m_activeHandle->setPos(sp);
+    }
+    updateCurveShape(m_handleCurveId);
+}
+
+bool MapEditWidget::handleCanvasMouseMove(QMouseEvent *me)
+{
+    QPointF sp = m_mapView->mapToScene(me->pos());
+    updateCoordLabel(sp);
+
+    // 手动平移(中键/Alt+左键): 按像素增量滚动滚动条
+    if (m_panning) {
+        QPoint delta = me->pos() - m_lastPanPos;
+        m_lastPanPos = me->pos();
+        m_mapView->horizontalScrollBar()->setValue(
+            m_mapView->horizontalScrollBar()->value() - delta.x());
+        m_mapView->verticalScrollBar()->setValue(
+            m_mapView->verticalScrollBar()->value() - delta.y());
+        updateRulers();
+        return true;
+    }
+
+    if (m_isDrawingArea && m_areaPreviewItem) {
+        QRectF r = QRectF(m_areaStartScenePos, sp).normalized();
+        m_areaPreviewItem->setRect(r);
+        return true;
+    }
+
+    // 拖拽移动或调整高级区域大小
+    if (m_isDraggingArea && m_selType == "highLevelArea") {
+        dragMoveArea(sp);
+        return true;
+    }
+
+    // 拖拽站点节点
+    if (m_isDraggingNode) {
+        dragMoveNode(sp);
+        return true;
+    }
+
+    // 拖拽曲线控制手柄
+    if (m_isDraggingHandle && m_activeHandle) {
+        dragMoveCurveHandle(sp);
+        return true;
+    }
+
+    if (m_isPainting && (m_drawStatus == Brush || m_drawStatus == Eraser)) {
+        paintStroke(m_lastPaintImgPos, sp, false);
+        m_lastPaintImgPos = sp;
+        return true;
+    }
+
+    if (m_drawStatus != Drag) {
+        // Show snap indicator in draw modes
+        SnapResult snap = findSnap(sp);
+        updateSnapIndicator(snap);
+        updatePreview(snap.valid ? snap.scenePos : sp);
+    } else {
+        // Drag mode: hover cursor on handles or stations
+        updateSnapIndicator({});
+        const double hoverTol = hitTolScene(10.0);
+        for (auto &lst : m_curveHandles.values()) {
+            for (auto *h : lst) {
+                if (!h) continue;
+                if (std::hypot(sp.x()-h->pos().x(), sp.y()-h->pos().y()) < hoverTol) {
+                    m_mapView->viewport()->setCursor(Qt::SizeAllCursor);
+                    return false;
+                }
+            }
+        }
+        // 如果选中了高级区域，根据鼠标悬停位置设置缩放/移动光标
+        if (m_selType == "highLevelArea") {
+            QJsonObject selArea;
+            for (const auto &v : m_highLevelAreas) {
+                if (v.toObject().value("id").toString() == m_selId) {
+                    selArea = v.toObject();
+                    break;
+                }
+            }
+            if (!selArea.isEmpty()) {
+                AreaHitPart hp = getAreaHitPart(sp, selArea);
+                switch (hp) {
+                case AreaHit_TopLeft:
+                case AreaHit_BottomRight:
+                    m_mapView->viewport()->setCursor(Qt::SizeFDiagCursor);
+                    return false;
+                case AreaHit_TopRight:
+                case AreaHit_BottomLeft:
+                    m_mapView->viewport()->setCursor(Qt::SizeBDiagCursor);
+                    return false;
+                case AreaHit_LeftEdge:
+                case AreaHit_RightEdge:
+                    m_mapView->viewport()->setCursor(Qt::SizeHorCursor);
+                    return false;
+                case AreaHit_TopEdge:
+                case AreaHit_BottomEdge:
+                    m_mapView->viewport()->setCursor(Qt::SizeVerCursor);
+                    return false;
+                case AreaHit_Body:
+                    m_mapView->viewport()->setCursor(Qt::SizeAllCursor);
+                    return false;
+                default: break;
+                }
+            }
+        }
+
+        SnapResult nodeSnap = findSnap(sp, 0.4);
+        if (nodeSnap.valid && (nodeSnap.type == "point" || nodeSnap.type == "charge" || nodeSnap.type == "highPrecision")) {
+            m_mapView->viewport()->setCursor(Qt::SizeAllCursor);
+            return false;
+        }
+        m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
+    }
+    return false;
+}
+
+bool MapEditWidget::handleCanvasMousePress(QMouseEvent *me)
+{
+    // Right-click: complete curve drawing / cancel line chain / return to Drag
+    if (me->button() == Qt::RightButton) {
+        if (m_drawStatus == Curve && m_curveCtrlPts.size() >= 2) {
+            finalizeCurve();
+            return true;
+        }
+        if (m_drawStatus == Line && m_drawHasP1) {
+            cancelDraw();
+            clearPreview();
+            return true;
+        }
+        if (m_drawStatus != Drag) setDrawMode(Drag);
+        else cancelDraw();
+        return true;
+    }
+
+    // Ctrl + 左键 → 放行给 MapCanvas 处理拖拽旋转(不在 eventFilter 中消费)
+    if (me->button() == Qt::LeftButton && (me->modifiers() & Qt::ControlModifier)) {
+        return false;
+    }
+
+    // 中键 或 Alt+左键 → 手动平移(替代 ScrollHandDrag，避免与手柄拖拽冲突)
+    if (me->button() == Qt::MiddleButton ||
+        (me->button() == Qt::LeftButton && (me->modifiers() & Qt::AltModifier))) {
+        m_panning = true;
+        m_lastPanPos = me->pos();
+        m_mapView->viewport()->setCursor(Qt::ClosedHandCursor);
+        return true;
+    }
+
+    if (me->button() != Qt::LeftButton) return false;
+    QPointF sp = m_mapView->mapToScene(me->pos());
+
+    if (m_drawStatus == Brush || m_drawStatus == Eraser) {
+        pushMapUndo();
+        m_isPainting = true;
+        m_lastPaintImgPos = sp;
+        paintStroke(sp, sp, true);
+        return true;
+    }
+
+    // ─ Drag mode ─────────────────────────────────────────────────────────
+    if (m_drawStatus == Drag) {
+        const double tol = hitTolScene(10.0);
+        for (auto lit = m_curveHandles.begin(); lit != m_curveHandles.end(); ++lit) {
+            auto &handles = lit.value();
+            for (int i = 0; i < handles.size(); ++i) {
+                if (!handles[i]) continue;   // 端点由节点显示，无手柄
+                QPointF hp = handles[i]->pos();
+                if (std::hypot(sp.x()-hp.x(), sp.y()-hp.y()) < tol) {
+                    m_activeHandle     = handles[i];
+                    m_handleCurveId    = lit.key();
+                    m_handleIndex      = i;
+                    m_isDraggingHandle = true;
+                    m_mapView->viewport()->setCursor(Qt::ClosedHandCursor);
+                    return true;
+                }
+            }
+        }
+
+        // 优先检查是否点击在站点节点上（普通站点/充电点/精定位点），触发节点拖动
+        SnapResult nodeSnap = findSnap(sp, 0.4);
+        if (!nodeSnap.valid) {
+            for (auto *it : m_scene->items(QRectF(sp.x()-tol, sp.y()-tol, tol*2, tol*2))) {
+                QGraphicsItem *target = it;
+                if (!target->data(0).isValid() && target->parentItem()) target = target->parentItem();
+                QString type = target->data(0).toString();
+                QString id = target->data(1).toString();
+                if (type == "point" || type == "charge" || type == "highPrecision") {
+                    nodeSnap.valid = true;
+                    nodeSnap.type = type;
+                    nodeSnap.id = id;
+                    nodeSnap.scenePos = target->pos();
+                    nodeSnap.worldPos = sceneToWorld(target->pos().x(), target->pos().y());
+                    break;
+                }
+            }
+        }
+        if (nodeSnap.valid && (nodeSnap.type == "point" || nodeSnap.type == "charge" || nodeSnap.type == "highPrecision")) {
+            m_isDraggingNode    = true;
+            m_draggingNodeType  = nodeSnap.type;
+            m_draggingNodeId    = nodeSnap.id;
+            m_dragStartScenePos = nodeSnap.scenePos;
+            m_dragStartWorldPos = nodeSnap.worldPos;
+            showFeatureProperties(nodeSnap.type, nodeSnap.id);
+            m_mapView->viewport()->setCursor(Qt::ClosedHandCursor);
+            return true;
+        }
+
+        // 如果已选中高级区域，检查是否点击在其缩放手柄或边框/内部以触发移动或缩放
+        if (m_selType == "highLevelArea") {
+            QJsonObject selArea;
+            for (const auto &v : m_highLevelAreas) {
+                if (v.toObject().value("id").toString() == m_selId) {
+                    selArea = v.toObject();
+                    break;
+                }
+            }
+            if (!selArea.isEmpty()) {
+                AreaHitPart hp = getAreaHitPart(sp, selArea);
+                QGraphicsItem *ptTarget = RouteFeatureSelect::pickItem(m_scene, sp, hitTolScene(10.0));
+                if (!ptTarget && hp != AreaHit_None) {
+                    m_isDraggingArea = true;
+                    m_areaDragPart = hp;
+                    m_areaDragStartScenePos = sp;
+                    double startMinX = 0, startMaxX = 0, startMinY = 0, startMaxY = 0;
+                    // Bug 1 修复: 第5个参数必须是 startMaxY（原代码曾写错为 startMinY）
+                    extractAreaBounds(selArea, startMinX, startMaxX, startMinY, startMaxY);
+                    m_areaDragStartMinX = startMinX;
+                    m_areaDragStartMaxX = startMaxX;
+                    m_areaDragStartMinY = startMinY;
+                    m_areaDragStartMaxY = startMaxY;
+                    return true;
+                }
+            }
+        }
+
+        selectFeatureAt(sp);
+        return false;
+    }
+
+    // ─ Draw modes ─────────────────────────────────────────────────────────
+    SnapResult snap = findSnap(sp);
+    QPointF usePos  = snap.valid ? snap.scenePos : sp;
+    QString useId   = snap.valid ? snap.id       : QString();
+
+    switch (m_drawStatus) {
+    case Point:
+        if (hasOverlap(sp)) { selectFeatureAt(sp); }  // too close → select
+        else { addPoint(sp); }
+        break;
+    case Charge:
+        if (hasOverlap(sp)) { selectFeatureAt(sp); }
+        else {
+            const double epcX = AlignConfigManager::instance().epcX();
+            addCharge(sp, epcX, 0.0, 0.0);
+        }
+        break;
+    case HighPrecision:
+        if (hasOverlap(sp)) { selectFeatureAt(sp); }
+        else {
+            const double epcX = AlignConfigManager::instance().epcX();
+            addHighPrecisionPoint(sp, epcX, 0.0, 0.0);
+        }
+        break;
+    case Line: {
+        if (!m_drawHasP1) {
+            // 起点: 优先吸附到已有点，未命中则在空地自动创建新普通站点(LM)
+            SnapResult head = ensureNodeAt(usePos);
+            m_drawP1   = head.scenePos;
+            m_drawP1Id = head.id;
+            m_drawHasP1 = true;
+        } else {
+            // 终点: 优先吸附到已有点，未命中则在空地自动创建新普通站点(LM)
+            SnapResult tail = ensureNodeAt(usePos);
+            if (tail.id == m_drawP1Id) {
+                Toast::warning(this, "起点与终点不能为同一站点");
+                clearPreview();
+            } else if (hasRouteBetween(m_drawP1Id, tail.id, m_drawP1, tail.scenePos)) {
+                Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
+                clearPreview();
+            } else {
+                addLine(m_drawP1, tail.scenePos, m_drawP1Id, tail.id);
+                // 连续连线模式: 刚绘制好的终点自动作为下一条线段的起点
+                m_drawP1   = tail.scenePos;
+                m_drawP1Id = tail.id;
+                m_drawHasP1 = true;
+                clearPreview();
+            }
+        }
+        break;
+    }
+    case Curve: {
+        // 三阶贝塞尔曲线：最多 4 个控制点 (P0 起点, P1 控制点1, P2 控制点2, P3 终点)
+        int n = m_curveCtrlPts.size();
+        if (n == 0) {
+            // 起点: 强制吸附或创建节点
+            SnapResult head = ensureNodeAt(usePos);
+            m_curveCtrlPts.append(head.scenePos);
+            m_curveCtrlIds.append(head.id);
+            m_drawP1   = head.scenePos;
+            m_drawP1Id = head.id;
+            m_drawHasP1 = true;
+        } else if (n < 3) {
+            // 第 2 点 (P1) 或 第 3 点 (P2): 自由中间控制点
+            m_curveCtrlPts.append(usePos);
+            m_curveCtrlIds.append(useId);
+        } else if (n == 3) {
+            // 第 4 点 (P3): 达到三阶上限（4控制点），强制吸附或创建终点节点并自动完成绘制
+            SnapResult tail = ensureNodeAt(usePos);
+            QString startId = m_curveCtrlIds.isEmpty() ? QString() : m_curveCtrlIds.first();
+            if (!startId.isEmpty() && tail.id == startId) {
+                Toast::warning(this, "起点与终点不能为同一站点");
+                cancelDraw();
+            } else if (!startId.isEmpty() && hasRouteBetween(startId, tail.id, m_curveCtrlPts.first(), tail.scenePos)) {
+                Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
+                cancelDraw();
+            } else {
+                m_curveCtrlPts.append(tail.scenePos);
+                m_curveCtrlIds.append(tail.id);
+                finalizeCurve();
+            }
+        }
+        break;
+    }
+    case Area: {
+        m_isDrawingArea = true;
+        m_areaStartScenePos = sp;
+        if (m_areaPreviewItem) {
+            m_scene->removeItem(m_areaPreviewItem);
+            delete m_areaPreviewItem;
+            m_areaPreviewItem = nullptr;
+        }
+        m_areaPreviewItem = m_scene->addRect(QRectF(sp, sp), QPen(QColor("#8b5cf6"), 2.0, Qt::DashLine), QBrush(QColor(139, 92, 246, 30)));
+        m_areaPreviewItem->setZValue(100);
+        return true;
+    }
+    default: break;
+    }
+    return true;
+}
+
+bool MapEditWidget::handleCanvasMouseRelease(QMouseEvent *me)
+{
+    if (me->button() == Qt::LeftButton && m_isDraggingArea) {
+        m_isDraggingArea = false;
+        m_areaDragPart = AreaHit_None;
+        m_dirty = true;
+        renderMap();
+        showFeatureProperties("highLevelArea", m_selId);
+        return true;
+    }
+    if (me->button() == Qt::LeftButton && m_isDrawingArea) {
+        m_isDrawingArea = false;
+        if (m_areaPreviewItem) {
+            m_scene->removeItem(m_areaPreviewItem);
+            delete m_areaPreviewItem;
+            m_areaPreviewItem = nullptr;
+        }
+        QPointF sp = m_mapView->mapToScene(me->pos());
+        QRectF r = QRectF(m_areaStartScenePos, sp).normalized();
+        if (r.width() >= 5.0 && r.height() >= 5.0) {
+            QPointF wTopLeft = sceneToWorld(r.left(), r.top());
+            QPointF wBottomRight = sceneToWorld(r.right(), r.bottom());
+            double minX = qMin(wTopLeft.x(), wBottomRight.x());
+            double maxX = qMax(wTopLeft.x(), wBottomRight.x());
+            double minY = qMin(wTopLeft.y(), wBottomRight.y());
+            double maxY = qMax(wTopLeft.y(), wBottomRight.y());
+
+            const auto &mc = MotionConfigManager::instance();
+            QJsonObject newArea;
+            int newNum = m_highLevelAreas.size() + 1;
+            QString newId = QString("highLevelArea_%1").arg(QDateTime::currentMSecsSinceEpoch());
+            newArea["id"] = newId;
+            newArea["name"] = QString("AdvancedArea %1").arg(newNum);
+
+            QJsonArray coords;
+            QJsonArray pTL, pBR;
+            pTL.append(minX); pTL.append(maxY);
+            pBR.append(maxX); pBR.append(minY);
+            coords.append(pTL); coords.append(pBR);
+            newArea["coordinates"] = coords;
+            newArea["max_speed"] = mc.maxSpeed();
+            newArea["max_acceleration"] = mc.maxAcceleration();
+            newArea["maxacc"] = mc.maxAcceleration();
+            newArea["max_angular_speed"] = mc.maxAngularSpeedDeg();
+            newArea["maxrot"] = mc.maxAngularSpeedDeg();
+            newArea["max_angular_acceleration"] = mc.maxAngularAccelerationDeg();
+            newArea["maxrotacc"] = mc.maxAngularAccelerationDeg();
+            newArea["arrival_distance_tolerance"] = mc.arrivalDistanceTolerance();
+            newArea["arrival_angle_tolerance"] = mc.arrivalAngleToleranceDeg();
+            newArea["route_width"] = mc.routeWidth();
+            newArea["intrusion_stop_length"] = mc.defaultObsStopLength();
+            newArea["intrusion_stop_width"] = mc.defaultObsStopWidth();
+            newArea["intrusion_deceleration_length"] = mc.defaultObsDecelLength();
+            newArea["intrusion_deceleration_width"] = mc.defaultObsDecelWidth();
+            newArea["checked_props"] = QJsonArray();
+
+            m_highLevelAreas.append(newArea);
+            m_dirty = true;
+            renderMap();
+            showFeatureProperties("highLevelArea", newId);
+            setDrawMode(Drag);
+        }
+        return true;
+    }
+    if (me->button() == Qt::LeftButton && m_isPainting) {
+        m_isPainting = false;
+        return true;
+    }
+    // 手动平移释放
+    if (m_panning &&
+        (me->button() == Qt::MiddleButton || me->button() == Qt::LeftButton)) {
+        m_panning = false;
+        m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
+        return true;
+    }
+    if (me->button() == Qt::LeftButton && m_isDraggingNode) {
+        m_isDraggingNode = false;
+        m_dirty = true;
+        renderMap();
+        showFeatureProperties(m_draggingNodeType, m_draggingNodeId);
+        if (m_tableVisible) refreshTable();
+        m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
+        return true;
+    }
+    if (me->button() == Qt::LeftButton && m_isDraggingHandle) {
+        // Commit to JSON: 支持任意阶贝塞尔曲线
+        // 端点手柄可能为 nullptr(已关联节点时由节点显示)，其位置取自曲线 JSON 的
+        // x1/y1、x2/y2；仅非空手柄(中间控制点或未关联节点的端点)随拖拽更新。
+        auto &lst = m_curveHandles[m_handleCurveId];
+        auto handlePos = [&](int idx) {
+            if (lst[idx]) return lst[idx]->pos();
+            // 端点无手柄 → 从 JSON 取端点坐标
+            for (const auto &v : m_curves) {
+                auto o = v.toObject();
+                if (o.value("id").toString() != m_handleCurveId) continue;
+                if (idx == 0)
+                    return worldToScene(o.value("x1").toDouble(), o.value("y1").toDouble());
+                return worldToScene(o.value("x2").toDouble(), o.value("y2").toDouble());
+            }
+            return QPointF();
+        };
+        for (int i = 0; i < m_curves.size(); ++i) {
+            QJsonObject cv = m_curves[i].toObject();
+            if (cv.value("id").toString() != m_handleCurveId) continue;
+
+            // 更新 controlPoints 数组
+            QJsonArray ctrlArr = cv.value("controlPoints").toArray();
+            if (ctrlArr.isEmpty() && lst.size() == 3) {
+                // 兼容旧格式: 从 cx/cy 构建 controlPoints
+                QList<QPointF> wPts;
+                for (int k = 0; k < lst.size(); ++k)
+                    wPts.append(sceneToWorld(handlePos(k).x(), handlePos(k).y()));
+                cv["x1"] = wPts[0].x(); cv["y1"] = wPts[0].y();
+                cv["cx"] = wPts[1].x(); cv["cy"] = wPts[1].y();
+                cv["x2"] = wPts[2].x(); cv["y2"] = wPts[2].y();
+            } else {
+                // 多阶贝塞尔: 逐个更新 controlPoints(跳过无手柄的端点，保持其坐标)
+                for (int j = 0; j < lst.size() && j < ctrlArr.size(); ++j) {
+                    QPointF wp = sceneToWorld(handlePos(j).x(), handlePos(j).y());
+                    QJsonObject pt = ctrlArr[j].toObject();
+                    pt["x"] = wp.x(); pt["y"] = wp.y();
+                    ctrlArr[j] = pt;
+                }
+                cv["controlPoints"] = ctrlArr;
+                // 同步起终点字段
+                if (!ctrlArr.isEmpty()) {
+                    QPointF wFirst = sceneToWorld(handlePos(0).x(), handlePos(0).y());
+                    QPointF wLast  = sceneToWorld(handlePos(lst.size()-1).x(),
+                                                 handlePos(lst.size()-1).y());
+                    cv["x1"] = wFirst.x(); cv["y1"] = wFirst.y();
+                    cv["x2"] = wLast.x();  cv["y2"] = wLast.y();
+                }
+            }
+            // 被拖拽的端点手柄落点若吸附到某个已有点，记录其 id
+            if (m_handleIndex == 0 || m_handleIndex == lst.size() - 1) {
+                SnapResult snap = findSnap(lst[m_handleIndex]->pos());
+                const QString &key = (m_handleIndex == 0) ? "startid" : "endid";
+                cv[key] = snap.valid ? snap.id : QString();
+            }
+            m_curves[i] = cv; break;
+        }
+        m_isDraggingHandle = false;
+        m_activeHandle = nullptr;
+        m_mapView->setDragMode(QGraphicsView::NoDrag);
+        m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
+        m_dirty = true;   // 拖拽手柄修改了曲线
+        return true;
+    }
+    return false;
+}
+
 bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
 {
     if (event->type() == QEvent::KeyPress) {
@@ -4506,631 +5558,15 @@ bool MapEditWidget::eventFilter(QObject *obj, QEvent *event)
     }
 
     if (event->type() == QEvent::MouseMove) {
-        auto *me = static_cast<QMouseEvent*>(event);
-        QPointF sp = m_mapView->mapToScene(me->pos());
-        updateCoordLabel(sp);
-
-        // 手动平移(中键/Alt+左键): 按像素增量滚动滚动条
-        if (m_panning) {
-            QPoint delta = me->pos() - m_lastPanPos;
-            m_lastPanPos = me->pos();
-            m_mapView->horizontalScrollBar()->setValue(
-                m_mapView->horizontalScrollBar()->value() - delta.x());
-            m_mapView->verticalScrollBar()->setValue(
-                m_mapView->verticalScrollBar()->value() - delta.y());
-            updateRulers();
-            return true;
-        }
-
-        if (m_isDrawingArea && m_areaPreviewItem) {
-            QRectF r = QRectF(m_areaStartScenePos, sp).normalized();
-            m_areaPreviewItem->setRect(r);
-            return true;
-        }
-
-        // 拖拽移动或调整高级区域大小
-        if (m_isDraggingArea && m_selType == "highLevelArea") {
-            int targetIdx = -1;
-            QJsonObject areaObj;
-            for (int i = 0; i < m_highLevelAreas.size(); ++i) {
-                if (m_highLevelAreas[i].toObject().value("id").toString() == m_selId) {
-                    targetIdx = i;
-                    areaObj = m_highLevelAreas[i].toObject();
-                    break;
-                }
-            }
-            if (targetIdx >= 0) {
-                QPointF pStart = sceneToWorld(m_areaDragStartScenePos.x(), m_areaDragStartScenePos.y());
-                QPointF pCur   = sceneToWorld(sp.x(), sp.y());
-                double dx = pCur.x() - pStart.x();
-                double dy = pCur.y() - pStart.y();
-
-                double nMinX = m_areaDragStartMinX;
-                double nMaxX = m_areaDragStartMaxX;
-                double nMinY = m_areaDragStartMinY;
-                double nMaxY = m_areaDragStartMaxY;
-
-                switch (m_areaDragPart) {
-                case AreaHit_Body:
-                    nMinX += dx; nMaxX += dx;
-                    nMinY += dy; nMaxY += dy;
-                    break;
-                case AreaHit_LeftEdge:
-                    nMinX += dx;
-                    break;
-                case AreaHit_RightEdge:
-                    nMaxX += dx;
-                    break;
-                case AreaHit_TopEdge:
-                    nMaxY += dy;
-                    break;
-                case AreaHit_BottomEdge:
-                    nMinY += dy;
-                    break;
-                case AreaHit_TopLeft:
-                    nMinX += dx;
-                    nMaxY += dy;
-                    break;
-                case AreaHit_TopRight:
-                    nMaxX += dx;
-                    nMaxY += dy;
-                    break;
-                case AreaHit_BottomLeft:
-                    nMinX += dx;
-                    nMinY += dy;
-                    break;
-                case AreaHit_BottomRight:
-                    nMaxX += dx;
-                    nMinY += dy;
-                    break;
-                default: break;
-                }
-
-                double fMinX = qMin(nMinX, nMaxX);
-                double fMaxX = qMax(nMinX, nMaxX);
-                double fMinY = qMin(nMinY, nMaxY);
-                double fMaxY = qMax(nMinY, nMaxY);
-                if (fMaxX - fMinX < 0.1) fMaxX = fMinX + 0.1;
-                if (fMaxY - fMinY < 0.1) fMinY = fMaxY - 0.1;
-
-                areaObj["minX"] = fMinX;
-                areaObj["maxX"] = fMaxX;
-                areaObj["minY"] = fMinY;
-                areaObj["maxY"] = fMaxY;
-                m_highLevelAreas[targetIdx] = areaObj;
-
-                renderMap();
-                m_dirty = true;
-                if (m_areaBoundsLabel) {
-                    m_areaBoundsLabel->setText(QString("X: [%1, %2]  Y: [%3, %4]")
-                        .arg(fMinX, 0, 'f', 2).arg(fMaxX, 0, 'f', 2).arg(fMinY, 0, 'f', 2).arg(fMaxY, 0, 'f', 2));
-                }
-                return true;
-            }
-        }
-
-        if (m_isDraggingNode) {
-            QPointF newWorld = sceneToWorld(sp.x(), sp.y());
-            // 1. 更新被拖动节点自身的坐标
-            auto updatePointPos = [&](QJsonArray &arr) {
-                for (int i = 0; i < arr.size(); ++i) {
-                    QJsonObject o = arr[i].toObject();
-                    if (o.value("id").toString() == m_draggingNodeId) {
-                        o["x"] = newWorld.x();
-                        o["y"] = newWorld.y();
-                        arr[i] = o;
-                        break;
-                    }
-                }
-            };
-            if      (m_draggingNodeType == "point")         updatePointPos(m_points);
-            else if (m_draggingNodeType == "charge")        updatePointPos(m_charges);
-            else if (m_draggingNodeType == "highPrecision") updatePointPos(m_highPrecisionPoints);
-
-            // 2. 实时拉伸/联动所有连接到该节点的直线
-            for (int i = 0; i < m_lines.size(); ++i) {
-                QJsonObject ln = m_lines[i].toObject();
-                bool changed = false;
-                if (ln.value("startid").toString() == m_draggingNodeId) {
-                    ln["x1"] = newWorld.x(); ln["y1"] = newWorld.y();
-                    changed = true;
-                }
-                if (ln.value("endid").toString() == m_draggingNodeId) {
-                    ln["x2"] = newWorld.x(); ln["y2"] = newWorld.y();
-                    changed = true;
-                }
-                if (changed) m_lines[i] = ln;
-            }
-
-            // 3. 实时拉伸/联动所有连接到该节点的曲线端点
-            for (int i = 0; i < m_curves.size(); ++i) {
-                QJsonObject cv = m_curves[i].toObject();
-                bool changed = false;
-                if (cv.value("startid").toString() == m_draggingNodeId) {
-                    cv["x1"] = newWorld.x(); cv["y1"] = newWorld.y();
-                    QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-                    if (!ctrlArr.isEmpty()) {
-                        QJsonObject cp0 = ctrlArr[0].toObject();
-                        cp0["x"] = newWorld.x(); cp0["y"] = newWorld.y();
-                        ctrlArr[0] = cp0;
-                        cv["controlPoints"] = ctrlArr;
-                    }
-                    changed = true;
-                }
-                if (cv.value("endid").toString() == m_draggingNodeId) {
-                    cv["x2"] = newWorld.x(); cv["y2"] = newWorld.y();
-                    QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-                    if (!ctrlArr.isEmpty()) {
-                        int lastIdx = ctrlArr.size() - 1;
-                        QJsonObject cpLast = ctrlArr[lastIdx].toObject();
-                        cpLast["x"] = newWorld.x(); cpLast["y"] = newWorld.y();
-                        ctrlArr[lastIdx] = cpLast;
-                        cv["controlPoints"] = ctrlArr;
-                    }
-                    changed = true;
-                }
-                if (changed) m_curves[i] = cv;
-            }
-
-            // 4. 重绘场景并保持当前节点的高亮选中状态
-            renderMap();
-            m_dirty = true;
-            QString key = m_draggingNodeType + "_" + m_draggingNodeId;
-            if (m_featureItems.contains(key)) {
-                m_selItem = m_featureItems.value(key);
-                RouteFeatureSelect::applySelectColor(m_selItem);
-            }
-            return true;
-        }
-
-        if (m_isDraggingHandle && m_activeHandle) {
-            // 端点手柄(0=起点, 2=终点)拖拽时吸附到附近已有的点，使曲线端点与
-            // 该点共用同一坐标；控制点手柄(1)不吸附，仅跟随鼠标调整曲率。
-            if (m_handleIndex == 0 || m_handleIndex == 2) {
-                SnapResult snap = findSnap(sp);
-                updateSnapIndicator(snap);
-                m_activeHandle->setPos(snap.valid ? snap.scenePos : sp);
-            } else {
-                m_activeHandle->setPos(sp);
-            }
-            updateCurveShape(m_handleCurveId);
-            return true;
-        }
-
-        if (m_isPainting && (m_drawStatus == Brush || m_drawStatus == Eraser)) {
-            paintStroke(m_lastPaintImgPos, sp, false);
-            m_lastPaintImgPos = sp;
-            return true;
-        }
-
-        if (m_drawStatus != Drag) {
-            // Show snap indicator in draw modes
-            SnapResult snap = findSnap(sp);
-            updateSnapIndicator(snap);
-            updatePreview(snap.valid ? snap.scenePos : sp);
-        } else {
-            // Drag mode: hover cursor on handles or stations
-            updateSnapIndicator({});
-            const double hoverTol = hitTolScene(10.0);
-            for (auto &lst : m_curveHandles.values())
-                for (auto *h : lst) {
-                    if (!h) continue;
-                    if (std::hypot(sp.x()-h->pos().x(), sp.y()-h->pos().y()) < hoverTol) {
-                        m_mapView->viewport()->setCursor(Qt::SizeAllCursor);
-                        return false;
-                    }
-                }
-            // 如果选中了高级区域，根据鼠标悬停位置设置缩放/移动光标
-            if (m_selType == "highLevelArea") {
-                QJsonObject selArea;
-                for (const auto &v : m_highLevelAreas) {
-                    if (v.toObject().value("id").toString() == m_selId) {
-                        selArea = v.toObject();
-                        break;
-                    }
-                }
-                if (!selArea.isEmpty()) {
-                    AreaHitPart hp = getAreaHitPart(sp, selArea);
-                    switch (hp) {
-                    case AreaHit_TopLeft:
-                    case AreaHit_BottomRight:
-                        m_mapView->viewport()->setCursor(Qt::SizeFDiagCursor);
-                        return false;
-                    case AreaHit_TopRight:
-                    case AreaHit_BottomLeft:
-                        m_mapView->viewport()->setCursor(Qt::SizeBDiagCursor);
-                        return false;
-                    case AreaHit_LeftEdge:
-                    case AreaHit_RightEdge:
-                        m_mapView->viewport()->setCursor(Qt::SizeHorCursor);
-                        return false;
-                    case AreaHit_TopEdge:
-                    case AreaHit_BottomEdge:
-                        m_mapView->viewport()->setCursor(Qt::SizeVerCursor);
-                        return false;
-                    case AreaHit_Body:
-                        m_mapView->viewport()->setCursor(Qt::SizeAllCursor);
-                        return false;
-                    default: break;
-                    }
-                }
-            }
-
-            SnapResult nodeSnap = findSnap(sp, 0.4);
-            if (nodeSnap.valid && (nodeSnap.type == "point" || nodeSnap.type == "charge" || nodeSnap.type == "highPrecision")) {
-                m_mapView->viewport()->setCursor(Qt::SizeAllCursor);
-                return false;
-            }
-            m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
-        }
-        return false;
+        return handleCanvasMouseMove(static_cast<QMouseEvent*>(event));
     }
 
     if (event->type() == QEvent::MouseButtonPress) {
-        auto *me = static_cast<QMouseEvent*>(event);
-
-        // Right-click: complete curve drawing / cancel line chain / return to Drag
-        if (me->button() == Qt::RightButton) {
-            if (m_drawStatus == Curve && m_curveCtrlPts.size() >= 2) {
-                finalizeCurve();
-                return true;
-            }
-            if (m_drawStatus == Line && m_drawHasP1) {
-                cancelDraw();
-                clearPreview();
-                return true;
-            }
-            if (m_drawStatus != Drag) setDrawMode(Drag);
-            else cancelDraw();
-            return true;
-        }
-
-        // Ctrl + 左键 → 放行给 MapCanvas 处理拖拽旋转(不在 eventFilter 中消费)
-        if (me->button() == Qt::LeftButton && (me->modifiers() & Qt::ControlModifier)) {
-            return false;
-        }
-
-        // 中键 或 Alt+左键 → 手动平移(替代 ScrollHandDrag，避免与手柄拖拽冲突)
-        if (me->button() == Qt::MiddleButton ||
-            (me->button() == Qt::LeftButton && (me->modifiers() & Qt::AltModifier))) {
-            m_panning = true;
-            m_lastPanPos = me->pos();
-            m_mapView->viewport()->setCursor(Qt::ClosedHandCursor);
-            return true;
-        }
-
-        if (me->button() != Qt::LeftButton) return false;
-        QPointF sp = m_mapView->mapToScene(me->pos());
-
-        if (m_drawStatus == Brush || m_drawStatus == Eraser) {
-            pushMapUndo();
-            m_isPainting = true;
-            m_lastPaintImgPos = sp;
-            paintStroke(sp, sp, true);
-            return true;
-        }
-
-        // ─ Drag mode ─────────────────────────────────────────────────────────
-        if (m_drawStatus == Drag) {
-            const double tol = hitTolScene(10.0);
-            for (auto lit = m_curveHandles.begin(); lit != m_curveHandles.end(); ++lit) {
-                auto &handles = lit.value();
-                for (int i = 0; i < handles.size(); ++i) {
-                    if (!handles[i]) continue;   // 端点由节点显示，无手柄
-                    QPointF hp = handles[i]->pos();
-                    if (std::hypot(sp.x()-hp.x(), sp.y()-hp.y()) < tol) {
-                        m_activeHandle     = handles[i];
-                        m_handleCurveId    = lit.key();
-                        m_handleIndex      = i;
-                        m_isDraggingHandle = true;
-                        m_mapView->viewport()->setCursor(Qt::ClosedHandCursor);
-                        return true;
-                    }
-                }
-            }
-
-            // 优先检查是否点击在站点节点上（普通站点/充电点/精定位点），触发节点拖动
-            SnapResult nodeSnap = findSnap(sp, 0.4);
-            if (!nodeSnap.valid) {
-                for (auto *it : m_scene->items(QRectF(sp.x()-tol, sp.y()-tol, tol*2, tol*2))) {
-                    QGraphicsItem *target = it;
-                    if (!target->data(0).isValid() && target->parentItem()) target = target->parentItem();
-                    QString type = target->data(0).toString();
-                    QString id = target->data(1).toString();
-                    if (type == "point" || type == "charge" || type == "highPrecision") {
-                        nodeSnap.valid = true;
-                        nodeSnap.type = type;
-                        nodeSnap.id = id;
-                        nodeSnap.scenePos = target->pos();
-                        nodeSnap.worldPos = sceneToWorld(target->pos().x(), target->pos().y());
-                        break;
-                    }
-                }
-            }
-            if (nodeSnap.valid && (nodeSnap.type == "point" || nodeSnap.type == "charge" || nodeSnap.type == "highPrecision")) {
-                m_isDraggingNode    = true;
-                m_draggingNodeType  = nodeSnap.type;
-                m_draggingNodeId    = nodeSnap.id;
-                m_dragStartScenePos = nodeSnap.scenePos;
-                m_dragStartWorldPos = nodeSnap.worldPos;
-                showFeatureProperties(nodeSnap.type, nodeSnap.id);
-                m_mapView->viewport()->setCursor(Qt::ClosedHandCursor);
-                return true;
-            }
-
-            // 如果已选中高级区域，检查是否点击在其缩放手柄或边框/内部以触发移动或缩放
-            if (m_selType == "highLevelArea") {
-                QJsonObject selArea;
-                for (const auto &v : m_highLevelAreas) {
-                    if (v.toObject().value("id").toString() == m_selId) {
-                        selArea = v.toObject();
-                        break;
-                    }
-                }
-                if (!selArea.isEmpty()) {
-                    AreaHitPart hp = getAreaHitPart(sp, selArea);
-                    QGraphicsItem *ptTarget = RouteFeatureSelect::pickItem(m_scene, sp, hitTolScene(10.0));
-                    if (!ptTarget && hp != AreaHit_None) {
-                        m_isDraggingArea = true;
-                        m_areaDragPart = hp;
-                        m_areaDragStartScenePos = sp;
-                        m_areaDragStartMinX = selArea.value("minX").toDouble();
-                        m_areaDragStartMaxX = selArea.value("maxX").toDouble();
-                        m_areaDragStartMinY = selArea.value("minY").toDouble();
-                        m_areaDragStartMaxY = selArea.value("maxY").toDouble();
-                        return true;
-                    }
-                }
-            }
-
-            selectFeatureAt(sp);
-            return false;
-        }
-
-        // ─ Draw modes ─────────────────────────────────────────────────────────
-        SnapResult snap = findSnap(sp);
-        QPointF usePos  = snap.valid ? snap.scenePos : sp;
-        QString useId   = snap.valid ? snap.id       : QString();
-
-        switch (m_drawStatus) {
-        case Point:
-            if (hasOverlap(sp)) { selectFeatureAt(sp); }  // too close → select
-            else { addPoint(sp); }
-            break;
-        case Charge:
-            if (hasOverlap(sp)) { selectFeatureAt(sp); }
-            else {
-                const double epcX = AlignConfigManager::instance().epcX();
-                addCharge(sp, epcX, 0.0, 0.0);
-            }
-            break;
-        case HighPrecision:
-            if (hasOverlap(sp)) { selectFeatureAt(sp); }
-            else {
-                const double epcX = AlignConfigManager::instance().epcX();
-                addHighPrecisionPoint(sp, epcX, 0.0, 0.0);
-            }
-            break;
-        case Line: {
-            if (!m_drawHasP1) {
-                // 起点: 优先吸附到已有点，未命中则在空地自动创建新普通站点(LM)
-                SnapResult head = ensureNodeAt(usePos);
-                m_drawP1   = head.scenePos;
-                m_drawP1Id = head.id;
-                m_drawHasP1 = true;
-            } else {
-                // 终点: 优先吸附到已有点，未命中则在空地自动创建新普通站点(LM)
-                SnapResult tail = ensureNodeAt(usePos);
-                if (tail.id == m_drawP1Id) {
-                    Toast::warning(this, "起点与终点不能为同一站点");
-                    clearPreview();
-                } else if (hasRouteBetween(m_drawP1Id, tail.id, m_drawP1, tail.scenePos)) {
-                    Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
-                    clearPreview();
-                } else {
-                    addLine(m_drawP1, tail.scenePos, m_drawP1Id, tail.id);
-                    // 连续连线模式: 刚绘制好的终点自动作为下一条线段的起点
-                    m_drawP1   = tail.scenePos;
-                    m_drawP1Id = tail.id;
-                    m_drawHasP1 = true;
-                    clearPreview();
-                }
-            }
-            break;
-        }
-        case Curve: {
-            // 三阶贝塞尔曲线：最多 4 个控制点 (P0 起点, P1 控制点1, P2 控制点2, P3 终点)
-            int n = m_curveCtrlPts.size();
-            if (n == 0) {
-                // 起点: 强制吸附或创建节点
-                SnapResult head = ensureNodeAt(usePos);
-                m_curveCtrlPts.append(head.scenePos);
-                m_curveCtrlIds.append(head.id);
-                m_drawP1   = head.scenePos;
-                m_drawP1Id = head.id;
-                m_drawHasP1 = true;
-            } else if (n < 3) {
-                // 第 2 点 (P1) 或 第 3 点 (P2): 自由中间控制点
-                m_curveCtrlPts.append(usePos);
-                m_curveCtrlIds.append(useId);
-            } else if (n == 3) {
-                // 第 4 点 (P3): 达到三阶上限（4控制点），强制吸附或创建终点节点并自动完成绘制
-                SnapResult tail = ensureNodeAt(usePos);
-                QString startId = m_curveCtrlIds.isEmpty() ? QString() : m_curveCtrlIds.first();
-                if (!startId.isEmpty() && tail.id == startId) {
-                    Toast::warning(this, "起点与终点不能为同一站点");
-                    cancelDraw();
-                } else if (!startId.isEmpty() && hasRouteBetween(startId, tail.id, m_curveCtrlPts.first(), tail.scenePos)) {
-                    Toast::warning(this, "两站点之间已存在连线，不可重复绘制");
-                    cancelDraw();
-                } else {
-                    m_curveCtrlPts.append(tail.scenePos);
-                    m_curveCtrlIds.append(tail.id);
-                    finalizeCurve();
-                }
-            }
-            break;
-        }
-        case Area: {
-            m_isDrawingArea = true;
-            m_areaStartScenePos = sp;
-            if (m_areaPreviewItem) {
-                m_scene->removeItem(m_areaPreviewItem);
-                delete m_areaPreviewItem;
-                m_areaPreviewItem = nullptr;
-            }
-            m_areaPreviewItem = m_scene->addRect(QRectF(sp, sp), QPen(QColor("#8b5cf6"), 2.0, Qt::DashLine), QBrush(QColor(139, 92, 246, 30)));
-            m_areaPreviewItem->setZValue(100);
-            return true;
-        }
-        default: break;
-        }
-        return true;
+        return handleCanvasMousePress(static_cast<QMouseEvent*>(event));
     }
 
     if (event->type() == QEvent::MouseButtonRelease) {
-        auto *me = static_cast<QMouseEvent*>(event);
-        if (me->button() == Qt::LeftButton && m_isDraggingArea) {
-            m_isDraggingArea = false;
-            m_areaDragPart = AreaHit_None;
-            m_dirty = true;
-            renderMap();
-            showFeatureProperties("highLevelArea", m_selId);
-            return true;
-        }
-        if (me->button() == Qt::LeftButton && m_isDrawingArea) {
-            m_isDrawingArea = false;
-            if (m_areaPreviewItem) {
-                m_scene->removeItem(m_areaPreviewItem);
-                delete m_areaPreviewItem;
-                m_areaPreviewItem = nullptr;
-            }
-            QPointF sp = m_mapView->mapToScene(me->pos());
-            QRectF r = QRectF(m_areaStartScenePos, sp).normalized();
-            if (r.width() >= 5.0 && r.height() >= 5.0) {
-                QPointF wTopLeft = sceneToWorld(r.left(), r.top());
-                QPointF wBottomRight = sceneToWorld(r.right(), r.bottom());
-                double minX = qMin(wTopLeft.x(), wBottomRight.x());
-                double maxX = qMax(wTopLeft.x(), wBottomRight.x());
-                double minY = qMin(wTopLeft.y(), wBottomRight.y());
-                double maxY = qMax(wTopLeft.y(), wBottomRight.y());
-
-                const auto &mc = MotionConfigManager::instance();
-                QJsonObject newArea;
-                int newNum = m_highLevelAreas.size() + 1;
-                QString newId = QString("highLevelArea_%1").arg(QDateTime::currentMSecsSinceEpoch());
-                newArea["id"] = newId;
-                newArea["name"] = QString("AdvancedArea %1").arg(newNum);
-                newArea["minX"] = minX;
-                newArea["maxX"] = maxX;
-                newArea["minY"] = minY;
-                newArea["maxY"] = maxY;
-                newArea["max_speed"] = mc.maxSpeed();
-                newArea["max_acceleration"] = mc.maxAcceleration();
-                newArea["maxacc"] = mc.maxAcceleration();
-                newArea["max_angular_speed"] = mc.maxAngularSpeedDeg();
-                newArea["maxrot"] = mc.maxAngularSpeedDeg();
-                newArea["max_angular_acceleration"] = mc.maxAngularAccelerationDeg();
-                newArea["maxrotacc"] = mc.maxAngularAccelerationDeg();
-                newArea["arrival_distance_tolerance"] = mc.arrivalDistanceTolerance();
-                newArea["arrival_angle_tolerance"] = mc.arrivalAngleToleranceDeg();
-                newArea["route_width"] = mc.routeWidth();
-                newArea["intrusion_stop_length"] = mc.defaultObsStopLength();
-                newArea["intrusion_stop_width"] = mc.defaultObsStopWidth();
-                newArea["intrusion_deceleration_length"] = mc.defaultObsDecelLength();
-                newArea["intrusion_deceleration_width"] = mc.defaultObsDecelWidth();
-                newArea["checked_props"] = QJsonArray();
-
-                m_highLevelAreas.append(newArea);
-                m_dirty = true;
-                renderMap();
-                showFeatureProperties("highLevelArea", newId);
-                setDrawMode(Drag);
-            }
-            return true;
-        }
-        if (me->button() == Qt::LeftButton && m_isPainting) {
-            m_isPainting = false;
-            return true;
-        }
-        // 手动平移释放
-        if (m_panning &&
-            (me->button() == Qt::MiddleButton || me->button() == Qt::LeftButton)) {
-            m_panning = false;
-            m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
-            return true;
-        }
-        if (me->button() == Qt::LeftButton && m_isDraggingNode) {
-            m_isDraggingNode = false;
-            m_dirty = true;
-            renderMap();
-            showFeatureProperties(m_draggingNodeType, m_draggingNodeId);
-            if (m_tableVisible) refreshTable();
-            m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
-            return true;
-        }
-        if (me->button() == Qt::LeftButton && m_isDraggingHandle) {
-            // Commit to JSON: 支持任意阶贝塞尔曲线
-            // 端点手柄可能为 nullptr(已关联节点时由节点显示)，其位置取自曲线 JSON 的
-            // x1/y1、x2/y2；仅非空手柄(中间控制点或未关联节点的端点)随拖拽更新。
-            auto &lst = m_curveHandles[m_handleCurveId];
-            auto handlePos = [&](int idx) {
-                if (lst[idx]) return lst[idx]->pos();
-                // 端点无手柄 → 从 JSON 取端点坐标
-                for (const auto &v : m_curves) {
-                    auto o = v.toObject();
-                    if (o.value("id").toString() != m_handleCurveId) continue;
-                    if (idx == 0)
-                        return worldToScene(o.value("x1").toDouble(), o.value("y1").toDouble());
-                    return worldToScene(o.value("x2").toDouble(), o.value("y2").toDouble());
-                }
-                return QPointF();
-            };
-            for (int i = 0; i < m_curves.size(); ++i) {
-                QJsonObject cv = m_curves[i].toObject();
-                if (cv.value("id").toString() != m_handleCurveId) continue;
-
-                // 更新 controlPoints 数组
-                QJsonArray ctrlArr = cv.value("controlPoints").toArray();
-                if (ctrlArr.isEmpty() && lst.size() == 3) {
-                    // 兼容旧格式: 从 cx/cy 构建 controlPoints
-                    QList<QPointF> wPts;
-                    for (int k = 0; k < lst.size(); ++k)
-                        wPts.append(sceneToWorld(handlePos(k).x(), handlePos(k).y()));
-                    cv["x1"] = wPts[0].x(); cv["y1"] = wPts[0].y();
-                    cv["cx"] = wPts[1].x(); cv["cy"] = wPts[1].y();
-                    cv["x2"] = wPts[2].x(); cv["y2"] = wPts[2].y();
-                } else {
-                    // 多阶贝塞尔: 逐个更新 controlPoints(跳过无手柄的端点，保持其坐标)
-                    for (int j = 0; j < lst.size() && j < ctrlArr.size(); ++j) {
-                        QPointF wp = sceneToWorld(handlePos(j).x(), handlePos(j).y());
-                        QJsonObject pt = ctrlArr[j].toObject();
-                        pt["x"] = wp.x(); pt["y"] = wp.y();
-                        ctrlArr[j] = pt;
-                    }
-                    cv["controlPoints"] = ctrlArr;
-                    // 同步起终点字段
-                    if (!ctrlArr.isEmpty()) {
-                        QPointF wFirst = sceneToWorld(handlePos(0).x(), handlePos(0).y());
-                        QPointF wLast  = sceneToWorld(handlePos(lst.size()-1).x(),
-                                                     handlePos(lst.size()-1).y());
-                        cv["x1"] = wFirst.x(); cv["y1"] = wFirst.y();
-                        cv["x2"] = wLast.x();  cv["y2"] = wLast.y();
-                    }
-                }
-                // 被拖拽的端点手柄落点若吸附到某个已有点，记录其 id
-                if (m_handleIndex == 0 || m_handleIndex == lst.size() - 1) {
-                    SnapResult snap = findSnap(lst[m_handleIndex]->pos());
-                    const QString &key = (m_handleIndex == 0) ? "startid" : "endid";
-                    cv[key] = snap.valid ? snap.id : QString();
-                }
-                m_curves[i] = cv; break;
-            }
-            m_isDraggingHandle = false;
-            m_activeHandle = nullptr;
-            m_mapView->setDragMode(QGraphicsView::NoDrag);
-            m_mapView->viewport()->setCursor(Qt::OpenHandCursor);
-            m_dirty = true;   // 拖拽手柄修改了曲线
+        if (handleCanvasMouseRelease(static_cast<QMouseEvent*>(event))) {
             return true;
         }
     }
@@ -5590,10 +6026,8 @@ void MapEditWidget::onTeleopActiveChanged(bool active)
 MapEditWidget::AreaHitPart MapEditWidget::getAreaHitPart(const QPointF &sp, const QJsonObject &areaObj) const
 {
     if (areaObj.isEmpty()) return AreaHit_None;
-    double minX = areaObj.value("minX").toDouble();
-    double maxX = areaObj.value("maxX").toDouble();
-    double minY = areaObj.value("minY").toDouble();
-    double maxY = areaObj.value("maxY").toDouble();
+    double minX = 0, maxX = 0, minY = 0, maxY = 0;
+    extractAreaBounds(areaObj, minX, maxX, minY, maxY);
     QPointF p1 = worldToScene(minX, maxY);
     QPointF p2 = worldToScene(maxX, minY);
     QRectF r = QRectF(p1, p2).normalized();
