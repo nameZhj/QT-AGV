@@ -1,0 +1,53 @@
+/* =============================================================================
+   QT-AGV Map Stylesheet (map.qss)
+   地图视图、SLAM 建图、图层与路网站点编辑器样式
+   ============================================================================= */
+
+/* ── 地图视图工具栏与容器 ── */
+QWidget#mapContainer {
+    background-color: #12151a;
+}
+QWidget#mapNavWidget {
+    background-color: #12151a;
+    border-bottom: 1px solid #2d3340;
+}
+QWidget#mapSidePanel {
+    background-color: #1a1d23;
+    border-left: 1px solid #2d3340;
+}
+QWidget#mapSideHeader {
+    background-color: #1e2d3d;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+QLabel#mapHeaderTitle {
+    color: #6a9cbf;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
+/* ── 坐标与地图信息提示条 ── */
+QLabel#mapCoordLabel {
+    background-color: rgba(18, 21, 26, 0.85);
+    color: #8898a8;
+    border: 1px solid #2d3340;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-family: "Consolas", monospace;
+}
+QLabel#mapInfoLabel {
+    color: #9ab8d8;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* ── 地图编辑侧边属性栏 ── */
+QGroupBox#mapPropertyBox {
+    background-color: #1e2228;
+    border: 1px solid #2d3340;
+    border-radius: 5px;
+    margin-top: 10px;
+    font-weight: 600;
+    color: #8898a8;
+}

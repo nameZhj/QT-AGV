@@ -2,6 +2,7 @@
 #include "network/MqttService.h"
 #include "app/AppConfig.h"
 #include "core/RobotInfoManager.h"
+#include "ui/common/ThemeColors.h"
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QScrollBar>
@@ -28,7 +29,7 @@ MapCanvas::MapCanvas(QGraphicsScene *scene, QWidget *parent)
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     setResizeAnchor(QGraphicsView::AnchorUnderMouse);
     setDragMode(QGraphicsView::NoDrag);
-    setBackgroundBrush(QColor(0x12, 0x15, 0x1a));
+    setBackgroundBrush(ThemeColors::Canvas::Background());
     setFrameShape(QFrame::NoFrame);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);

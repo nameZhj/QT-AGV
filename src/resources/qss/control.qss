@@ -1,0 +1,30 @@
+/* =============================================================================
+   QT-AGV Control Stylesheet (control.qss)
+   车体仪表盘控制、方向盘与系统参数树形配置面板样式
+   ============================================================================= */
+
+/* ── 车体控制容器 ── */
+QWidget#carWidget {
+    background-color: #1a1d23;
+}
+QWidget#directionPadContainer {
+    background-color: #16202e;
+    border: 1px solid #2d3340;
+    border-radius: 8px;
+    padding: 10px;
+}
+
+/* ── 参数配置面板 ── */
+QWidget#editConfigWidget {
+    background-color: #1a1d23;
+}
+QTreeWidget#configTree {
+    background-color: #1e2228;
+    border: 1px solid #2d3340;
+    border-radius: 4px;
+}
+QTableWidget#configTable {
+    background-color: #1e2228;
+    border: 1px solid #2d3340;
+    border-radius: 4px;
+}

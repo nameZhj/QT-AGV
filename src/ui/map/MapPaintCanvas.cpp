@@ -1,4 +1,5 @@
 #include "MapPaintCanvas.h"
+#include "ui/common/ThemeColors.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QPainterPathStroker>
@@ -134,7 +135,7 @@ void MapPaintCanvas::paintEvent(QPaintEvent *)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.fillRect(rect(), QColor(0, 0, 0));
+    painter.fillRect(rect(), ThemeColors::Canvas::BlackBg());
 
     if (!m_image.isNull()) {
         painter.save();
@@ -146,7 +147,7 @@ void MapPaintCanvas::paintEvent(QPaintEvent *)
 
     if (m_cursorInside && !m_image.isNull() && m_tool != Tool::Move) {
         double r = m_brushSize * m_scale / 2.0;
-        painter.setPen(QPen(QColor(24, 144, 255), 1, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setPen(QPen(ThemeColors::Canvas::BrushCursor(), 1, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         painter.setBrush(Qt::NoBrush);
         painter.drawEllipse(QPointF(m_cursorPos), r, r);
     }

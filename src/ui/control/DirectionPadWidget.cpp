@@ -2,6 +2,7 @@
 #include "ManualControlConfigDialog.h"
 #include "core/TeleopController.h"
 #include "ui/common/Toast.h"
+#include "ui/common/ThemeColors.h"
 
 #include <QPainter>
 #include <QMouseEvent>
@@ -149,10 +150,10 @@ void DirectionPadWidget::paintEvent(QPaintEvent *)
     QPainter painter(this);
     painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
 
-    // 颜色配置 (精准采样自参考原图与按住 W 对比图):
-    const QColor cNormal(28, 114, 159);   // #1c729f 科技蓝 (未按下)
-    const QColor cHover(36, 138, 194);    // #248ac2 悬停亮蓝
-    const QColor cPressed(157, 36, 20);   // #9d2414 暗红 (按键激活按下变红)
+    // 颜色配置 (精准采样自参考原图与按住 W 对比图，通过 ThemeColors 集中管理):
+    const QColor cNormal = ThemeColors::DirectionPad::Normal();
+    const QColor cHover = ThemeColors::DirectionPad::Hover();
+    const QColor cPressed = ThemeColors::DirectionPad::Pressed();
 
     auto getColor = [&](PadKey key) -> QColor {
         if (m_pressedKeys.contains(key)) return cPressed;

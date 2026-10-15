@@ -58,58 +58,45 @@ Toast::Toast(QWidget *topLevel, const QString &message, Type type, int durationM
         m_anchorWindow->installEventFilter(this);
     }
 
-    // 视觉配色体系定义
-    QString accentColor;
+    // 视觉配色体系定义与动态属性映射
+    QString typeStr;
     QString iconSymbol;
-    QString iconBgColor;
 
     switch (type) {
     case Success:
-        accentColor = "#10b981"; // 现代薄荷绿
-        iconBgColor = "rgba(16, 185, 129, 0.18)";
-        iconSymbol  = QString::fromUtf8("\xE2\x9C\x93"); // ✓
+        typeStr = QStringLiteral("success");
+        iconSymbol = QString::fromUtf8("\xE2\x9C\x93"); // ✓
         break;
     case Error:
-        accentColor = "#ef4444"; // 柔和珊瑚红
-        iconBgColor = "rgba(239, 68, 68, 0.18)";
-        iconSymbol  = QString::fromUtf8("\xE2\x9C\x95"); // ✕
+        typeStr = QStringLiteral("error");
+        iconSymbol = QString::fromUtf8("\xE2\x9C\x95"); // ✕
         break;
     case Warning:
-        accentColor = "#f59e0b"; // 琥珀橙黄
-        iconBgColor = "rgba(245, 158, 11, 0.18)";
-        iconSymbol  = QString::fromUtf8("\xE2\x9A\xA0"); // ⚠
+        typeStr = QStringLiteral("warning");
+        iconSymbol = QString::fromUtf8("\xE2\x9A\xA0"); // ⚠
         break;
     case Info:
     default:
-        accentColor = "#0284c7"; // 科技青蓝
-        iconBgColor = "rgba(2, 132, 199, 0.18)";
-        iconSymbol  = QString::fromUtf8("\xE2\x84\xB9"); // ℹ
+        typeStr = QStringLiteral("info");
+        iconSymbol = QString::fromUtf8("\xE2\x84\xB9"); // ℹ
         break;
     }
 
-    // 1. 卡片容器 (带柔和半透明暗色底板与状态主色左边框)
+    // 1. 卡片容器
     auto *card = new QWidget(this);
     card->setObjectName("toastCard");
-    card->setStyleSheet(QString(
-        "QWidget#toastCard {"
-        "  background-color: rgba(30, 41, 59, 0.95);"
-        "  border: 1px solid rgba(255, 255, 255, 0.10);"
-        "  border-left: 4px solid %1;"
-        "  border-radius: 8px;"
-        "}"
-    ).arg(accentColor));
+    card->setProperty("toastType", typeStr);
 
     // 2. 图标徽章
     auto *iconLbl = new QLabel(iconSymbol, card);
+    iconLbl->setObjectName("toastIcon");
+    iconLbl->setProperty("toastType", typeStr);
     iconLbl->setFixedSize(24, 24);
     iconLbl->setAlignment(Qt::AlignCenter);
-    iconLbl->setStyleSheet(QString(
-        "color: %1; background-color: %2; border-radius: 12px; font-size: 13px; font-weight: bold;"
-    ).arg(accentColor, iconBgColor));
 
     // 3. 消息正文
     auto *msgLbl = new QLabel(message, card);
-    msgLbl->setStyleSheet("color: #f1f5f9; font-size: 13px; font-weight: 500; background: transparent;");
+    msgLbl->setObjectName("toastMsg");
     msgLbl->setWordWrap(true);
 
     // 4. 水平内容布局

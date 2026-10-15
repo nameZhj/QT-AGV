@@ -5,5 +5,11 @@
     <file alias="app-icon.svg">icons/app-icon.svg</file>
     <file alias="ic-reset-view.svg">icons/ic-reset-view.svg</file>
     <file alias="check.svg">icons/check.svg</file>
+    <file alias="qss/base.qss">qss/base.qss</file>
+    <file alias="qss/mainwindow.qss">qss/mainwindow.qss</file>
+    <file alias="qss/dialogs.qss">qss/dialogs.qss</file>
+    <file alias="qss/map.qss">qss/map.qss</file>
+    <file alias="qss/task.qss">qss/task.qss</file>
+    <file alias="qss/control.qss">qss/control.qss</file>
 </qresource>
 </RCC>

@@ -13,6 +13,7 @@
 #include "app/AppConfig.h"
 #include "ui/common/ButtonClickEffect.h"
 #include "ui/common/SpinBoxWheelFilter.h"
+#include "ui/common/StyleLoader.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -100,6 +101,9 @@ int main(int argc, char *argv[])
 
     // 设置应用图标
     app.setWindowIcon(QIcon(":/app-icon.svg"));
+
+    // 应用全局样式表 (加载 resources/qss/ 下所有模块化样式)
+    StyleLoader::applyApplicationStyle();
 
     // 全局按钮点击动效，对所有按钮统一生效
     app.installEventFilter(new ButtonClickEffect(&app));
