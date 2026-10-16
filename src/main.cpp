@@ -39,6 +39,9 @@ void messageHandler(QtMsgType type, const QMessageLogContext &context, const QSt
 #ifdef Q_OS_WIN
     // Windows 控制台优先使用 WriteConsoleW 原生 Unicode 写入，防止终端控制台中文乱码
     HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
+    if (!hErr || hErr == INVALID_HANDLE_VALUE) {
+        hErr = GetStdHandle(STD_OUTPUT_HANDLE);
+    }
     DWORD mode;
     if (hErr && hErr != INVALID_HANDLE_VALUE && GetConsoleMode(hErr, &mode)) {
         std::wstring wstr = (line + "\n").toStdWString();
@@ -66,17 +69,26 @@ void messageHandler(QtMsgType type, const QMessageLogContext &context, const QSt
 int main(int argc, char *argv[])
 {
 #ifdef Q_OS_WIN
-    // 设置控制台输入输出代码页为 UTF-8 (Code Page 65001)，解决 Windows 终端控制台中文输出乱码问题
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
+    // 始终尝试附着到父进程控制台（如启动.bat、CMD或PowerShell终端），保证终端能实时接收并输出日志
+    bool attachedConsole = AttachConsole(ATTACH_PARENT_PROCESS);
+#if defined(QT_DEBUG)
+    if (!attachedConsole) {
+        attachedConsole = AllocConsole();
+    }
 #endif
-
-#if defined(Q_OS_WIN) && defined(QT_DEBUG)
-    // 仅在调试环境(Debug)下在运行 .exe 时分配/附着控制台窗口
-    if (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole()) {
+    if (attachedConsole) {
+        HANDLE hConOut = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+        if (hConOut != INVALID_HANDLE_VALUE) {
+            SetStdHandle(STD_OUTPUT_HANDLE, hConOut);
+            SetStdHandle(STD_ERROR_HANDLE, hConOut);
+        }
         freopen("CONOUT$", "w", stdout);
         freopen("CONOUT$", "w", stderr);
     }
+
+    // 设置控制台输入输出代码页为 UTF-8 (Code Page 65001)，解决 Windows 终端控制台中文输出乱码问题
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 #endif
 
     // 在最早阶段安装日志处理器

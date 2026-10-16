@@ -182,7 +182,8 @@ void MapImageEditWidget::setupUI()
 
     m_undoBtn = new QPushButton("撤销");
     m_undoBtn->setFixedSize(60, 28);
-    m_redoBtn = new QPushButton("重做");
+    m_redoBtn = new QPushButton("恢复");
+    m_redoBtn->setToolTip("恢复 (取消撤销)");
     m_redoBtn->setFixedSize(60, 28);
     toolbarLayout->addWidget(m_undoBtn);
     toolbarLayout->addWidget(m_redoBtn);

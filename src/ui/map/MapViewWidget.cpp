@@ -4897,6 +4897,10 @@ void MapViewWidget::saveRouteToServer(std::function<void(bool ok)> onDone)
         geom["type"] = "Point";
         geom["coordinates"] = coords;
         QJsonObject props = pt;
+        if (props.contains("max_speed")) {
+            if (!props.contains("maxspeed")) props["maxspeed"] = props.value("max_speed");
+            props.remove("max_speed");
+        }
         props.remove("x");
         props.remove("y");
         QJsonObject f;
@@ -4919,6 +4923,10 @@ void MapViewWidget::saveRouteToServer(std::function<void(bool ok)> onDone)
         QJsonArray coords; coords.append(ca); coords.append(cb);
         QJsonObject geom; geom["type"] = "LineString"; geom["coordinates"] = coords;
         QJsonObject props = ln;
+        if (props.contains("max_speed")) {
+            if (!props.contains("maxspeed")) props["maxspeed"] = props.value("max_speed");
+            props.remove("max_speed");
+        }
         props.remove("x1"); props.remove("y1"); props.remove("x2"); props.remove("y2");
         QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
         features.append(f);
@@ -4946,6 +4954,10 @@ void MapViewWidget::saveRouteToServer(std::function<void(bool ok)> onDone)
 
         QJsonObject geom; geom["type"] = "MultiPoint"; geom["coordinates"] = coords;
         QJsonObject props = cv;
+        if (props.contains("max_speed")) {
+            if (!props.contains("maxspeed")) props["maxspeed"] = props.value("max_speed");
+            props.remove("max_speed");
+        }
         props.remove("x1"); props.remove("y1"); props.remove("cx"); props.remove("cy");
         props.remove("x2"); props.remove("y2"); props.remove("controlPoints");
         QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
@@ -4960,6 +4972,10 @@ void MapViewWidget::saveRouteToServer(std::function<void(bool ok)> onDone)
 
     for (int i = 0; i < m_highLevelAreas.size(); ++i) {
         QJsonObject areaObj = m_highLevelAreas[i].toObject();
+        if (areaObj.contains("max_speed")) {
+            if (!areaObj.contains("maxspeed")) areaObj["maxspeed"] = areaObj.value("max_speed");
+            areaObj.remove("max_speed");
+        }
         double minX = 0, maxX = 0, minY = 0, maxY = 0;
         extractAreaBounds(areaObj, minX, maxX, minY, maxY);
 
@@ -4978,6 +4994,35 @@ void MapViewWidget::saveRouteToServer(std::function<void(bool ok)> onDone)
         m_highLevelAreas[i] = areaObj;
     }
     geojson["highLevelArea"] = m_highLevelAreas;
+
+    // 递归确保整棵 geojson 树中所有对象/数组都不残留 "max_speed" 属性或引用
+    auto cleanMaxSpeed = [](auto &self, QJsonValue val) -> QJsonValue {
+        if (val.isObject()) {
+            QJsonObject obj = val.toObject();
+            if (obj.contains("max_speed")) {
+                if (!obj.contains("maxspeed")) {
+                    obj["maxspeed"] = obj.value("max_speed");
+                }
+                obj.remove("max_speed");
+            }
+            for (const QString &k : obj.keys()) {
+                obj[k] = self(self, obj.value(k));
+            }
+            return obj;
+        } else if (val.isArray()) {
+            QJsonArray arr = val.toArray();
+            for (int i = 0; i < arr.size(); ++i) {
+                if (arr[i].isString() && arr[i].toString() == "max_speed") {
+                    arr[i] = QStringLiteral("maxspeed");
+                } else {
+                    arr[i] = self(self, arr[i]);
+                }
+            }
+            return arr;
+        }
+        return val;
+    };
+    geojson = cleanMaxSpeed(cleanMaxSpeed, geojson).toObject();
 
     QPointer<MapViewWidget> self = this;
     ApiService::instance().saveEditedMap(geojson, [self, geojson, onDone](int code, const QJsonObject &resp) {

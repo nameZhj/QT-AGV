@@ -628,29 +628,49 @@ bool MotionConfigManager::hasParamMeta(const QString &paramName) const
 
 MotionConfigManager::MotionParamMeta MotionConfigManager::paramMeta(const QString &paramName) const
 {
-    return m_paramMetas.value(paramName);
+    QString k = paramName;
+    if (!m_paramMetas.contains(k)) {
+        if (k == "maxspeed" && m_paramMetas.contains("max_speed")) k = "max_speed";
+        else if (k == "max_speed" && m_paramMetas.contains("maxspeed")) k = "maxspeed";
+    }
+    return m_paramMetas.value(k);
 }
 
 double MotionConfigManager::paramMin(const QString &paramName, double fallback) const
 {
-    if (m_paramMetas.contains(paramName) && m_paramMetas[paramName].hasMin) {
-        return m_paramMetas[paramName].minVal;
+    QString k = paramName;
+    if (!m_paramMetas.contains(k)) {
+        if (k == "maxspeed" && m_paramMetas.contains("max_speed")) k = "max_speed";
+        else if (k == "max_speed" && m_paramMetas.contains("maxspeed")) k = "maxspeed";
+    }
+    if (m_paramMetas.contains(k) && m_paramMetas[k].hasMin) {
+        return m_paramMetas[k].minVal;
     }
     return fallback;
 }
 
 double MotionConfigManager::paramMax(const QString &paramName, double fallback) const
 {
-    if (m_paramMetas.contains(paramName) && m_paramMetas[paramName].hasMax) {
-        return m_paramMetas[paramName].maxVal;
+    QString k = paramName;
+    if (!m_paramMetas.contains(k)) {
+        if (k == "maxspeed" && m_paramMetas.contains("max_speed")) k = "max_speed";
+        else if (k == "max_speed" && m_paramMetas.contains("maxspeed")) k = "maxspeed";
+    }
+    if (m_paramMetas.contains(k) && m_paramMetas[k].hasMax) {
+        return m_paramMetas[k].maxVal;
     }
     return fallback;
 }
 
 double MotionConfigManager::paramDefault(const QString &paramName, double fallback) const
 {
-    if (m_paramMetas.contains(paramName) && m_paramMetas[paramName].hasDefault) {
-        return m_paramMetas[paramName].defaultValue;
+    QString k = paramName;
+    if (!m_paramMetas.contains(k)) {
+        if (k == "maxspeed" && m_paramMetas.contains("max_speed")) k = "max_speed";
+        else if (k == "max_speed" && m_paramMetas.contains("maxspeed")) k = "maxspeed";
+    }
+    if (m_paramMetas.contains(k) && m_paramMetas[k].hasDefault) {
+        return m_paramMetas[k].defaultValue;
     }
     return fallback;
 }

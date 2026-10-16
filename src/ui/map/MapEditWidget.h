@@ -307,13 +307,10 @@ private:
     QDoubleSpinBox          *m_lineRoadWidthSpin  = nullptr;
 
     // 实时避障范围属性组
-    QCheckBox               *m_chkLineObsStopLen  = nullptr;
+    QCheckBox               *m_chkLineObs         = nullptr;
     QDoubleSpinBox          *m_lineObsStopLenSpin = nullptr;
-    QCheckBox               *m_chkLineObsStopWid  = nullptr;
     QDoubleSpinBox          *m_lineObsStopWidSpin = nullptr;
-    QCheckBox               *m_chkLineObsDecelLen = nullptr;
     QDoubleSpinBox          *m_lineObsDecelLenSpin= nullptr;
-    QCheckBox               *m_chkLineObsDecelWid = nullptr;
     QDoubleSpinBox          *m_lineObsDecelWidSpin= nullptr;
 
     // 高级区域专属属性组
@@ -335,13 +332,10 @@ private:
     QDoubleSpinBox          *m_areaReachAngleSpin  = nullptr;
     QCheckBox               *m_chkAreaRoadWidth    = nullptr;
     QDoubleSpinBox          *m_areaRoadWidthSpin   = nullptr;
-    QCheckBox               *m_chkAreaObsStopLen   = nullptr;
+    QCheckBox               *m_chkAreaObs          = nullptr;
     QDoubleSpinBox          *m_areaObsStopLenSpin  = nullptr;
-    QCheckBox               *m_chkAreaObsStopWid   = nullptr;
     QDoubleSpinBox          *m_areaObsStopWidSpin  = nullptr;
-    QCheckBox               *m_chkAreaObsDecelLen  = nullptr;
     QDoubleSpinBox          *m_areaObsDecelLenSpin = nullptr;
-    QCheckBox               *m_chkAreaObsDecelWid  = nullptr;
     QDoubleSpinBox          *m_areaObsDecelWidSpin = nullptr;
 
     // ── 地图与路网核心数据 ────────────────────────────────────────────────────────

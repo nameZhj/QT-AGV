@@ -92,7 +92,11 @@ static void restoreCheckedProps(const QJsonArray &cpArr, const QList<QPair<QChec
     for (const auto &v : cpArr) chkSet.insert(v.toString());
     for (const auto &pair : mapping) {
         if (pair.first) {
-            pair.first->setChecked(chkSet.contains(pair.second));
+            bool checked = chkSet.contains(pair.second);
+            if (!checked && pair.second == "maxspeed") {
+                checked = chkSet.contains("max_speed");
+            }
+            pair.first->setChecked(checked);
         }
     }
 }
@@ -472,7 +476,7 @@ struct InstantTip : QObject {
         if (e->type() == QEvent::Enter) {
             auto *w = qobject_cast<QWidget*>(o);
             if (w && !w->toolTip().isEmpty())
-                QToolTip::showText(QCursor::pos(), w->toolTip(), w);
+                QToolTip::showText(QCursor::pos() + QPoint(4, 18), w->toolTip(), w);
         } else if (e->type() == QEvent::Leave) {
             QToolTip::hideText();
         }
@@ -743,9 +747,9 @@ void MapEditWidget::setupTopBar(QVBoxLayout *root)
     connect(m_undoBtn, &QPushButton::clicked, this, &MapEditWidget::onUndo);
     tl->addWidget(m_undoBtn);
 
-    m_redoBtn = topBtn("重做");
+    m_redoBtn = topBtn("恢复");
     m_redoBtn->setIcon(makeToolIcon("redo"));
-    m_redoBtn->setToolTip(ttHtml("重做", "重做上一步底图修图"));
+    m_redoBtn->setToolTip(ttHtml("恢复", "恢复 (取消撤销)"));
     m_redoBtn->setEnabled(false);
     connect(m_redoBtn, &QPushButton::clicked, this, &MapEditWidget::onRedo);
     tl->addWidget(m_redoBtn);
@@ -803,6 +807,25 @@ void MapEditWidget::setupTopBar(QVBoxLayout *root)
     });
     tl->addWidget(m_gridBtn);
 
+    auto makeLabelClickable = [](QLabel *lbl, QAbstractButton *btn) {
+        lbl->setCursor(Qt::PointingHandCursor);
+        struct ClickFilter : public QObject {
+            QAbstractButton *target;
+            ClickFilter(QAbstractButton *t, QObject *p) : QObject(p), target(t) {}
+            bool eventFilter(QObject *o, QEvent *e) override {
+                if (e->type() == QEvent::MouseButtonPress) {
+                    auto *me = static_cast<QMouseEvent*>(e);
+                    if (me->button() == Qt::LeftButton) {
+                        if (target) target->toggle();
+                        return true;
+                    }
+                }
+                return QObject::eventFilter(o, e);
+            }
+        };
+        lbl->installEventFilter(new ClickFilter(btn, lbl));
+    };
+
     QLabel *robotSwitchLabel = new QLabel("设备位置");
     robotSwitchLabel->setStyleSheet("color:#9ab8d8;font-size:12px;");
     robotSwitchLabel->setToolTip(ttHtml("设备位置", "切换实时设备位置显示"));
@@ -822,6 +845,7 @@ void MapEditWidget::setupTopBar(QVBoxLayout *root)
             .arg(m_currentCarId));
     });
     tl->addWidget(m_robotBtn);
+    makeLabelClickable(robotSwitchLabel, m_robotBtn);
 
     QLabel *reflectorSwitchLabel = new QLabel("反光柱");
     reflectorSwitchLabel->setStyleSheet("color:#9ab8d8;font-size:12px;");
@@ -836,6 +860,7 @@ void MapEditWidget::setupTopBar(QVBoxLayout *root)
         renderMap();
     });
     tl->addWidget(m_reflectorBtn);
+    makeLabelClickable(reflectorSwitchLabel, m_reflectorBtn);
 
     m_editMapBtn = topBtn("地图属性");
     connect(m_editMapBtn, &QPushButton::clicked, this, &MapEditWidget::onEditMap);
@@ -1371,37 +1396,58 @@ void MapEditWidget::setupLinePropsUI(QVBoxLayout *layout)
     auto *ocl = new QVBoxLayout(obsCard);
     ocl->setContentsMargins(6,5,6,5);
     ocl->setSpacing(3);
-    auto *oTitle = new QLabel("实时避障范围");
-    oTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
-    ocl->addWidget(oTitle);
+
+    auto *oTitleCont = new QWidget;
+    oTitleCont->setStyleSheet("background:transparent; border:none;");
+    auto *oth = new QHBoxLayout(oTitleCont);
+    oth->setContentsMargins(0,0,0,2);
+    oth->setSpacing(6);
+    m_chkLineObs = new QCheckBox("实时避障范围");
+    m_chkLineObs->setStyleSheet(
+        "QCheckBox { color:#627e9e; font-size:11px; font-weight:bold; background:transparent; }"
+        "QCheckBox::indicator { width:14px; height:14px; border:1px solid #3d4a5d; border-radius:2px; background:#171c26; }"
+        "QCheckBox::indicator:checked { background:#1e6fd4; border-color:#1e6fd4; image:url(:/check.svg); }"
+    );
+    oth->addWidget(m_chkLineObs);
+    oth->addStretch();
+    ocl->addWidget(oTitleCont);
 
     m_lineObsStopLenSpin = new QDoubleSpinBox;
     m_lineObsStopLenSpin->setRange(0.00, 5.00);
     m_lineObsStopLenSpin->setSingleStep(0.05);
     m_lineObsStopLenSpin->setValue(0.00);
     m_lineObsStopLenSpin->setToolTip("正向停止膨胀半径 (intrusion_stop_length)");
-    ocl->addWidget(mkCheckableRow(m_chkLineObsStopLen, "正向停止膨胀:", m_lineObsStopLenSpin, "m"));
+    ocl->addWidget(mkFormRow("正向停止膨胀:", m_lineObsStopLenSpin, "m"));
 
     m_lineObsStopWidSpin = new QDoubleSpinBox;
     m_lineObsStopWidSpin->setRange(0.00, 5.00);
     m_lineObsStopWidSpin->setSingleStep(0.05);
     m_lineObsStopWidSpin->setValue(0.00);
     m_lineObsStopWidSpin->setToolTip("侧向停止膨胀半径 (intrusion_stop_width)");
-    ocl->addWidget(mkCheckableRow(m_chkLineObsStopWid, "侧向停止膨胀:", m_lineObsStopWidSpin, "m"));
+    ocl->addWidget(mkFormRow("侧向停止膨胀:", m_lineObsStopWidSpin, "m"));
 
     m_lineObsDecelLenSpin = new QDoubleSpinBox;
     m_lineObsDecelLenSpin->setRange(0.00, 5.00);
     m_lineObsDecelLenSpin->setSingleStep(0.05);
     m_lineObsDecelLenSpin->setValue(0.00);
     m_lineObsDecelLenSpin->setToolTip("正向减速膨胀半径 (intrusion_deceleration_length)");
-    ocl->addWidget(mkCheckableRow(m_chkLineObsDecelLen, "正向减速膨胀:", m_lineObsDecelLenSpin, "m"));
+    ocl->addWidget(mkFormRow("正向减速膨胀:", m_lineObsDecelLenSpin, "m"));
 
     m_lineObsDecelWidSpin = new QDoubleSpinBox;
     m_lineObsDecelWidSpin->setRange(0.00, 5.00);
     m_lineObsDecelWidSpin->setSingleStep(0.05);
     m_lineObsDecelWidSpin->setValue(0.00);
     m_lineObsDecelWidSpin->setToolTip("侧向减速膨胀半径 (intrusion_deceleration_width)");
-    ocl->addWidget(mkCheckableRow(m_chkLineObsDecelWid, "侧向减速膨胀:", m_lineObsDecelWidSpin, "m"));
+    ocl->addWidget(mkFormRow("侧向减速膨胀:", m_lineObsDecelWidSpin, "m"));
+
+    auto updateLineObsEnabled = [this](bool on) {
+        m_lineObsStopLenSpin->setEnabled(on);
+        m_lineObsStopWidSpin->setEnabled(on);
+        m_lineObsDecelLenSpin->setEnabled(on);
+        m_lineObsDecelWidSpin->setEnabled(on);
+    };
+    connect(m_chkLineObs, &QCheckBox::toggled, this, updateLineObsEnabled);
+    updateLineObsEnabled(false);
 
     ll->addWidget(obsCard);
     layout->addWidget(m_linePropGroup);
@@ -1469,33 +1515,54 @@ void MapEditWidget::setupAreaPropsUI(QVBoxLayout *layout)
     auto *aocl = new QVBoxLayout(areaObsCard);
     aocl->setContentsMargins(6,5,6,5);
     aocl->setSpacing(3);
-    auto *aoTitle = new QLabel("实时避障范围");
-    aoTitle->setStyleSheet("color:#627e9e; font-size:10px; font-weight:bold; border:none;");
-    aocl->addWidget(aoTitle);
+
+    auto *aoTitleCont = new QWidget;
+    aoTitleCont->setStyleSheet("background:transparent; border:none;");
+    auto *aoth = new QHBoxLayout(aoTitleCont);
+    aoth->setContentsMargins(0,0,0,2);
+    aoth->setSpacing(6);
+    m_chkAreaObs = new QCheckBox("实时避障范围");
+    m_chkAreaObs->setStyleSheet(
+        "QCheckBox { color:#627e9e; font-size:11px; font-weight:bold; background:transparent; }"
+        "QCheckBox::indicator { width:14px; height:14px; border:1px solid #3d4a5d; border-radius:2px; background:#171c26; }"
+        "QCheckBox::indicator:checked { background:#1e6fd4; border-color:#1e6fd4; image:url(:/check.svg); }"
+    );
+    aoth->addWidget(m_chkAreaObs);
+    aoth->addStretch();
+    aocl->addWidget(aoTitleCont);
 
     m_areaObsStopLenSpin = new QDoubleSpinBox;
     m_areaObsStopLenSpin->setRange(0.00, 5.00);
     m_areaObsStopLenSpin->setSingleStep(0.05);
     m_areaObsStopLenSpin->setValue(0.00);
-    aocl->addWidget(mkCheckableRow(m_chkAreaObsStopLen, "正向停止膨胀:", m_areaObsStopLenSpin, "m"));
+    aocl->addWidget(mkFormRow("正向停止膨胀:", m_areaObsStopLenSpin, "m"));
 
     m_areaObsStopWidSpin = new QDoubleSpinBox;
     m_areaObsStopWidSpin->setRange(0.00, 5.00);
     m_areaObsStopWidSpin->setSingleStep(0.05);
     m_areaObsStopWidSpin->setValue(0.00);
-    aocl->addWidget(mkCheckableRow(m_chkAreaObsStopWid, "侧向停止膨胀:", m_areaObsStopWidSpin, "m"));
+    aocl->addWidget(mkFormRow("侧向停止膨胀:", m_areaObsStopWidSpin, "m"));
 
     m_areaObsDecelLenSpin = new QDoubleSpinBox;
     m_areaObsDecelLenSpin->setRange(0.00, 5.00);
     m_areaObsDecelLenSpin->setSingleStep(0.05);
     m_areaObsDecelLenSpin->setValue(0.00);
-    aocl->addWidget(mkCheckableRow(m_chkAreaObsDecelLen, "正向减速膨胀:", m_areaObsDecelLenSpin, "m"));
+    aocl->addWidget(mkFormRow("正向减速膨胀:", m_areaObsDecelLenSpin, "m"));
 
     m_areaObsDecelWidSpin = new QDoubleSpinBox;
     m_areaObsDecelWidSpin->setRange(0.00, 5.00);
     m_areaObsDecelWidSpin->setSingleStep(0.05);
     m_areaObsDecelWidSpin->setValue(0.00);
-    aocl->addWidget(mkCheckableRow(m_chkAreaObsDecelWid, "侧向减速膨胀:", m_areaObsDecelWidSpin, "m"));
+    aocl->addWidget(mkFormRow("侧向减速膨胀:", m_areaObsDecelWidSpin, "m"));
+
+    auto updateAreaObsEnabled = [this](bool on) {
+        m_areaObsStopLenSpin->setEnabled(on);
+        m_areaObsStopWidSpin->setEnabled(on);
+        m_areaObsDecelLenSpin->setEnabled(on);
+        m_areaObsDecelWidSpin->setEnabled(on);
+    };
+    connect(m_chkAreaObs, &QCheckBox::toggled, this, updateAreaObsEnabled);
+    updateAreaObsEnabled(false);
 
     al->addWidget(areaObsCard);
     layout->addWidget(m_areaPropGroup);
@@ -2000,6 +2067,20 @@ void MapEditWidget::loadRouteData()
 
         for (int i = 0; i < m_highLevelAreas.size(); ++i) {
             QJsonObject a = m_highLevelAreas[i].toObject();
+            if (a.contains("max_speed")) {
+                if (!a.contains("maxspeed")) a["maxspeed"] = a.value("max_speed");
+                a.remove("max_speed");
+            }
+            if (a.contains("checked_props")) {
+                QJsonArray cp = a.value("checked_props").toArray();
+                QJsonArray newCp;
+                for (const auto &v : cp) {
+                    QString s = v.toString();
+                    if (s == "max_speed") s = "maxspeed";
+                    newCp.append(s);
+                }
+                a["checked_props"] = newCp;
+            }
             if (a.value("id").toString().isEmpty()) {
                 a["id"] = QString("highLevelArea_%1").arg(i + 1);
             }
@@ -2050,6 +2131,20 @@ void MapEditWidget::loadRouteData()
         for (const auto &fv : features) {
             QJsonObject f      = fv.toObject();
             QJsonObject props  = f.value("properties").toObject();
+            if (props.contains("max_speed")) {
+                if (!props.contains("maxspeed")) props["maxspeed"] = props.value("max_speed");
+                props.remove("max_speed");
+            }
+            if (props.contains("checked_props")) {
+                QJsonArray cp = props.value("checked_props").toArray();
+                QJsonArray newCp;
+                for (const auto &v : cp) {
+                    QString s = v.toString();
+                    if (s == "max_speed") s = "maxspeed";
+                    newCp.append(s);
+                }
+                props["checked_props"] = newCp;
+            }
             QJsonObject geom   = f.value("geometry").toObject();
             QString     gtype  = geom.value("type").toString();
             QString     id     = props.value("id").toString();
@@ -3355,7 +3450,7 @@ void MapEditWidget::populateAreaProps(const QJsonObject &obj)
     const auto &mc = MotionConfigManager::instance();
     syncMotionSpinBoxRanges();
 
-    double spd = obj.contains("max_speed") ? obj.value("max_speed").toDouble(mc.maxSpeed()) : mc.maxSpeed();
+    double spd = obj.contains("maxspeed") ? obj.value("maxspeed").toDouble(mc.maxSpeed()) : (obj.contains("max_speed") ? obj.value("max_speed").toDouble(mc.maxSpeed()) : mc.maxSpeed());
     double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble(mc.maxAcceleration()) : mc.maxAcceleration();
     double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble(mc.maxAngularSpeedDeg()) : mc.maxAngularSpeedDeg();
     double rotAcc = obj.contains("max_angular_acceleration") ? obj.value("max_angular_acceleration").toDouble(mc.maxAngularAccelerationDeg()) : mc.maxAngularAccelerationDeg();
@@ -3390,12 +3485,19 @@ void MapEditWidget::populateAreaProps(const QJsonObject &obj)
         {m_chkAreaMaxRotAcc, "maxrotacc"},
         {m_chkAreaReachDist, "reachdist"},
         {m_chkAreaReachAngle, "reachangle"},
-        {m_chkAreaRoadWidth, "width"},
-        {m_chkAreaObsStopLen, "intrusion_stop_length"},
-        {m_chkAreaObsStopWid, "intrusion_stop_width"},
-        {m_chkAreaObsDecelLen, "intrusion_deceleration_length"},
-        {m_chkAreaObsDecelWid, "intrusion_deceleration_width"}
+        {m_chkAreaRoadWidth, "width"}
     });
+
+    QJsonArray aCpArr = obj.value("checked_props").toArray();
+    QSet<QString> aChkSet;
+    for (const auto &v : aCpArr) aChkSet.insert(v.toString());
+    bool areaObsChecked = aChkSet.contains("intrusion_stop_length") ||
+                          aChkSet.contains("intrusion_stop_width") ||
+                          aChkSet.contains("intrusion_deceleration_length") ||
+                          aChkSet.contains("intrusion_deceleration_width");
+    if (m_chkAreaObs) {
+        m_chkAreaObs->setChecked(areaObsChecked);
+    }
 }
 
 void MapEditWidget::populateStationProps(const QJsonObject &obj, const QString &type, const QString &id)
@@ -3509,7 +3611,7 @@ void MapEditWidget::populateLineProps(const QJsonObject &obj, const QString &typ
     double defRot = mc.maxAngularSpeedDeg();
     double defRotAcc = mc.maxAngularAccelerationDeg();
 
-    double curSpd = obj.contains("maxspeed") ? obj.value("maxspeed").toDouble() : defSpd;
+    double curSpd = obj.contains("maxspeed") ? obj.value("maxspeed").toDouble() : (obj.contains("max_speed") ? obj.value("max_speed").toDouble() : defSpd);
     double acc = obj.contains("max_acceleration") ? obj.value("max_acceleration").toDouble() : (obj.contains("maxacc") ? obj.value("maxacc").toDouble() : defAcc);
     double dec = obj.contains("max_deceleration") ? obj.value("max_deceleration").toDouble() : (obj.contains("maxdec") ? obj.value("maxdec").toDouble() : defDec);
     double rot = obj.contains("max_angular_speed") ? obj.value("max_angular_speed").toDouble() : (obj.contains("maxrot") ? obj.value("maxrot").toDouble() : defRot);
@@ -3544,12 +3646,20 @@ void MapEditWidget::populateLineProps(const QJsonObject &obj, const QString &typ
         {m_chkLineMaxRotAcc, "maxrotacc"},
         {m_chkLineReachDist, "reachdist"},
         {m_chkLineReachAngle, "reachangle"},
-        {m_chkLineRoadWidth, "width"},
-        {m_chkLineObsStopLen, "intrusion_stop_length"},
-        {m_chkLineObsStopWid, "intrusion_stop_width"},
-        {m_chkLineObsDecelLen, "intrusion_deceleration_length"},
-        {m_chkLineObsDecelWid, "intrusion_deceleration_width"}
+        {m_chkLineRoadWidth, "width"}
     });
+
+    QJsonArray lCpArr = obj.value("checked_props").toArray();
+    QSet<QString> lChkSet;
+    for (const auto &v : lCpArr) lChkSet.insert(v.toString());
+    bool lineObsChecked = lChkSet.contains("intrusion_stop_length") ||
+                          lChkSet.contains("intrusion_stop_width") ||
+                          lChkSet.contains("intrusion_deceleration_length") ||
+                          lChkSet.contains("intrusion_deceleration_width") ||
+                          obj.value("is_custom_obstacle").toBool();
+    if (m_chkLineObs) {
+        m_chkLineObs->setChecked(lineObsChecked);
+    }
 }
 
 void MapEditWidget::showFeatureProperties(const QString &type, const QString &id)
@@ -3853,7 +3963,7 @@ bool MapEditWidget::validateRouteNetwork(QList<CheckResultItem> &results)
     };
 
     static const ParamDef kDefs[] = {
-        {"maxspeed", "max_speed", "maxspeed", "maxspeed"},
+        {"maxspeed", "maxspeed", "max_speed", "maxspeed"},
         {"maxacc", "max_acceleration", "maxacc", "maxacc"},
         {"maxrot", "max_angular_speed", "maxrot", "maxrot"},
         {"maxrotacc", "max_angular_acceleration", "maxrotacc", "maxrotacc"},
@@ -3963,8 +4073,8 @@ bool MapEditWidget::validateRouteNetwork(QList<CheckResultItem> &results)
         double minX = 0, maxX = 0, minY = 0, maxY = 0;
         extractAreaBounds(area, minX, maxX, minY, maxY);
 
-        if (isParamEnabled(area, "maxspeed", "max_speed", "maxspeed")) {
-            double areaSpd = getParamValue(area, "max_speed", "maxspeed");
+        if (isParamEnabled(area, "maxspeed", "maxspeed", "max_speed")) {
+            double areaSpd = getParamValue(area, "maxspeed", "max_speed");
 
             // 直线检查
             for (const auto &v : m_lines) {
@@ -4107,6 +4217,10 @@ QJsonObject MapEditWidget::buildRouteGeoJson() const
             // 保存路网时再次强制将高精度点/工作站与充电桩点/特殊工作站避障参数改为 0
             forceZeroObstacleParams(props);
         }
+        if (props.contains("max_speed")) {
+            if (!props.contains("maxspeed")) props["maxspeed"] = props.value("max_speed");
+            props.remove("max_speed");
+        }
         QJsonArray coords;
         coords.append(props.value("x").toDouble());
         coords.append(props.value("y").toDouble());
@@ -4140,6 +4254,10 @@ QJsonObject MapEditWidget::buildRouteGeoJson() const
         QJsonArray coords; coords.append(ca); coords.append(cb);
         QJsonObject geom; geom["type"] = "LineString"; geom["coordinates"] = coords;
         QJsonObject props = ln;
+        if (props.contains("max_speed")) {
+            if (!props.contains("maxspeed")) props["maxspeed"] = props.value("max_speed");
+            props.remove("max_speed");
+        }
         props.remove("x1"); props.remove("y1"); props.remove("x2"); props.remove("y2");
         QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
         features.append(f);
@@ -4167,6 +4285,10 @@ QJsonObject MapEditWidget::buildRouteGeoJson() const
 
         QJsonObject geom; geom["type"] = "MultiPoint"; geom["coordinates"] = coords;
         QJsonObject props = cv;
+        if (props.contains("max_speed")) {
+            if (!props.contains("maxspeed")) props["maxspeed"] = props.value("max_speed");
+            props.remove("max_speed");
+        }
         props.remove("x1"); props.remove("y1"); props.remove("cx"); props.remove("cy");
         props.remove("x2"); props.remove("y2"); props.remove("controlPoints");
         QJsonObject f; f["type"] = "Feature"; f["geometry"] = geom; f["properties"] = props;
@@ -4180,6 +4302,22 @@ QJsonObject MapEditWidget::buildRouteGeoJson() const
     QJsonArray saveHighLevelAreas;
     for (int i = 0; i < m_highLevelAreas.size(); ++i) {
         QJsonObject areaObj = m_highLevelAreas[i].toObject();
+        if (areaObj.contains("max_speed")) {
+            if (!areaObj.contains("maxspeed")) {
+                areaObj["maxspeed"] = areaObj.value("max_speed");
+            }
+            areaObj.remove("max_speed");
+        }
+        if (areaObj.contains("checked_props")) {
+            QJsonArray cp = areaObj.value("checked_props").toArray();
+            QJsonArray newCp;
+            for (const auto &v : cp) {
+                QString s = v.toString();
+                if (s == "max_speed") s = "maxspeed";
+                newCp.append(s);
+            }
+            areaObj["checked_props"] = newCp;
+        }
         double minX = 0, maxX = 0, minY = 0, maxY = 0;
         extractAreaBounds(areaObj, minX, maxX, minY, maxY);
 
@@ -4198,6 +4336,36 @@ QJsonObject MapEditWidget::buildRouteGeoJson() const
         saveHighLevelAreas.append(areaObj);
     }
     geojson["highLevelArea"] = saveHighLevelAreas;
+
+    // 递归确保整棵 geojson 树中所有对象/数组都不残留 "max_speed" 属性或引用
+    auto cleanMaxSpeed = [](auto &self, QJsonValue val) -> QJsonValue {
+        if (val.isObject()) {
+            QJsonObject obj = val.toObject();
+            if (obj.contains("max_speed")) {
+                if (!obj.contains("maxspeed")) {
+                    obj["maxspeed"] = obj.value("max_speed");
+                }
+                obj.remove("max_speed");
+            }
+            for (const QString &k : obj.keys()) {
+                obj[k] = self(self, obj.value(k));
+            }
+            return obj;
+        } else if (val.isArray()) {
+            QJsonArray arr = val.toArray();
+            for (int i = 0; i < arr.size(); ++i) {
+                if (arr[i].isString() && arr[i].toString() == "max_speed") {
+                    arr[i] = QStringLiteral("maxspeed");
+                } else {
+                    arr[i] = self(self, arr[i]);
+                }
+            }
+            return arr;
+        }
+        return val;
+    };
+    geojson = cleanMaxSpeed(cleanMaxSpeed, geojson).toObject();
+    const_cast<MapEditWidget*>(this)->m_highLevelAreas = geojson.value("highLevelArea").toArray();
     return geojson;
 }
 
@@ -4408,8 +4576,10 @@ void MapEditWidget::applyAreaPropsEdit()
     if (m_chkAreaName && m_chkAreaName->isChecked())
         areaObj["name"] = m_areaNameEdit->text().trimmed();
 
-    if (m_chkAreaMaxSpeed && m_chkAreaMaxSpeed->isChecked())
-        areaObj["max_speed"] = m_areaMaxSpeedSpin->value();
+    if (m_chkAreaMaxSpeed && m_chkAreaMaxSpeed->isChecked()) {
+        areaObj["maxspeed"] = m_areaMaxSpeedSpin->value();
+    }
+    areaObj.remove("max_speed");
 
     if (m_chkAreaMaxAcc && m_chkAreaMaxAcc->isChecked()) {
         areaObj["max_acceleration"] = m_areaMaxAccSpin->value();
@@ -4435,20 +4605,16 @@ void MapEditWidget::applyAreaPropsEdit()
     if (m_chkAreaRoadWidth && m_chkAreaRoadWidth->isChecked())
         areaObj["route_width"] = m_areaRoadWidthSpin->value();
 
-    if (m_chkAreaObsStopLen && m_chkAreaObsStopLen->isChecked())
+    bool obsOn = m_chkAreaObs && m_chkAreaObs->isChecked();
+    if (obsOn) {
         areaObj["intrusion_stop_length"] = m_areaObsStopLenSpin->value();
-
-    if (m_chkAreaObsStopWid && m_chkAreaObsStopWid->isChecked())
         areaObj["intrusion_stop_width"] = m_areaObsStopWidSpin->value();
-
-    if (m_chkAreaObsDecelLen && m_chkAreaObsDecelLen->isChecked())
         areaObj["intrusion_deceleration_length"] = m_areaObsDecelLenSpin->value();
-
-    if (m_chkAreaObsDecelWid && m_chkAreaObsDecelWid->isChecked())
         areaObj["intrusion_deceleration_width"] = m_areaObsDecelWidSpin->value();
+    }
 
     // 收集所有被勾选的属性，并保存到 areaObj["checked_props"] (修复 Bug 2)
-    areaObj["checked_props"] = collectCheckedProps({
+    QJsonArray aCheckedProps = collectCheckedProps({
         {m_chkAreaName, "name"},
         {m_chkAreaMaxSpeed, "maxspeed"},
         {m_chkAreaMaxAcc, "maxacc"},
@@ -4456,12 +4622,15 @@ void MapEditWidget::applyAreaPropsEdit()
         {m_chkAreaMaxRotAcc, "maxrotacc"},
         {m_chkAreaReachDist, "reachdist"},
         {m_chkAreaReachAngle, "reachangle"},
-        {m_chkAreaRoadWidth, "width"},
-        {m_chkAreaObsStopLen, "intrusion_stop_length"},
-        {m_chkAreaObsStopWid, "intrusion_stop_width"},
-        {m_chkAreaObsDecelLen, "intrusion_deceleration_length"},
-        {m_chkAreaObsDecelWid, "intrusion_deceleration_width"}
+        {m_chkAreaRoadWidth, "width"}
     });
+    if (obsOn) {
+        aCheckedProps.append("intrusion_stop_length");
+        aCheckedProps.append("intrusion_stop_width");
+        aCheckedProps.append("intrusion_deceleration_length");
+        aCheckedProps.append("intrusion_deceleration_width");
+    }
+    areaObj["checked_props"] = aCheckedProps;
 
     double aMinX = 0, aMaxX = 0, aMinY = 0, aMaxY = 0;
     extractAreaBounds(areaObj, aMinX, aMaxX, aMinY, aMaxY);
@@ -4624,11 +4793,7 @@ void MapEditWidget::applyLinePropsEdit()
         {m_chkLineMaxRotAcc, "maxrotacc"},
         {m_chkLineReachDist, "reachdist"},
         {m_chkLineReachAngle, "reachangle"},
-        {m_chkLineRoadWidth, "width"},
-        {m_chkLineObsStopLen, "intrusion_stop_length"},
-        {m_chkLineObsStopWid, "intrusion_stop_width"},
-        {m_chkLineObsDecelLen, "intrusion_deceleration_length"},
-        {m_chkLineObsDecelWid, "intrusion_deceleration_width"}
+        {m_chkLineRoadWidth, "width"}
     };
 
     auto updLine = [&](QJsonArray &arr) {
@@ -4637,7 +4802,10 @@ void MapEditWidget::applyLinePropsEdit()
             if (o.value("id").toString() != m_selId) continue;
             if (m_chkLineName && m_chkLineName->isChecked()) o["name"] = newName;
             if (m_chkLineDirect && m_chkLineDirect->isChecked()) o["direct"] = newDirect;
-            if (m_chkLineMaxSpeed && m_chkLineMaxSpeed->isChecked()) o["maxspeed"] = maxSpeed;
+            if (m_chkLineMaxSpeed && m_chkLineMaxSpeed->isChecked()) {
+                o["maxspeed"] = maxSpeed;
+            }
+            o.remove("max_speed");
             if (m_chkLineMaxAcc && m_chkLineMaxAcc->isChecked()) {
                 o["max_acceleration"] = maxAcc;
                 o["maxacc"]           = maxAcc;
@@ -4653,14 +4821,25 @@ void MapEditWidget::applyLinePropsEdit()
             if (m_chkLineReachDist && m_chkLineReachDist->isChecked()) o["reachdist"] = reachDist;
             if (m_chkLineReachAngle && m_chkLineReachAngle->isChecked()) o["reachangle"] = reachAngle;
             if (m_chkLineRoadWidth && m_chkLineRoadWidth->isChecked()) o["width"] = roadWidth;
-            bool obsChanged = false;
-            if (m_chkLineObsStopLen && m_chkLineObsStopLen->isChecked())   { o["intrusion_stop_length"] = obsStopLen; obsChanged = true; }
-            if (m_chkLineObsStopWid && m_chkLineObsStopWid->isChecked())   { o["intrusion_stop_width"] = obsStopWid; obsChanged = true; }
-            if (m_chkLineObsDecelLen && m_chkLineObsDecelLen->isChecked()) { o["intrusion_deceleration_length"] = obsDecelLen; obsChanged = true; }
-            if (m_chkLineObsDecelWid && m_chkLineObsDecelWid->isChecked()) { o["intrusion_deceleration_width"] = obsDecelWid; obsChanged = true; }
-            if (obsChanged) o["is_custom_obstacle"] = true;
+            bool obsOn = m_chkLineObs && m_chkLineObs->isChecked();
+            if (obsOn) {
+                o["intrusion_stop_length"] = obsStopLen;
+                o["intrusion_stop_width"] = obsStopWid;
+                o["intrusion_deceleration_length"] = obsDecelLen;
+                o["intrusion_deceleration_width"] = obsDecelWid;
+                o["is_custom_obstacle"] = true;
+            } else {
+                o["is_custom_obstacle"] = false;
+            }
 
-            o["checked_props"] = collectCheckedProps(lineChkMapping);
+            QJsonArray lCheckedProps = collectCheckedProps(lineChkMapping);
+            if (obsOn) {
+                lCheckedProps.append("intrusion_stop_length");
+                lCheckedProps.append("intrusion_stop_width");
+                lCheckedProps.append("intrusion_deceleration_length");
+                lCheckedProps.append("intrusion_deceleration_width");
+            }
+            o["checked_props"] = lCheckedProps;
             arr[i] = o;
             break;
         }
@@ -5432,7 +5611,7 @@ bool MapEditWidget::handleCanvasMouseRelease(QMouseEvent *me)
             pBR.append(maxX); pBR.append(minY);
             coords.append(pTL); coords.append(pBR);
             newArea["coordinates"] = coords;
-            newArea["max_speed"] = mc.maxSpeed();
+            newArea["maxspeed"] = mc.maxSpeed();
             newArea["max_acceleration"] = mc.maxAcceleration();
             newArea["maxacc"] = mc.maxAcceleration();
             newArea["max_angular_speed"] = mc.maxAngularSpeedDeg();
@@ -5942,7 +6121,7 @@ void MapEditWidget::showHelpDialog()
     addRow("E", "橡皮擦：擦除栅格涂改，恢复可通行区域");
     addRow("Delete / Backspace", "删除当前选中的路网要素（站点、线段、曲线、高级区域）");
     addRow("Ctrl + Z", "撤销底图画笔 / 橡皮擦涂改");
-    addRow("Ctrl + Y / Ctrl+Shift+Z", "重做底图涂改操作");
+    addRow("Ctrl + Y / Ctrl+Shift+Z", "恢复 (取消撤销) 底图涂改操作");
     addRow("Ctrl + S / Alt + S", "保存地图底图与路网结构");
     addRow("空格键 (Space)", "循环切换绘图工具");
     addRow("F1", "打开此地图编辑与快捷操作指南");
