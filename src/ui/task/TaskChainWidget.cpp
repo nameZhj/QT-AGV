@@ -429,6 +429,33 @@ protected:
     void keyReleaseEvent(QKeyEvent *e) override { e->accept(); }
 };
 
+// 任务链列表项自定义卡片控件 (支持点击任意区域切换选中)
+class ChainCardWidget : public QWidget
+{
+public:
+    explicit ChainCardWidget(int index, std::function<void(int)> onSelect, QWidget *parent = nullptr)
+        : QWidget(parent), m_index(index), m_onSelect(std::move(onSelect))
+    {
+        setAttribute(Qt::WA_StyledBackground, true);
+    }
+
+    void setIndex(int idx) { m_index = idx; }
+    int index() const { return m_index; }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        QWidget::mousePressEvent(event);
+        if (event->button() == Qt::LeftButton && m_onSelect) {
+            m_onSelect(m_index);
+        }
+    }
+
+private:
+    int m_index;
+    std::function<void(int)> m_onSelect;
+};
+
 TaskChainWidget::TaskChainWidget(QWidget *parent)
     : QWidget(parent)
 {
@@ -614,24 +641,33 @@ void TaskChainWidget::setupUI()
 
 void TaskChainWidget::setupPanel1Chain(QVBoxLayout *layout)
 {
-    auto *title = new QLabel(QStringLiteral("  任务链列表"));
-    title->setStyleSheet(S_PANEL_TITLE);
-    layout->addWidget(title);
+    // 顶部按钮与标题栏: 新建 加载 保存 任务链列表 (与截图顶部完全一致)
+    auto *topRow = new QHBoxLayout;
+    topRow->setContentsMargins(2, 2, 2, 4);
+    topRow->setSpacing(6);
 
-    // 按钮行在列表上方
-    auto *btnRow = new QHBoxLayout;
-    btnRow->setSpacing(6);
     m_chainNewBtn  = makeBtn(QStringLiteral("新建"));
     m_chainLoadBtn = makeBtn(QStringLiteral("加载"));
     m_chainSaveBtn = makeBtn(QStringLiteral("保存"));
-    btnRow->addWidget(m_chainNewBtn);
-    btnRow->addWidget(m_chainLoadBtn);
-    btnRow->addWidget(m_chainSaveBtn);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
+    topRow->addWidget(m_chainNewBtn);
+    topRow->addWidget(m_chainLoadBtn);
+    topRow->addWidget(m_chainSaveBtn);
+
+    auto *title = new QLabel(QStringLiteral("任务链列表"));
+    title->setStyleSheet("color:#b0b8c0; font-size:12px; font-weight:bold; background:transparent; padding-left:4px;");
+    topRow->addWidget(title);
+    topRow->addStretch(1);
+    layout->addLayout(topRow);
 
     m_chainList = new QListWidget;
-    m_chainList->setStyleSheet(S_LIST_STYLE);
+    m_chainList->setObjectName("taskChainList");
+    m_chainList->setFocusPolicy(Qt::NoFocus);
+    m_chainList->setStyleSheet(
+        "QListWidget#taskChainList { background:#14171b; border:1px solid #23272e; border-radius:4px; outline:none; padding:4px 2px; }"
+        "QListWidget#taskChainList::item { background:transparent; border:none; padding:2px 0px; margin:2px 0px; }"
+        "QListWidget#taskChainList::item:selected { background:transparent; border:none; }"
+        "QListWidget#taskChainList::item:hover { background:transparent; border:none; }"
+    );
     layout->addWidget(m_chainList, 1);
 
     m_chainStatus = new QLabel;
@@ -916,9 +952,42 @@ void TaskChainWidget::refreshChainList()
         createChainRowWidget(item, i);
     }
     m_chainList->blockSignals(false);
+    updateChainCardHighlight();
     scheduleCacheWrite();
     if (m_listLocked) {
         installLockFilter(m_chainList, true);
+    }
+}
+
+void TaskChainWidget::updateChainCardHighlight()
+{
+    int curIdx = currentChainIndex();
+    for (int i = 0; i < m_chainList->count(); ++i) {
+        auto *item = m_chainList->item(i);
+        if (!item) continue;
+        auto *widget = m_chainList->itemWidget(item);
+        if (!widget) continue;
+
+        bool isSelected = (i == curIdx);
+        auto *indicator = widget->findChild<QWidget*>("chainIndicator");
+        if (indicator) {
+            if (isSelected) {
+                indicator->setStyleSheet("background-color: #00a8ff; border-top-left-radius: 4px; border-bottom-left-radius: 4px;");
+            } else {
+                indicator->setStyleSheet("background-color: transparent;");
+            }
+        }
+
+        if (isSelected) {
+            widget->setStyleSheet(
+                "#chainCardRoot { background: #21252d; border: 1px solid #323844; border-radius: 4px; }"
+            );
+        } else {
+            widget->setStyleSheet(
+                "#chainCardRoot { background: #191c21; border: 1px solid #23272e; border-radius: 4px; }"
+                "#chainCardRoot:hover { background: #1e2228; border-color: #2b313b; }"
+            );
+        }
     }
 }
 
@@ -927,63 +996,106 @@ void TaskChainWidget::createChainRowWidget(QListWidgetItem *item, int chainIndex
     if (chainIndex < 0 || chainIndex >= m_chains.size()) return;
     const QString &name = m_chains[chainIndex].name;
 
-    auto *row = new QWidget;
-    auto *hbox = new QHBoxLayout(row);
-    hbox->setContentsMargins(4, 2, 4, 2);
-    hbox->setSpacing(4);
+    auto *card = new ChainCardWidget(chainIndex, [this](int idx) {
+        selectChain(idx);
+    }, m_chainList);
+    card->setObjectName("chainCardRoot");
 
-    auto *nameLabel = new QLabel(name);
-    nameLabel->setStyleSheet("color:#c0c8d0; font-size:12px; background:transparent;");
-    nameLabel->setToolTip(name);
-    hbox->addWidget(nameLabel, 1);
+    auto *mainHBox = new QHBoxLayout(card);
+    mainHBox->setContentsMargins(0, 0, 8, 0);
+    mainHBox->setSpacing(8);
 
-    // 导出图标按钮
-    auto *exportBtn = new QToolButton;
-    exportBtn->setText("📥");
-    exportBtn->setToolTip("导出");
+    // 1. 左侧高亮蓝色指示条 (4px 宽, 贴紧卡片左侧)
+    auto *indicator = new QWidget(card);
+    indicator->setObjectName("chainIndicator");
+    indicator->setFixedWidth(4);
+    indicator->setStyleSheet("background-color: transparent; border-top-left-radius: 4px; border-bottom-left-radius: 4px;");
+    mainHBox->addWidget(indicator);
+
+    // 2. 右侧垂直排布内容区 (上行按钮, 下行名称)
+    auto *contentVBox = new QVBoxLayout;
+    contentVBox->setContentsMargins(2, 6, 0, 6);
+    contentVBox->setSpacing(2);
+
+    // 顶部行: 靠右放置 3 个小图标按钮 (从左到右: 导出、重命名、删除)
+    auto *btnRow = new QHBoxLayout;
+    btnRow->setContentsMargins(0, 0, 0, 0);
+    btnRow->setSpacing(4);
+    btnRow->addStretch(1);
+
+    const QString btnQss =
+        "QToolButton { background: #22262d; border: 1px solid #363d48; border-radius: 4px; padding: 2px; }"
+        "QToolButton:hover { background: #2e343f; border-color: #556071; }"
+        "QToolButton:pressed { background: #181b20; border-color: #00a8ff; }";
+
+    // 1. 导出图标按钮 (文件夹 + 弯箭头)
+    auto *exportBtn = new QToolButton(card);
+    exportBtn->setIcon(QIcon(":/chain-export.svg"));
+    exportBtn->setIconSize(QSize(15, 15));
+    exportBtn->setToolTip(QStringLiteral("导出当前任务链到指定位置"));
     exportBtn->setAutoRaise(true);
-    exportBtn->setFixedSize(22, 22);
-    exportBtn->setStyleSheet("QToolButton{background:transparent;border:none;color:#8899aa;font-size:14px;}QToolButton:hover{color:#00bcd4;}");
-    hbox->addWidget(exportBtn);
+    exportBtn->setFixedSize(24, 24);
+    exportBtn->setCursor(Qt::PointingHandCursor);
+    exportBtn->setStyleSheet(btnQss);
+    btnRow->addWidget(exportBtn);
 
-    // 修改名称图标按钮
-    auto *renameBtn = new QToolButton;
-    renameBtn->setText("✏");
-    renameBtn->setToolTip("重命名");
+    // 2. 修改名称图标按钮 (纸张 + 铅笔下划线)
+    auto *renameBtn = new QToolButton(card);
+    renameBtn->setIcon(QIcon(":/chain-rename.svg"));
+    renameBtn->setIconSize(QSize(15, 15));
+    renameBtn->setToolTip(QStringLiteral("重命名任务链"));
     renameBtn->setAutoRaise(true);
-    renameBtn->setFixedSize(22, 22);
-    renameBtn->setStyleSheet("QToolButton{background:transparent;border:none;color:#8899aa;font-size:14px;}QToolButton:hover{color:#f0a060;}");
-    hbox->addWidget(renameBtn);
+    renameBtn->setFixedSize(24, 24);
+    renameBtn->setCursor(Qt::PointingHandCursor);
+    renameBtn->setStyleSheet(btnQss);
+    btnRow->addWidget(renameBtn);
 
-    // 除图标按钮
-    auto *deleteBtn = new QToolButton;
-    deleteBtn->setText("🗑");
-    deleteBtn->setToolTip("删除");
+    // 3. 删除图标按钮 (垃圾桶)
+    auto *deleteBtn = new QToolButton(card);
+    deleteBtn->setIcon(QIcon(":/chain-delete.svg"));
+    deleteBtn->setIconSize(QSize(15, 15));
+    deleteBtn->setToolTip(QStringLiteral("删除任务链"));
     deleteBtn->setAutoRaise(true);
-    deleteBtn->setFixedSize(22, 22);
-    deleteBtn->setStyleSheet("QToolButton{background:transparent;border:none;color:#8899aa;font-size:14px;}QToolButton:hover{color:#e05555;}");
-    hbox->addWidget(deleteBtn);
+    deleteBtn->setFixedSize(24, 24);
+    deleteBtn->setCursor(Qt::PointingHandCursor);
+    deleteBtn->setStyleSheet(btnQss);
+    btnRow->addWidget(deleteBtn);
 
-    // 信号
+    contentVBox->addLayout(btnRow);
+
+    // 下部行: 任务链名称
+    auto *nameRow = new QHBoxLayout;
+    nameRow->setContentsMargins(0, 0, 0, 0);
+    auto *nameLabel = new QLabel(name, card);
+    nameLabel->setObjectName("chainNameLabel");
+    nameLabel->setStyleSheet("color: #d6dbe2; font-size: 12px; font-weight: bold; background: transparent;");
+    nameLabel->setToolTip(name);
+    nameRow->addWidget(nameLabel);
+    nameRow->addStretch(1);
+    contentVBox->addLayout(nameRow);
+
+    mainHBox->addLayout(contentVBox, 1);
+
+    // 信号绑定
     connect(exportBtn, &QToolButton::clicked, this, [this, chainIndex]() {
-        if (chainIndex < 0 || chainIndex >= m_chains.size()) return;
         selectChain(chainIndex);
-        onChainSave();
+        onChainExport();
     });
 
     connect(renameBtn, &QToolButton::clicked, this, [this, chainIndex, nameLabel]() {
         if (chainIndex < 0 || chainIndex >= m_chains.size()) return;
         bool ok = false;
-        QString newName = QInputDialog::getText(this, QStringLiteral("重命名"),
-            QStringLiteral("输入名称:"), QLineEdit::Normal, m_chains[chainIndex].name, &ok);
+        QString newName = QInputDialog::getText(this, QStringLiteral("重命名任务链"),
+            QStringLiteral("输入新名称:"), QLineEdit::Normal, m_chains[chainIndex].name, &ok);
         if (ok && !newName.trimmed().isEmpty()) {
             m_chains[chainIndex].name = newName.trimmed();
             nameLabel->setText(newName.trimmed());
             nameLabel->setToolTip(newName.trimmed());
+            scheduleCacheWrite();
         }
     });
 
-    connect(deleteBtn, &QToolButton::clicked, this, [this, chainIndex, item]() {
+    connect(deleteBtn, &QToolButton::clicked, this, [this, chainIndex]() {
         if (chainIndex < 0 || chainIndex >= m_chains.size()) return;
         if (QMessageBox::question(this, QStringLiteral("确认"),
                 QStringLiteral("确定删除 [%1] 任务链吗？").arg(m_chains[chainIndex].name)) !=
@@ -992,10 +1104,16 @@ void TaskChainWidget::createChainRowWidget(QListWidgetItem *item, int chainIndex
 
         QString chainName = m_chains[chainIndex].name;
         m_chains.removeAt(chainIndex);
-        // 重建列表 (index 需要重新排列)
         refreshChainList();
-        refreshTaskList();
-        refreshGroupList();
+        if (m_chains.isEmpty()) {
+            m_currentChainIndex = -1;
+            m_currentTaskIndex = -1;
+            refreshTaskList();
+            refreshGroupList();
+        } else {
+            int nextIndex = qBound(0, chainIndex, m_chains.size() - 1);
+            selectChain(nextIndex);
+        }
 
         // 同步删除服务端任务链文件 (DELETE /task/chain/{fileName})
         QString fileName = chainName;
@@ -1007,8 +1125,8 @@ void TaskChainWidget::createChainRowWidget(QListWidgetItem *item, int chainIndex
         });
     });
 
-    item->setSizeHint(QSize(0, 36));
-    m_chainList->setItemWidget(item, row);
+    item->setSizeHint(QSize(0, 56));
+    m_chainList->setItemWidget(item, card);
 }
 
 void TaskChainWidget::selectChain(int index)
@@ -1027,6 +1145,7 @@ void TaskChainWidget::selectChain(int index)
     refreshTaskList();
     refreshGroupList();
     updateBottomBar();
+    updateChainCardHighlight();
 }
 
 int TaskChainWidget::currentChainIndex() const
@@ -2330,45 +2449,163 @@ void TaskChainWidget::onChainNew()
 void TaskChainWidget::onChainLoad()
 {
     QString localDir = taskChainLocalDir();
-    QString filePath = QFileDialog::getOpenFileName(this, QStringLiteral("加载任务链 JSON"), localDir, "JSON Files (*.json *.task)");
-    if (filePath.isEmpty()) return;
+    QStringList filePaths = QFileDialog::getOpenFileNames(
+        this,
+        QStringLiteral("加载任务链 (支持单选或批量多选)"),
+        localDir,
+        QStringLiteral("JSON Files (*.json *.task);;所有文件 (*.*)")
+    );
+    if (filePaths.isEmpty()) return;
 
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
-        QMessageBox::warning(this, QStringLiteral("错误"), QStringLiteral("无法打开所选 JSON 文件"));
+    QList<ChainData> allLoadedChains;
+    int successFileCount = 0;
+
+    for (const QString &filePath : filePaths) {
+        QFile file(filePath);
+        if (!file.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+
+        QByteArray data = file.readAll();
+        file.close();
+
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(data, &err);
+        if (err.error != QJsonParseError::NoError) {
+            continue;
+        }
+
+        bool fileHasChain = false;
+
+        // 格式一: 顶层为数组 [ {...}, {...} ] (支持单文件包含多个任务链)
+        if (doc.isArray()) {
+            QJsonArray arr = doc.array();
+            for (int i = 0; i < arr.size(); ++i) {
+                if (arr[i].isObject()) {
+                    ChainData c = importChainFromJson(arr[i].toObject());
+                    if (c.name.isEmpty()) {
+                        c.name = QString("%1_%2").arg(QFileInfo(filePath).baseName()).arg(i + 1);
+                    }
+                    allLoadedChains.append(c);
+                    fileHasChain = true;
+                }
+            }
+        }
+        // 格式二: 顶层为对象
+        else if (doc.isObject()) {
+            QJsonObject root = doc.object();
+            if (root.contains("chains") && root["chains"].isArray()) {
+                QJsonArray arr = root["chains"].toArray();
+                for (int i = 0; i < arr.size(); ++i) {
+                    if (arr[i].isObject()) {
+                        ChainData c = importChainFromJson(arr[i].toObject());
+                        if (c.name.isEmpty()) c.name = QString("%1_%2").arg(QFileInfo(filePath).baseName()).arg(i + 1);
+                        allLoadedChains.append(c);
+                        fileHasChain = true;
+                    }
+                }
+            } else if (root.contains("task_chains") && root["task_chains"].isArray()) {
+                QJsonArray arr = root["task_chains"].toArray();
+                for (int i = 0; i < arr.size(); ++i) {
+                    if (arr[i].isObject()) {
+                        ChainData c = importChainFromJson(arr[i].toObject());
+                        if (c.name.isEmpty()) c.name = QString("%1_%2").arg(QFileInfo(filePath).baseName()).arg(i + 1);
+                        allLoadedChains.append(c);
+                        fileHasChain = true;
+                    }
+                }
+            } else {
+                // 单条任务链对象
+                ChainData loadedChain = importChainFromJson(root);
+                if (loadedChain.name.isEmpty()) {
+                    loadedChain.name = QFileInfo(filePath).baseName();
+                }
+                allLoadedChains.append(loadedChain);
+                fileHasChain = true;
+            }
+        }
+
+        if (fileHasChain) {
+            successFileCount++;
+        }
+    }
+
+    if (allLoadedChains.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("所选文件中未解析到有效的任务链数据"));
         return;
     }
 
-    QByteArray data = file.readAll();
-    file.close();
-
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
-        QMessageBox::warning(this, QStringLiteral("错误"), QStringLiteral("JSON 格式错误: %1").arg(err.errorString()));
-        return;
+    for (const auto &c : allLoadedChains) {
+        m_chains.append(c);
     }
 
-    ChainData loadedChain = importChainFromJson(doc.object());
-    if (loadedChain.name.isEmpty()) {
-        loadedChain.name = QFileInfo(filePath).baseName();
-    }
-
-    m_chains.append(loadedChain);
     refreshChainList();
     selectChain(m_chains.size() - 1);
-    updateStatus(QStringLiteral("已成功加载任务链: %1").arg(loadedChain.name));
 
-    // 同步上传至服务端任务链目录 (POST /task/chain/save, multipart 字段 taskFile)
-    ApiService::instance().saveTaskChain(filePath, [this](int code, const QJsonObject &resp) {
-        if (code == 200) {
-            updateStatus(QStringLiteral("任务链已加载并同步上传至服务器"));
-            Toast::success(this, QStringLiteral("任务链已载入并上传至服务器"));
-        } else {
-            Toast::error(this, QStringLiteral("任务链上传失败(%1): %2")
-                .arg(code).arg(resp.value("msg").toString(QStringLiteral("请求失败"))));
-        }
-    });
+    QString msg = QStringLiteral("已成功加载 %1 个文件，共 %2 条任务链")
+                      .arg(successFileCount).arg(allLoadedChains.size());
+    updateStatus(msg);
+    Toast::success(this, msg);
+
+    // 若只加载了单个文件且为单任务链，同步上传服务器
+    if (filePaths.size() == 1 && allLoadedChains.size() == 1) {
+        ApiService::instance().saveTaskChain(filePaths.first(), [this](int code, const QJsonObject &resp) {
+            if (code == 200) {
+                updateStatus(QStringLiteral("任务链已加载并同步上传至服务器"));
+            }
+        });
+    } else {
+        scheduleCacheWrite();
+    }
+}
+
+void TaskChainWidget::onChainExport()
+{
+    if (m_chains.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("任务链列表为空，无可导出数据"));
+        return;
+    }
+
+    int curIdx = currentChainIndex();
+    if (curIdx < 0 || curIdx >= m_chains.size()) {
+        QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("请先选择要导出的任务链"));
+        return;
+    }
+
+    const ChainData &chain = m_chains[curIdx];
+    QString defaultName = chain.name.trimmed();
+    if (defaultName.isEmpty()) defaultName = QStringLiteral("task_chain");
+    if (!defaultName.endsWith(".json", Qt::CaseInsensitive)) {
+        defaultName += ".json";
+    }
+    QString defaultPath = taskChainLocalDir() + "/" + defaultName;
+
+    QString filePath = QFileDialog::getSaveFileName(
+        this,
+        QStringLiteral("导出当前任务链"),
+        defaultPath,
+        QStringLiteral("JSON Files (*.json)")
+    );
+    if (filePath.isEmpty()) return;
+
+    if (!filePath.endsWith(".json", Qt::CaseInsensitive)) {
+        filePath += ".json";
+    }
+
+    // 导出当前选中的单条任务链 (标准对象格式，与导入功能完全互通)
+    QJsonObject obj = exportChainToJson(chain, false, false);
+    QJsonDocument doc(obj);
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        QMessageBox::warning(this, QStringLiteral("错误"), QStringLiteral("无法创建或写入目标文件: %1").arg(file.errorString()));
+        return;
+    }
+
+    file.write(doc.toJson(QJsonDocument::Indented));
+    file.close();
+
+    updateStatus(QStringLiteral("已成功导出任务链 [%1] 至: %2").arg(chain.name).arg(filePath));
+    Toast::success(this, QStringLiteral("已导出任务链 [%1]").arg(chain.name));
 }
 
 void TaskChainWidget::onChainSave()
@@ -2429,6 +2666,7 @@ void TaskChainWidget::onChainItemChanged(QListWidgetItem *current)
     int idx = current->data(Qt::UserRole).toInt();
     selectChain(idx);
     updateBottomBar();
+    updateChainCardHighlight();
 }
 
 // ── 面板2: 任务模块 ──

@@ -56,22 +56,30 @@ void MqttService::connectToHost(const QString &host, int port)
     }
 
     m_explicitDisconnect = false;
-    m_lastHost = trimmedHost;
-    m_lastPort = port;
 
-    // 若已经在连接中或已成功连接至同一主机，避免重复调用破坏握手
-    if (m_client->state() != QMqttClient::Disconnected
+    // 切换设备或重启: 停止正在进行的重连定时器并重置退避周期
+    if (m_reconnectTimer) {
+        m_reconnectTimer->stop();
+    }
+    m_currentBackoffMs = kMinBackoffMs;
+
+    // 若当前已成功连接至同一主机IP，避免重复破坏握手
+    if (m_client && m_client->state() == QMqttClient::Connected
         && m_client->hostname() == trimmedHost
         && m_client->port() == static_cast<quint16>(port)) {
         return;
     }
 
-    if (m_client->state() != QMqttClient::Disconnected) {
+    // IP 是区分设备的唯一标识，切换设备时彻底关闭旧连接、销毁旧 client 并重启
+    if (m_client) {
         m_client->disconnectFromHost();
         m_client->deleteLater();
         m_client = nullptr;
-        setupClient();
     }
+    setupClient();
+
+    m_lastHost = trimmedHost;
+    m_lastPort = port;
 
     m_client->setHostname(trimmedHost);
     m_client->setPort(static_cast<quint16>(port));
@@ -79,6 +87,8 @@ void MqttService::connectToHost(const QString &host, int port)
     m_client->setPassword(QStringLiteral("vsislab"));
     m_client->setClientId(QStringLiteral("qt-agv-%1").arg(QDateTime::currentMSecsSinceEpoch()));
     m_client->setKeepAlive(60);
+
+    qInfo().noquote() << QStringLiteral("[MQTT Service] 正在连接设备 MQTT: %1:%2").arg(trimmedHost).arg(port);
     m_client->connectToHost();
 }
 

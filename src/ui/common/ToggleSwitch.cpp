@@ -3,17 +3,24 @@
 #include <QPainter>
 #include <QPropertyAnimation>
 #include <QEasingCurve>
+#include <QMouseEvent>
+#include <cmath>
 
 ToggleSwitch::ToggleSwitch(QWidget *parent)
     : QAbstractButton(parent)
 {
     setCheckable(true);
     setCursor(Qt::PointingHandCursor);
+    setFixedSize(kDefaultWidth, kDefaultHeight);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    setStyleSheet("background:transparent;border:none;");
 
     m_anim = new QPropertyAnimation(this, "offset", this);
-    m_anim->setDuration(kAnimDurationMs);
+    m_anim->setDuration(120);
     m_anim->setEasingCurve(QEasingCurve::InOutCubic);
+    connect(m_anim, &QPropertyAnimation::finished, this, [this]() {
+        setOffset(isChecked() ? 1.0 : 0.0);
+    });
 }
 
 QSize ToggleSwitch::sizeHint() const
@@ -33,7 +40,7 @@ qreal ToggleSwitch::offset() const
 
 void ToggleSwitch::setOffset(qreal value)
 {
-    if (qFuzzyCompare(m_offset, value)) {
+    if (std::abs(m_offset - value) < 0.001) {
         return;
     }
     m_offset = qBound(0.0, value, 1.0);
@@ -85,25 +92,41 @@ void ToggleSwitch::checkStateSet()
     animateToChecked(isChecked());
 }
 
+void ToggleSwitch::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        event->accept();
+        return;
+    }
+    QAbstractButton::mousePressEvent(event);
+}
+
+void ToggleSwitch::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        if (rect().contains(event->pos())) {
+            toggle();
+            event->accept();
+            return;
+        }
+    }
+    QAbstractButton::mouseReleaseEvent(event);
+}
+
 void ToggleSwitch::animateToChecked(bool checked)
 {
     const qreal target = checked ? 1.0 : 0.0;
-    if (!isVisible()) {
-        if (m_anim && m_anim->state() == QAbstractAnimation::Running) {
-            m_anim->stop();
-        }
+    if (!isVisible() || !m_anim) {
         setOffset(target);
         return;
     }
 
-    if (m_anim) {
+    if (m_anim->state() == QAbstractAnimation::Running) {
         m_anim->stop();
-        m_anim->setStartValue(m_offset);
-        m_anim->setEndValue(target);
-        m_anim->start();
-    } else {
-        setOffset(target);
     }
+    m_anim->setStartValue(m_offset);
+    m_anim->setEndValue(target);
+    m_anim->start();
 }
 
 void ToggleSwitch::paintEvent(QPaintEvent *)

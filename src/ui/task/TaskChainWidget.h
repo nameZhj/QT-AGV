@@ -51,6 +51,7 @@ private slots:
     void onChainNew();
     void onChainLoad();
     void onChainSave();
+    void onChainExport();
     void onChainItemChanged(QListWidgetItem *current);
 
     // 面板2: 任务模块
@@ -135,6 +136,7 @@ private:
     void updateStatus(const QString &text);
     void refreshChainList();
     void createChainRowWidget(QListWidgetItem *item, int chainIndex);
+    void updateChainCardHighlight();
 
     // 组相关
     void createGroupRowWidget(QListWidgetItem *item, int groupIndex, bool checked = false);

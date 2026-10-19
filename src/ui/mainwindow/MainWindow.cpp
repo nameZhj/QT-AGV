@@ -463,7 +463,8 @@ void MainWindow::updateStatusBar()
 
     // 2. 网络延迟
     if (m_sbLatency) {
-        int lat = (info.latency >= 0) ? info.latency : m_networkLatency;
+        bool isConnected = (st == QMqttClient::Connected);
+        int lat = (isConnected && info.latency >= 0) ? info.latency : (isConnected ? m_networkLatency : -1);
         if (lat >= 0) {
             QString col = (lat < 60) ? "#22c55e" : ((lat < 150) ? "#eab308" : "#ef4444");
             m_sbLatency->setText(QString("网络延迟: <span style='color:%1;'>%2 ms</span>").arg(col).arg(lat));
@@ -507,6 +508,14 @@ void MainWindow::updateStatusBar()
 
 void MainWindow::testNetworkLatency()
 {
+    if (!MqttService::instance().isConnected()) {
+        m_networkLatency = -1;
+        if (m_sbLatency) {
+            m_sbLatency->setText("网络延迟: <span style='color:#8898a8;'>--</span>");
+        }
+        return;
+    }
+
     const RobotInfo &info = RobotInfoManager::instance().currentInfo();
     if (info.latency >= 0) {
         m_networkLatency = info.latency;

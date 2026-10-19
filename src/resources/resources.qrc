@@ -5,6 +5,9 @@
     <file alias="app-icon.svg">icons/app-icon.svg</file>
     <file alias="ic-reset-view.svg">icons/ic-reset-view.svg</file>
     <file alias="check.svg">icons/check.svg</file>
+    <file alias="chain-export.svg">icons/chain-export.svg</file>
+    <file alias="chain-rename.svg">icons/chain-rename.svg</file>
+    <file alias="chain-delete.svg">icons/chain-delete.svg</file>
     <file alias="qss/base.qss">qss/base.qss</file>
     <file alias="qss/mainwindow.qss">qss/mainwindow.qss</file>
     <file alias="qss/dialogs.qss">qss/dialogs.qss</file>

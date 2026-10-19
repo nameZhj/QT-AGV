@@ -14,11 +14,13 @@ RobotInfoManager &RobotInfoManager::instance()
 RobotInfoManager::RobotInfoManager(QObject *parent)
     : QObject(parent)
 {
-    // 刚开机默认初始化状态为“就绪” (status: "0")
+    // 刚开机默认初始化状态为“就绪” (status: "0")，但未接收到有效数据时 receivedData 为 false
     RobotInfo def;
     def.carIdStr = QStringLiteral("1");
     def.car_id = 1;
     def.status = QStringLiteral("0");
+    def.receivedData = false;
+    def.latency = -1;
     m_robots[QStringLiteral("1")] = def;
 }
 
@@ -29,6 +31,13 @@ void RobotInfoManager::init()
 
     auto &mqtt = MqttService::instance();
     connect(&mqtt, &MqttService::connected, this, &RobotInfoManager::onMqttConnected);
+    connect(&mqtt, &MqttService::disconnected, this, [this]() {
+        QWriteLocker locker(&m_lock);
+        for (auto &r : m_robots) {
+            r.receivedData = false;
+            r.latency = -1;
+        }
+    });
 
     if (mqtt.isConnected()) {
         onMqttConnected();
@@ -60,6 +69,8 @@ void RobotInfoManager::resetForCar(const QString &newCarId)
         def.carIdStr = QStringLiteral("1");
         def.car_id = 1;
         def.status = QStringLiteral("0"); // 重置初始化状态为就绪
+        def.receivedData = false;
+        def.latency = -1;
         m_robots[QStringLiteral("1")] = def;
     }
 
@@ -166,6 +177,7 @@ bool RobotInfoManager::updateNavigateStatus(const QByteArray &payload)
         target.carIdStr = carId;
         target.car_id = 1;
         target.status = statusVal; // "0" 就绪, "1" 导航中, "2" 暂停导航
+        target.receivedData = true;
         snapshot = target;
 
         QString curId = AppConfig::instance().agvId().trimmed();
@@ -497,6 +509,7 @@ bool RobotInfoManager::parseInfoJson(const QJsonObject &d, RobotInfo *outInfo)
         outInfo->remark = d.value(QStringLiteral("remark")).toString().trimmed();
     }
 
+    outInfo->receivedData = true;
     return true;
 }
 

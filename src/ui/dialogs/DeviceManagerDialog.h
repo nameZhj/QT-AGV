@@ -41,9 +41,11 @@ public:
     // 主动断开设备连接与 MQTT
     void disconnectDevice();
     void updateCardDisplay();
+    void probeDeviceStatus(const QString &ip);
 
 signals:
     void doubleClicked(int index);
+    void connectClicked(int index);
     void disconnectClicked(int index);
     void removeClicked(int index);
     void networkConfigClicked(int index); // 远程网络配置 (SSH)
@@ -53,7 +55,6 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    void startMqttMonitor(const QString &ip, const QString &carId);
     void setOnlineUI(bool online);
 
     int m_index = 0;
@@ -77,7 +78,7 @@ private:
     QLabel       *m_fwVerLabel  = nullptr;   // 固件版本: v2.1.1
     QLabel       *m_baseIcon    = nullptr;   // 底部基站/WiFi 图标
     QPushButton  *m_syncBtn     = nullptr;   // 底部左侧 已同步 按钮
-    QPushButton  *m_connectBtn  = nullptr;   // 底部右侧 断开连接 / 进入控制 按钮
+    QPushButton  *m_connectBtn  = nullptr;   // 底部右侧 连接 / 断开连接 按钮
     QGraphicsDropShadowEffect *m_shadow = nullptr; // 整卡立体投影效果
 
     double       m_confidence   = -1.0;
@@ -88,9 +89,6 @@ private:
     QString      m_remark;
     QString      m_statusText;
     QTimer      *m_latencyTimer = nullptr;
-
-    // 自动连接该设备专属 MQTT，持续订阅 /rob/{carId}/info 实时更新与缓存设备信息
-    QMqttClient *m_mqttClient  = nullptr;
 };
 
 // ── Main device-manager dialog ────────────────────────────────────────────────
@@ -105,6 +103,7 @@ private slots:
     void onConfirmAdd();
     void onCancelAdd();
     void onCardDoubleClicked(int index);
+    void onConnectCard(int index);
     void onDisconnectCard(int index);
     void onRemoveCard(int index);
     void onNetworkConfig(int index); // 远程网络配置 (SSH)

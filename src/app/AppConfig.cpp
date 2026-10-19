@@ -258,7 +258,7 @@ void AppConfig::clearDevices()
 int AppConfig::currentDeviceIndex() const
 {
     QReadLocker locker(&m_lock);
-    return m_settings.value("currentDeviceIndex", 0).toInt();
+    return m_settings.value("currentDeviceIndex", -1).toInt();
 }
 
 void AppConfig::setCurrentDeviceIndex(int idx)
@@ -267,7 +267,7 @@ void AppConfig::setCurrentDeviceIndex(int idx)
     DeviceProfile activeDev;
     {
         QWriteLocker locker(&m_lock);
-        const int oldIdx = m_settings.value("currentDeviceIndex", 0).toInt();
+        const int oldIdx = m_settings.value("currentDeviceIndex", -1).toInt();
         if (oldIdx != idx) {
             m_settings.setValue("currentDeviceIndex", idx);
             m_settings.sync();

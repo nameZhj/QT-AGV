@@ -218,15 +218,15 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
     chkBox->setStyleSheet("border:1.5px solid #ffffff; border-radius:2px; background:transparent;");
     hl->addWidget(chkBox);
 
-    // 2. 连接文字
-    m_onlineLabel = new QLabel("已连接");
-    m_onlineLabel->setStyleSheet("color:#ffffff; font-size:12px; font-weight:bold; background:transparent;");
+    // 2. 连接文字 (默认未连接)
+    m_onlineLabel = new QLabel("未连接");
+    m_onlineLabel->setStyleSheet("color:#94a3b8; font-size:12px; font-weight:bold; background:transparent;");
     hl->addWidget(m_onlineLabel);
 
-    // 3. 状态指示灯 (圆形绿点)
+    // 3. 状态指示灯 (圆形灰点)
     m_onlineDot = new QLabel;
     m_onlineDot->setFixedSize(10, 10);
-    m_onlineDot->setStyleSheet("background:#44db22; border-radius:5px;");
+    m_onlineDot->setStyleSheet("background:#718096; border-radius:5px;");
     hl->addWidget(m_onlineDot);
 
     // 4. "机器人" 文本
@@ -310,7 +310,7 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
     metricsRow->addWidget(m_confBadge);
 
     m_latencyLabel = new QLabel("--");
-    m_latencyLabel->setStyleSheet("color:#44db22; font-size:12px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
+    m_latencyLabel->setStyleSheet("color:#64748b; font-size:12px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
     metricsRow->addWidget(m_latencyLabel);
 
     metricsRow->addStretch();
@@ -373,17 +373,23 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
 
     fl->addStretch();
 
-    // 右侧: 断开连接 按钮 (仅在连接成功后显示，未连接时不显示任何按钮)
-    m_connectBtn = new QPushButton("断开连接");
+    // 右侧: 连接 / 断开连接 按钮
+    m_connectBtn = new QPushButton("连接");
     m_connectBtn->setCursor(Qt::PointingHandCursor);
     m_connectBtn->setStyleSheet(
         "QPushButton{"
-        "  background:#333842; color:#f87171; border:1px solid #7f1d1d;"
-        "  border-radius:3px; padding:4px 12px; font-size:11px; font-weight:bold;"
+        "  background:#0284c7; color:#ffffff; border:1px solid #0369a1;"
+        "  border-radius:3px; padding:4px 14px; font-size:11px; font-weight:bold;"
         "}"
-        "QPushButton:hover{background:#450a0a; color:#fca5a5;}");
-    m_connectBtn->setVisible(false); // 默认隐藏，不再显示"进入控制"
-    connect(m_connectBtn, &QPushButton::clicked, this, [this]{ emit disconnectClicked(m_index); });
+        "QPushButton:hover{background:#0ea5e9;}");
+    m_connectBtn->setVisible(true);
+    connect(m_connectBtn, &QPushButton::clicked, this, [this]{
+        if (m_isOnline) {
+            emit disconnectClicked(m_index);
+        } else {
+            emit connectClicked(m_index);
+        }
+    });
     fl->addWidget(m_connectBtn);
 
     root->addWidget(ftr);
@@ -410,9 +416,9 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
         }
     }
 
-    // 自动连接 MQTT 监听设备基本信息
-    if (!profile.ip.isEmpty() && !profile.carId.isEmpty()) {
-        startMqttMonitor(profile.ip, profile.carId);
+    // 单次轻量 TCP 探活检测在线与通讯延迟 (绝不私自启动持久 MQTT 客户端)
+    if (!profile.ip.isEmpty()) {
+        probeDeviceStatus(profile.ip);
     }
 }
 
@@ -420,9 +426,6 @@ DeviceCard::~DeviceCard()
 {
     if (m_latencyTimer) {
         m_latencyTimer->stop();
-    }
-    if (m_mqttClient) {
-        m_mqttClient->disconnectFromHost();
     }
 }
 
@@ -464,11 +467,6 @@ void DeviceCard::disconnectDevice()
     if (m_latencyTimer) {
         m_latencyTimer->stop();
     }
-    if (m_mqttClient) {
-        m_mqttClient->disconnectFromHost();
-        m_mqttClient->deleteLater();
-        m_mqttClient = nullptr;
-    }
     m_latency = -1;
     m_confidence = -1.0;
     setOnlineUI(false);
@@ -476,13 +474,19 @@ void DeviceCard::disconnectDevice()
 
 void DeviceCard::setBusy(bool busy)
 {
+    if (!m_connectBtn) return;
     if (busy) {
         m_connectBtn->setVisible(true);
         m_connectBtn->setEnabled(false);
-        m_connectBtn->setText("进入中...");
+        m_connectBtn->setText("连接中...");
+        m_connectBtn->setStyleSheet(
+            "QPushButton{"
+            "  background:#333842; color:#94a3b8; border:1px solid #475569;"
+            "  border-radius:3px; padding:4px 14px; font-size:11px; font-weight:bold;"
+            "}");
     } else {
         m_connectBtn->setEnabled(true);
-        m_connectBtn->setText("断开连接");
+        updateCardDisplay();
     }
 }
 
@@ -694,9 +698,9 @@ void DeviceCard::updateCardDisplay()
     }
 
     if (m_connectBtn) {
-        // 不再显示“进入控制”，仅在设备连接成功后显示“断开连接”
+        m_connectBtn->setVisible(true);
+        m_connectBtn->setEnabled(true);
         if (m_isOnline) {
-            m_connectBtn->setVisible(true);
             m_connectBtn->setText("断开连接");
             m_connectBtn->setStyleSheet(
                 "QPushButton{"
@@ -705,55 +709,47 @@ void DeviceCard::updateCardDisplay()
                 "}"
                 "QPushButton:hover{background:#450a0a; color:#fca5a5;}");
         } else {
-            m_connectBtn->setVisible(false);
+            m_connectBtn->setText("连接");
+            m_connectBtn->setStyleSheet(
+                "QPushButton{"
+                "  background:#0284c7; color:#ffffff; border:1px solid #0369a1;"
+                "  border-radius:3px; padding:4px 14px; font-size:11px; font-weight:bold;"
+                "}"
+                "QPushButton:hover{background:#0ea5e9;}");
         }
     }
 }
 
-void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
+void DeviceCard::probeDeviceStatus(const QString &ip)
 {
-    QString effectiveCarId = carId.trimmed().isEmpty() ? "1" : carId.trimmed();
     if (ip.isEmpty()) {
         setOnlineUI(false);
         return;
     }
 
-    m_onlineLabel->setText("连接中...");
-    m_onlineLabel->setStyleSheet("color:#ecc94b; font-size:11px; font-weight:600; background:transparent;");
+    // 检查此卡片是否就是全局当前已连接的设备 (必须以全局 MQTT 成功连接为前置准据)
+    bool isConnectedMqtt = MqttService::instance().isConnected();
+    bool isCurrentConnectedDevice = isConnectedMqtt
+                                 && (AppConfig::instance().currentDeviceIndex() == m_index)
+                                 && (AppConfig::instance().serverIp() == ip);
 
-    m_mqttClient = new QMqttClient(this);
-    m_mqttClient->setHostname(ip);
-    m_mqttClient->setPort(1883);
-    m_mqttClient->setUsername("admin");
-    m_mqttClient->setPassword("vsislab");
-    m_mqttClient->setClientId(QString("qt-agv-card-%1-%2").arg(effectiveCarId).arg(QDateTime::currentMSecsSinceEpoch()));
-    m_mqttClient->setKeepAlive(60);
-
-    connect(m_mqttClient, &QMqttClient::stateChanged, this, [this](QMqttClient::ClientState state) {
-        if (state == QMqttClient::Connected) {
+    if (isCurrentConnectedDevice) {
+        // 如果是当前正在连接的设备，同步全局 RobotInfoManager 数据
+        const RobotInfo &info = RobotInfoManager::instance().currentInfo();
+        if (info.isOnline()) {
+            m_battery = info.batteryPercent();
+            m_confidence = info.covScore;
+            m_statusText = info.statusText();
+            m_latency = info.latency;
             setOnlineUI(true);
-        } else if (state == QMqttClient::Connecting) {
-            m_onlineLabel->setText("连接中...");
-            m_onlineLabel->setStyleSheet("color:#ecc94b; font-size:11px; font-weight:600; background:transparent;");
-        } else if (state == QMqttClient::Disconnected) {
-            setOnlineUI(false);
-        }
-    });
+            updateCardDisplay();
 
-    connect(m_mqttClient, &QMqttClient::connected, this, [this]() {
-        if (!m_mqttClient) return;
-        m_mqttClient->subscribe(QMqttTopicFilter(QStringLiteral("/rob/1/info")), 0);
-        setOnlineUI(true);
-
-        // 建立周期性延迟检测，确保通讯延迟实时准确更新
-        if (!m_latencyTimer) {
-            m_latencyTimer = new QTimer(this);
-            connect(m_latencyTimer, &QTimer::timeout, this, [this]() {
-                if (!m_mqttClient || m_mqttClient->state() != QMqttClient::Connected) return;
+            // 若已连接设备的报文中未携带延迟，测一次当前连接设备的通信延迟
+            if (m_latency < 0) {
                 auto *socket = new QTcpSocket(this);
                 auto *timer = new QElapsedTimer;
                 timer->start();
-                connect(socket, &QTcpSocket::connected, this, [this, socket, timer]() {
+                connect(socket, &QTcpSocket::connected, this, [this, timer, socket]() {
                     int elapsed = static_cast<int>(timer->elapsed());
                     m_latency = qMax(1, elapsed);
                     updateCardDisplay();
@@ -765,239 +761,19 @@ void DeviceCard::startMqttMonitor(const QString &ip, const QString &carId)
                     socket->deleteLater();
                     delete timer;
                 });
-                socket->connectToHost(m_profile.ip, m_mqttClient->port());
-            });
-            m_latencyTimer->start(3000);
+                socket->connectToHost(ip, 8048);
+            }
+            return;
         }
-    });
+    }
 
-    connect(m_mqttClient, &QMqttClient::messageReceived, this,
-        [this](const QByteArray &payload, const QMqttTopicName &topic) {
-            QJsonParseError err;
-            QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
-            if (!doc.isObject()) return;
-            QJsonObject d = doc.object();
-
-            // 同步给全局 RobotInfoManager
-            RobotInfoManager::instance().updateFromPayload(topic.name(), payload);
-
-            RobotInfo info;
-            RobotInfoManager::parseInfoJson(d, &info);
-
-            // 状态更新 (info.status: "0"离线, "2"就绪, "3"导航, "4"作业, "5"暂停, "6"故障)
-            if (d.contains("status") && !d.value("status").isNull()) {
-                m_statusText = info.statusText();
-                if (!info.isOnline()) {
-                    setOnlineUI(false);
-                } else {
-                    setOnlineUI(true);
-                }
-            } else {
-                setOnlineUI(true);
-            }
-
-            // 1. 提取设备名称
-            QString devName;
-            for (const char *k : {"carName", "car_name", "deviceName", "device_name", "name"}) {
-                if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
-                    devName = d.value(k).toString().trimmed();
-                    break;
-                }
-            }
-
-            // 2. 提取绑定的地图名称 (若为地图ID，从 /robot/map/listAll 列表中匹配真实地图名称)
-            QString mapName;
-            for (const char *k : {"mapName", "map_name", "currentMap", "current_map", "map_filename"}) {
-                if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
-                    mapName = d.value(k).toString().trimmed();
-                    break;
-                }
-            }
-
-            QString foundMapId;
-            if (info.map_id != 0) {
-                foundMapId = QString::number(info.map_id);
-            } else {
-                QJsonValue mv = d.contains("map_id") ? d.value("map_id") : d.value("mapId");
-                if (!mv.isUndefined() && !mv.isNull()) {
-                    QString mid = mv.toVariant().toString().trimmed();
-                    if (!mid.isEmpty() && mid != "0") {
-                        foundMapId = mid;
-                    }
-                }
-            }
-
-            if (!mapName.isEmpty()) {
-                if (mapName.startsWith("地图 ID:", Qt::CaseInsensitive)) {
-                    foundMapId = mapName.mid(QString("地图 ID:").length()).trimmed();
-                    mapName.clear();
-                } else {
-                    bool ok = false;
-                    mapName.toInt(&ok);
-                    if (ok) {
-                        foundMapId = mapName;
-                        mapName.clear();
-                    }
-                }
-            }
-
-            if (mapName.isEmpty() && !foundMapId.isEmpty()) {
-                QString lookedUp = lookupMapName(foundMapId);
-                if (!lookedUp.isEmpty()) {
-                    mapName = lookedUp;
-                } else {
-                    fetchGlobalMapList([this, foundMapId]() {
-                        QString name = lookupMapName(foundMapId);
-                        if (!name.isEmpty()) {
-                            m_profile.mapName = name;
-                            updateCardDisplay();
-                            AppConfig::instance().saveDevice(m_profile);
-                        }
-                    });
-                    mapName = foundMapId;
-                }
-            }
-
-            // 3. 提取版本号与固件版本
-            QString version;
-            for (const char *k : {"version", "soft_version", "software_version", "softVersion", "softwareVersion", "app_version", "appVersion", "system_version"}) {
-                if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
-                    version = d.value(k).toString().trimmed();
-                    break;
-                }
-            }
-            for (const char *k : {"firmware_version", "firmwareVersion", "hw_version", "mcu_version", "dsp_version"}) {
-                if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
-                    m_fwVersion = d.value(k).toString().trimmed();
-                    break;
-                }
-            }
-
-            // 提取备注 (Remark)
-            for (const char *k : {"remark", "note", "desc", "description", "memo"}) {
-                if (d.contains(k) && !d.value(k).toString().trimmed().isEmpty()) {
-                    m_remark = d.value(k).toString().trimmed();
-                    break;
-                }
-            }
-
-            // 4. 提取位置置信度 (Position Confidence)
-            // 用户明确指定字段: "covariance_score"
-            double conf = -1.0;
-            if (d.contains("covariance_score") && !d.value("covariance_score").isNull()) {
-                conf = d.value("covariance_score").toDouble(-1.0);
-            } else {
-                for (const char *k : {"covarianceScore", "confidence", "confidence_score", "cov_score", "covScore", "covariance"}) {
-                    if (d.contains(k) && !d.value(k).isNull()) {
-                        conf = d.value(k).toDouble(-1.0);
-                        if (conf >= 0) break;
-                    }
-                }
-            }
-            if (conf >= 0) {
-                if (conf > 1.0) conf = conf / 100.0;
-                m_confidence = conf;
-            }
-
-            // 5. 提取电量 (Battery)
-            // 用户明确指定字段: "battery", 用 0-1 之间的值表示 (例如 0.47 表示 47%)
-            int bat = -1;
-            if (d.contains("battery") && !d.value("battery").isNull()) {
-                double b = d.value("battery").toDouble(-1.0);
-                if (b >= 0.0 && b <= 1.0) {
-                    bat = qRound(b * 100.0);
-                } else if (b > 1.0) {
-                    bat = qRound(b);
-                }
-            } else {
-                for (const char *k : {"power", "bat", "battery_level", "soc"}) {
-                    if (d.contains(k) && !d.value(k).isNull()) {
-                        double b = d.value(k).toDouble(-1.0);
-                        if (b >= 0.0 && b <= 1.0) bat = qRound(b * 100.0);
-                        else if (b > 1.0) bat = qRound(b);
-                        if (bat >= 0) break;
-                    }
-                }
-            }
-            if (bat >= 0) {
-                m_battery = qBound(0, bat, 100);
-            }
-
-            // 6. 提取通讯延迟 (Communication Latency)
-            int lat = -1;
-            for (const char *k : {"latency", "delay", "rtt", "ping", "comm_delay", "network_delay"}) {
-                if (d.contains(k) && !d.value(k).isNull()) {
-                    lat = d.value(k).toInt(-1);
-                    if (lat >= 0) break;
-                }
-            }
-            if (lat < 0) {
-                for (const char *k : {"timestamp", "time", "ts", "msg_time", "header_time"}) {
-                    if (d.contains(k) && !d.value(k).isNull()) {
-                        qint64 ts = d.value(k).toVariant().toLongLong();
-                        if (ts > 100000000000LL) {
-                            qint64 diff = qAbs(QDateTime::currentMSecsSinceEpoch() - ts);
-                            if (diff >= 0 && diff < 10000) { lat = static_cast<int>(diff); break; }
-                        } else if (ts > 100000000LL) {
-                            qint64 diff = qAbs(QDateTime::currentMSecsSinceEpoch() - ts * 1000);
-                            if (diff >= 0 && diff < 10000) { lat = static_cast<int>(diff); break; }
-                        }
-                    }
-                }
-            }
-            if (lat >= 0) {
-                m_latency = lat;
-            }
-
-            // 更新并持久化缓存
-            bool changed = false;
-            if (!devName.isEmpty() && devName != m_profile.name) {
-                m_profile.name = devName;
-                changed = true;
-            }
-            if (!mapName.isEmpty() && mapName != m_profile.mapName) {
-                m_profile.mapName = mapName;
-                changed = true;
-            }
-            if (!version.isEmpty() && version != m_profile.version) {
-                m_profile.version = version;
-                changed = true;
-            }
-
-            updateCardDisplay();
-            if (changed) {
-                AppConfig::instance().saveDevice(m_profile);
-            }
-        });
-
-    connect(m_mqttClient, &QMqttClient::disconnected, this, [this]() {
-        setOnlineUI(false);
-        if (m_latencyTimer) {
-            m_latencyTimer->stop();
-        }
-        // 断开后隔5秒自动尝试重连，保持在线状态检测
-        QTimer::singleShot(5000, this, [this]() {
-            if (m_mqttClient && m_mqttClient->state() == QMqttClient::Disconnected) {
-                m_mqttClient->connectToHost();
-            }
-        });
-    });
-
-    connect(m_mqttClient, &QMqttClient::errorChanged, this, [this](QMqttClient::ClientError error) {
-        if (error != QMqttClient::NoError) {
-            setOnlineUI(false);
-            if (m_latencyTimer) {
-                m_latencyTimer->stop();
-            }
-            QTimer::singleShot(5000, this, [this]() {
-                if (m_mqttClient && m_mqttClient->state() == QMqttClient::Disconnected) {
-                    m_mqttClient->connectToHost();
-                }
-            });
-        }
-    });
-
-    m_mqttClient->connectToHost();
+    // 未连接该设备时，统一严格展示为未连接状态，通讯延迟显示 "--"，绝不误显为已连接
+    m_latency = -1;
+    m_confidence = -1.0;
+    m_battery = -1;
+    m_statusText = "未连接";
+    setOnlineUI(false);
+    updateCardDisplay();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1042,6 +818,26 @@ DeviceManagerDialog::DeviceManagerDialog(QWidget *parent)
 
     setupUI();
     refreshCards();
+
+    // 实时同步 MQTT 连接与车辆数据到卡片
+    connect(&MqttService::instance(), &MqttService::connected, this, [this]() {
+        int curIdx = AppConfig::instance().currentDeviceIndex();
+        if (curIdx >= 0 && curIdx < m_cards.size() && m_cards[curIdx]) {
+            m_cards[curIdx]->probeDeviceStatus(AppConfig::instance().serverIp());
+            setStatus(QString("设备 [%1] 已成功连接").arg(AppConfig::instance().serverIp()), "#22c55e");
+        }
+    });
+    connect(&MqttService::instance(), &MqttService::disconnected, this, [this]() {
+        for (auto *c : m_cards) {
+            if (c) c->probeDeviceStatus(AppConfig::instance().serverIp());
+        }
+    });
+    connect(&RobotInfoManager::instance(), &RobotInfoManager::currentRobotInfoUpdated, this, [this]() {
+        int curIdx = AppConfig::instance().currentDeviceIndex();
+        if (curIdx >= 0 && curIdx < m_cards.size() && m_cards[curIdx]) {
+            m_cards[curIdx]->probeDeviceStatus(AppConfig::instance().serverIp());
+        }
+    });
 }
 
 void DeviceManagerDialog::setupUI()
@@ -1122,9 +918,15 @@ void DeviceManagerDialog::setupTopBar(QWidget *topBar)
 
     auto *refreshAllBtn = mkToolBtn("⟳  刷新全部");
     auto *addDevBtn     = mkToolBtn("＋  添加设备", true);
+    auto *enterHomeBtn  = mkToolBtn("进入主页 →", false);
+    enterHomeBtn->setStyleSheet(
+        "QPushButton{background:#1e3a5f;color:#38bdf8;border:1px solid #0284c7;"
+        "border-radius:4px;padding:0 14px;font-size:12px;font-weight:700;}"
+        "QPushButton:hover{background:#0284c7;color:#fff;}");
 
     connect(refreshAllBtn, &QPushButton::clicked, this, &DeviceManagerDialog::onRefreshAll);
     connect(addDevBtn,     &QPushButton::clicked, this, &DeviceManagerDialog::onAddDevice);
+    connect(enterHomeBtn,  &QPushButton::clicked, this, &DeviceManagerDialog::accept);
 }
 
 void DeviceManagerDialog::setupCardArea(QWidget *area)
@@ -1282,6 +1084,7 @@ void DeviceManagerDialog::refreshCards()
     for (int i = 0; i < list.size(); ++i) {
         auto *card = new DeviceCard(list[i], i, m_cardsContainer);
         connect(card, &DeviceCard::doubleClicked,        this, &DeviceManagerDialog::onCardDoubleClicked);
+        connect(card, &DeviceCard::connectClicked,       this, &DeviceManagerDialog::onConnectCard);
         connect(card, &DeviceCard::disconnectClicked,    this, &DeviceManagerDialog::onDisconnectCard);
         connect(card, &DeviceCard::removeClicked,        this, &DeviceManagerDialog::onRemoveCard);
         connect(card, &DeviceCard::networkConfigClicked, this, &DeviceManagerDialog::onNetworkConfig);
@@ -1357,6 +1160,59 @@ void DeviceManagerDialog::onCardDoubleClicked(int index)
     connectDevice(index);
 }
 
+void DeviceManagerDialog::onConnectCard(int index)
+{
+    const QList<DeviceProfile> list = AppConfig::instance().deviceList();
+    if (index < 0 || index >= list.size()) return;
+
+    // 1. 单车独占原则：一次只能连接一辆设备。若已有设备连接，主动断开旧设备
+    int oldIdx = AppConfig::instance().currentDeviceIndex();
+    if (oldIdx >= 0 && oldIdx != index) {
+        if (oldIdx < m_cards.size() && m_cards[oldIdx]) {
+            m_cards[oldIdx]->disconnectDevice();
+        }
+    }
+    MqttService::instance().clearAllSubscriptions();
+    MqttService::instance().disconnectFromHost();
+
+    // 2. 将目标卡片置为连接中状态
+    if (index < m_cards.size() && m_cards[index]) {
+        m_cards[index]->setBusy(true);
+    }
+
+    // 3. 更新全局活动设备配置 (IP 是区分设备的唯一标识)
+    AppConfig::instance().setCurrentDeviceIndex(index);
+    AppConfig::instance().setServerIp(list[index].ip);
+    QString effectiveCarId = list[index].carId.trimmed().isEmpty() ? "1" : list[index].carId.trimmed();
+    AppConfig::instance().setAgvId(effectiveCarId);
+    RobotInfoManager::instance().resetForCar(effectiveCarId);
+    RobotInfoManager::instance().init();
+
+    // 4. 发起独占 MQTT 连接
+    MqttService::instance().connectToHost(list[index].ip, 1883);
+
+    QList<DeviceProfile> curList = AppConfig::instance().deviceList();
+    if (index < curList.size()) {
+        curList[index].lastConnected = QDateTime::currentDateTime();
+        curList[index].linkStatus = "1";
+        AppConfig::instance().saveDevice(curList[index]);
+    }
+
+    QString devName = list[index].name.isEmpty() ? list[index].ip : list[index].name;
+    setStatus(QString("正在连接设备 [%1] (%2)...").arg(devName, list[index].ip), "#38bdf8");
+
+    // 5. 5秒连接超时检测
+    QTimer::singleShot(5000, this, [this, index, devName]() {
+        if (AppConfig::instance().currentDeviceIndex() == index && !MqttService::instance().isConnected()) {
+            if (index < m_cards.size() && m_cards[index]) {
+                m_cards[index]->setBusy(false);
+            }
+            setStatus(QString("连接设备 [%1] 超时，请检查网络与端口").arg(devName), "#e05555");
+            Toast::warning(this, QString("连接设备 [%1] 超时").arg(devName));
+        }
+    });
+}
+
 void DeviceManagerDialog::onDisconnectCard(int index)
 {
     const QList<DeviceProfile> list = AppConfig::instance().deviceList();
@@ -1400,23 +1256,9 @@ void DeviceManagerDialog::connectDevice(int index)
     const QList<DeviceProfile> list = AppConfig::instance().deviceList();
     if (index < 0 || index >= list.size()) return;
 
-    // 单车独占：连接新车前主动断开旧的所有连接，清空旧订阅
-    MqttService::instance().clearAllSubscriptions();
-    MqttService::instance().disconnectFromHost();
-
-    if (index < m_cards.size())
-        m_cards[index]->setBusy(true);
-
-    AppConfig::instance().setCurrentDeviceIndex(index);
-    AppConfig::instance().setServerIp(list[index].ip);
-    QString effectiveCarId = list[index].carId.trimmed().isEmpty() ? "1" : list[index].carId.trimmed();
-    AppConfig::instance().setAgvId(effectiveCarId);
-    RobotInfoManager::instance().resetForCar(effectiveCarId);
-
-    QList<DeviceProfile> list2 = AppConfig::instance().deviceList();
-    if (index < list2.size()) {
-        list2[index].lastConnected = QDateTime::currentDateTime();
-        AppConfig::instance().saveDevice(list2[index]);
+    // 若尚未连接此设备，发起单车独占连接
+    if (AppConfig::instance().currentDeviceIndex() != index || !MqttService::instance().isConnected()) {
+        onConnectCard(index);
     }
     accept();
 }

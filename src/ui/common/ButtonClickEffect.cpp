@@ -1,4 +1,5 @@
 #include "ButtonClickEffect.h"
+#include "ToggleSwitch.h"
 
 #include <QAbstractButton>
 #include <QGraphicsOpacityEffect>
@@ -28,6 +29,10 @@ void ButtonClickEffect::setEnabled(bool enabled)
 bool ButtonClickEffect::eventFilter(QObject *obj, QEvent *event)
 {
     if (m_enabled && event->type() == QEvent::MouseButtonPress) {
+        // ToggleSwitch 拥有自定义滑块与跑道动画，严禁挂载 OpacityEffect 以免干扰自定义绘制与位移动效
+        if (qobject_cast<ToggleSwitch*>(obj)) {
+            return QObject::eventFilter(obj, event);
+        }
         auto *btn = qobject_cast<QAbstractButton*>(obj);
         auto *me  = static_cast<QMouseEvent*>(event);
         if (btn && btn->isEnabled() && me->button() == Qt::LeftButton) {

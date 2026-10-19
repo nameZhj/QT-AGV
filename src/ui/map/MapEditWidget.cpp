@@ -833,9 +833,18 @@ void MapEditWidget::setupTopBar(QVBoxLayout *root)
 
     m_robotBtn = new ToggleSwitch;
     m_robotBtn->setToolTip(ttHtml("设备位置", "切换实时设备位置显示"));
-    m_robotBtn->installEventFilter(new InstantTip(m_robotBtn));
-    connect(m_robotBtn, &ToggleSwitch::toggled, this, [this](bool on) {
+
+    auto updateRobotSwitchUI = [robotSwitchLabel](bool on) {
+        if (on) {
+            robotSwitchLabel->setStyleSheet("color:#00e5ff;font-size:12px;font-weight:bold;");
+        } else {
+            robotSwitchLabel->setStyleSheet("color:#9ab8d8;font-size:12px;font-weight:normal;");
+        }
+    };
+
+    connect(m_robotBtn, &ToggleSwitch::toggled, this, [this, updateRobotSwitchUI](bool on) {
         m_showRobotPosition = on;
+        updateRobotSwitchUI(on);
         updateRobotMarker();
         debugLog(QString("[设备位置] 开关=%1 图元=%2 车图标=%3 已收到位姿=%4 车号=%5")
             .arg(on ? "开" : "关")
@@ -844,6 +853,7 @@ void MapEditWidget::setupTopBar(QVBoxLayout *root)
             .arg(m_hasCarPose ? "是" : "否")
             .arg(m_currentCarId));
     });
+    updateRobotSwitchUI(m_robotBtn->isChecked());
     tl->addWidget(m_robotBtn);
     makeLabelClickable(robotSwitchLabel, m_robotBtn);
 
@@ -854,11 +864,21 @@ void MapEditWidget::setupTopBar(QVBoxLayout *root)
 
     m_reflectorBtn = new ToggleSwitch;
     m_reflectorBtn->setToolTip(ttHtml("反光柱", "切换反光柱显示"));
-    m_reflectorBtn->installEventFilter(new InstantTip(m_reflectorBtn));
-    connect(m_reflectorBtn, &ToggleSwitch::toggled, this, [this](bool on) {
+
+    auto updateReflectorSwitchUI = [reflectorSwitchLabel](bool on) {
+        if (on) {
+            reflectorSwitchLabel->setStyleSheet("color:#00e5ff;font-size:12px;font-weight:bold;");
+        } else {
+            reflectorSwitchLabel->setStyleSheet("color:#9ab8d8;font-size:12px;font-weight:normal;");
+        }
+    };
+
+    connect(m_reflectorBtn, &ToggleSwitch::toggled, this, [this, updateReflectorSwitchUI](bool on) {
         m_showReflectors = on;
+        updateReflectorSwitchUI(on);
         renderMap();
     });
+    updateReflectorSwitchUI(m_reflectorBtn->isChecked());
     tl->addWidget(m_reflectorBtn);
     makeLabelClickable(reflectorSwitchLabel, m_reflectorBtn);
 

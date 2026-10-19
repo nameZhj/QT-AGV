@@ -4,6 +4,7 @@
 #include <QColor>
 
 class QPropertyAnimation;
+class QMouseEvent;
 
 /**
  * @brief 现代胶囊风格平滑滑动开关控件 (Toggle Switch)
@@ -48,6 +49,8 @@ public:
 protected:
     void paintEvent(QPaintEvent *event) override;
     void checkStateSet() override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
 
 private:
     void animateToChecked(bool checked);
