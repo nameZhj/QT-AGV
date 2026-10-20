@@ -2101,6 +2101,9 @@ void MapViewWidget::refreshData()
     m_layerHiddenItem = nullptr;
     setRightTab(TabProps);
 
+    // 立即同步全局管理器中已有的最新车辆位姿与状态
+    onRobotInfoUpdated(RobotInfoManager::instance().currentInfo());
+
     // 每次页面展示（菜单切换/从下级编辑页返回/首次打开）全量刷新设备数据与地图/路网
     fetchMapNameList();
     loadCurrentCarMap();
@@ -4810,36 +4813,21 @@ void MapViewWidget::initMqtt()
     QString serverIp = AppConfig::instance().serverIp();
     if (serverIp.isEmpty()) return;
 
-    disconnectMqtt();
-
     if (!MqttService::instance().isConnected()) {
         MqttService::instance().connectToHost(serverIp, 1883);
     }
 
-    auto cb = [this](const QString &t, const QByteArray &p) {
-        onMqttMessage(t, p);
-    };
-
-    // 订阅设备 info 话题
-    MqttService::instance().subscribeTopic("/info", 0, cb);
-    MqttService::instance().subscribeTopic("info", 0, cb);
-    MqttService::instance().subscribeTopic("/rob/info", 0, cb);
-
-    // 若绑定了 carId，也订阅特定设备话题
     QString carId = AppConfig::instance().agvId();
     if (carId.isEmpty()) carId = "1";
     m_robot.carId = carId;
-    MqttService::instance().subscribeTopic(QString("/rob/%1/info").arg(carId), 0, cb);
+
+    // 确保全局常驻 MQTT 订阅已与当前连接 IP / CarID 同步
+    RobotInfoManager::instance().subscribeGlobalTopics();
 }
 
 void MapViewWidget::disconnectMqtt()
 {
-    MqttService::instance().unsubscribeTopic("/info");
-    MqttService::instance().unsubscribeTopic("info");
-    MqttService::instance().unsubscribeTopic("/rob/info");
-    QString carId = AppConfig::instance().agvId();
-    if (carId.isEmpty()) carId = "1";
-    MqttService::instance().unsubscribeTopic(QString("/rob/%1/info").arg(carId));
+    // 全局核心话题受 MqttService 与 RobotInfoManager 托管守护，子页面无需亦不可退订
 }
 
 // ── 设备右键标记与路网保存 ───────────────────────────────────────────────────

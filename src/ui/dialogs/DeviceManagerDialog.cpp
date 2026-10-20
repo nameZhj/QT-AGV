@@ -2,6 +2,7 @@
 #include "ui/dialogs/NetworkConfigDialog.h"
 #include "ApiService.h"
 #include "AppConfig.h"
+#include "AppConstants.h"
 #include "MqttService.h"
 #include "RobotInfoManager.h"
 #include <QMouseEvent>
@@ -373,18 +374,26 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
 
     fl->addStretch();
 
-    // 右侧: 连接 / 断开连接 按钮
-    m_connectBtn = new QPushButton("连接");
+    // 右侧: 操作按钮 (未连接显示"连接"，已连接显示"断开连接"，互斥常驻显示，绝不隐藏)
+    m_connectBtn = new QPushButton("连接", ftr);
+    m_connectBtn->setObjectName("deviceCardConnectBtn");
+    m_connectBtn->setProperty("noClickEffect", true);
+    m_connectBtn->setGraphicsEffect(nullptr);
     m_connectBtn->setCursor(Qt::PointingHandCursor);
+    m_connectBtn->setFixedHeight(26);
+    m_connectBtn->setMinimumWidth(72);
+    m_connectBtn->setVisible(true);
+    m_connectBtn->setEnabled(true);
     m_connectBtn->setStyleSheet(
-        "QPushButton{"
+        "QPushButton#deviceCardConnectBtn{"
         "  background:#0284c7; color:#ffffff; border:1px solid #0369a1;"
         "  border-radius:3px; padding:4px 14px; font-size:11px; font-weight:bold;"
         "}"
-        "QPushButton:hover{background:#0ea5e9;}");
-    m_connectBtn->setVisible(true);
+        "QPushButton#deviceCardConnectBtn:hover{background:#0ea5e9;}"
+        "QPushButton#deviceCardConnectBtn:pressed{background:#0369a1;}");
     connect(m_connectBtn, &QPushButton::clicked, this, [this]{
-        if (m_isOnline) {
+        bool isCurrent = (AppConfig::instance().currentDeviceIndex() == m_index);
+        if (isCurrent) {
             emit disconnectClicked(m_index);
         } else {
             emit connectClicked(m_index);
@@ -404,8 +413,9 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
     }
     m_fwVersion = "v2.1.1";
 
-    // 初始化样式与数据显示
-    setOnlineUI(false);
+    // 初始化样式与数据显示 (若此卡片为当前已连接设备则立即高亮显示并展示"断开连接")
+    bool isCurrent = (AppConfig::instance().currentDeviceIndex() == m_index);
+    setOnlineUI(isCurrent);
     updateCardDisplay();
 
     // 为卡片内部所有非按钮子控件安装事件过滤器，确保双击任何非按钮位置均能进入主页
@@ -416,8 +426,8 @@ DeviceCard::DeviceCard(const DeviceProfile &profile, int index, QWidget *parent)
         }
     }
 
-    // 单次轻量 TCP 探活检测在线与通讯延迟 (绝不私自启动持久 MQTT 客户端)
-    if (!profile.ip.isEmpty()) {
+    // 仅当此设备已由用户主动连接时才执行探活，初始未连接状态不自动连接或探测
+    if (isCurrent && !profile.ip.isEmpty()) {
         probeDeviceStatus(profile.ip);
     }
 }
@@ -464,30 +474,21 @@ bool DeviceCard::eventFilter(QObject *watched, QEvent *event)
 
 void DeviceCard::disconnectDevice()
 {
+    m_isBusy = false;
     if (m_latencyTimer) {
         m_latencyTimer->stop();
     }
     m_latency = -1;
+    m_isProbingLatency = false;
     m_confidence = -1.0;
+    m_statusText = "未连接";
     setOnlineUI(false);
 }
 
 void DeviceCard::setBusy(bool busy)
 {
-    if (!m_connectBtn) return;
-    if (busy) {
-        m_connectBtn->setVisible(true);
-        m_connectBtn->setEnabled(false);
-        m_connectBtn->setText("连接中...");
-        m_connectBtn->setStyleSheet(
-            "QPushButton{"
-            "  background:#333842; color:#94a3b8; border:1px solid #475569;"
-            "  border-radius:3px; padding:4px 14px; font-size:11px; font-weight:bold;"
-            "}");
-    } else {
-        m_connectBtn->setEnabled(true);
-        updateCardDisplay();
-    }
+    m_isBusy = busy;
+    updateCardDisplay();
 }
 
 void DeviceCard::setLinkStatus(bool /*linked*/)
@@ -576,8 +577,8 @@ void DeviceCard::setOnlineUI(bool online)
         m_confidence = -1.0;
         m_battery = -1;
         m_latency = -1;
-        updateCardDisplay();
     }
+    updateCardDisplay();
 }
 
 void DeviceCard::updateCardDisplay()
@@ -664,11 +665,16 @@ void DeviceCard::updateCardDisplay()
     // 8. 通讯延迟 (如 9ms)
     if (m_latencyLabel) {
         if (m_latency >= 0) {
-            m_latencyLabel->setText(QString("%1ms").arg(m_latency));
-            m_latencyLabel->setStyleSheet("color:#44db22; font-size:12px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
+            QString latStr = QString("%1ms").arg(m_latency);
+            if (m_latencyLabel->text() != latStr) {
+                m_latencyLabel->setText(latStr);
+                m_latencyLabel->setStyleSheet("color:#44db22; font-size:12px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
+            }
         } else {
-            m_latencyLabel->setText("--");
-            m_latencyLabel->setStyleSheet("color:#64748b; font-size:12px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
+            if (m_latencyLabel->text() != "--") {
+                m_latencyLabel->setText("--");
+                m_latencyLabel->setStyleSheet("color:#64748b; font-size:12px; font-weight:bold; font-family:Consolas,monospace; background:transparent;");
+            }
         }
     }
 
@@ -678,9 +684,9 @@ void DeviceCard::updateCardDisplay()
     }
 
     // 10. 底部状态与操作按钮
-    bool isCurrent = (AppConfig::instance().currentDeviceIndex() == m_index);
+    bool isConnected = (AppConfig::instance().currentDeviceIndex() == m_index);
     if (m_syncBtn) {
-        if (isCurrent) {
+        if (isConnected) {
             m_syncBtn->setText("✓ 已同步");
             m_syncBtn->setStyleSheet(
                 "QPushButton{"
@@ -697,83 +703,143 @@ void DeviceCard::updateCardDisplay()
         }
     }
 
+    // 核心操作按钮：未连接显示"连接"，已连接显示"断开连接"，永远常驻可见且互斥切换
     if (m_connectBtn) {
+        if (m_connectBtn->graphicsEffect()) {
+            m_connectBtn->setGraphicsEffect(nullptr);
+        }
         m_connectBtn->setVisible(true);
         m_connectBtn->setEnabled(true);
-        if (m_isOnline) {
+        if (isConnected) {
             m_connectBtn->setText("断开连接");
             m_connectBtn->setStyleSheet(
-                "QPushButton{"
+                "QPushButton#deviceCardConnectBtn{"
                 "  background:#333842; color:#f87171; border:1px solid #7f1d1d;"
                 "  border-radius:3px; padding:4px 12px; font-size:11px; font-weight:bold;"
                 "}"
-                "QPushButton:hover{background:#450a0a; color:#fca5a5;}");
+                "QPushButton#deviceCardConnectBtn:hover{background:#450a0a; color:#fca5a5;}"
+                "QPushButton#deviceCardConnectBtn:pressed{background:#2b0505;}");
         } else {
             m_connectBtn->setText("连接");
             m_connectBtn->setStyleSheet(
-                "QPushButton{"
+                "QPushButton#deviceCardConnectBtn{"
                 "  background:#0284c7; color:#ffffff; border:1px solid #0369a1;"
                 "  border-radius:3px; padding:4px 14px; font-size:11px; font-weight:bold;"
                 "}"
-                "QPushButton:hover{background:#0ea5e9;}");
+                "QPushButton#deviceCardConnectBtn:hover{background:#0ea5e9;}"
+                "QPushButton#deviceCardConnectBtn:pressed{background:#0369a1;}");
         }
+        m_connectBtn->update();
     }
+}
+
+void DeviceCard::testLatency(const QString &ip)
+{
+    if (ip.isEmpty() || !m_isOnline || (AppConfig::instance().currentDeviceIndex() != m_index)) {
+        return;
+    }
+    if (m_isProbingLatency) {
+        return;
+    }
+
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_latency >= 0 && (now - m_lastLatencyProbeMs < 3000)) {
+        return; // 已有延迟数值且 3 秒内已测过，避免频繁测速
+    }
+    m_lastLatencyProbeMs = now;
+    m_isProbingLatency = true;
+
+    auto *socket = new QTcpSocket(this);
+    auto *timer = new QElapsedTimer;
+    timer->start();
+
+    // 设定连接超时定时器 (1500ms)，防止挂起
+    QTimer::singleShot(1500, socket, [this, socket, timer]() {
+        if (socket && socket->state() != QAbstractSocket::ConnectedState) {
+            m_isProbingLatency = false;
+            socket->abort();
+            socket->deleteLater();
+            delete timer;
+        }
+    });
+
+    connect(socket, &QTcpSocket::connected, this, [this, timer, socket]() {
+        int elapsed = static_cast<int>(timer->elapsed());
+        if (m_isOnline && (AppConfig::instance().currentDeviceIndex() == m_index)) {
+            m_latency = qMax(1, elapsed);
+            updateCardDisplay();
+        }
+        m_isProbingLatency = false;
+        socket->disconnectFromHost();
+        socket->deleteLater();
+        delete timer;
+    });
+
+    connect(socket, &QTcpSocket::errorOccurred, this, [this, socket, timer](QAbstractSocket::SocketError) {
+        m_isProbingLatency = false;
+        socket->deleteLater();
+        delete timer;
+    });
+
+    socket->connectToHost(ip, 8048);
 }
 
 void DeviceCard::probeDeviceStatus(const QString &ip)
 {
     if (ip.isEmpty()) {
-        setOnlineUI(false);
+        disconnectDevice();
         return;
     }
 
-    // 检查此卡片是否就是全局当前已连接的设备 (必须以全局 MQTT 成功连接为前置准据)
-    bool isConnectedMqtt = MqttService::instance().isConnected();
-    bool isCurrentConnectedDevice = isConnectedMqtt
-                                 && (AppConfig::instance().currentDeviceIndex() == m_index)
-                                 && (AppConfig::instance().serverIp() == ip);
+    // 检查此卡片是否就是全局当前选定并连接的设备
+    bool isCurrent = (AppConfig::instance().currentDeviceIndex() == m_index);
 
-    if (isCurrentConnectedDevice) {
-        // 如果是当前正在连接的设备，同步全局 RobotInfoManager 数据
+    if (isCurrent) {
+        m_isBusy = false;
+        setOnlineUI(true);
         const RobotInfo &info = RobotInfoManager::instance().currentInfo();
         if (info.isOnline()) {
             m_battery = info.batteryPercent();
             m_confidence = info.covScore;
             m_statusText = info.statusText();
-            m_latency = info.latency;
-            setOnlineUI(true);
-            updateCardDisplay();
-
-            // 若已连接设备的报文中未携带延迟，测一次当前连接设备的通信延迟
-            if (m_latency < 0) {
-                auto *socket = new QTcpSocket(this);
-                auto *timer = new QElapsedTimer;
-                timer->start();
-                connect(socket, &QTcpSocket::connected, this, [this, timer, socket]() {
-                    int elapsed = static_cast<int>(timer->elapsed());
-                    m_latency = qMax(1, elapsed);
-                    updateCardDisplay();
-                    socket->disconnectFromHost();
-                    socket->deleteLater();
-                    delete timer;
-                });
-                connect(socket, &QTcpSocket::errorOccurred, this, [socket, timer](QAbstractSocket::SocketError) {
-                    socket->deleteLater();
-                    delete timer;
-                });
-                socket->connectToHost(ip, 8048);
+            // 报文若含有有效延迟才更新，绝不以 -1 覆盖已有延迟，防止闪烁
+            if (info.latency >= 0) {
+                m_latency = info.latency;
             }
-            return;
+        } else {
+            if (m_statusText.isEmpty() || m_statusText == "未连接") {
+                m_statusText = "已连接";
+            }
         }
+        updateCardDisplay();
+
+        // 保持延迟测速定时器常驻运行（每 3 秒刷新一次）
+        if (!m_latencyTimer) {
+            m_latencyTimer = new QTimer(this);
+            connect(m_latencyTimer, &QTimer::timeout, this, [this]() {
+                if (m_isOnline && (AppConfig::instance().currentDeviceIndex() == m_index) && !m_profile.ip.isEmpty()) {
+                    testLatency(m_profile.ip);
+                }
+            });
+        }
+        if (!m_latencyTimer->isActive()) {
+            m_latencyTimer->start(3000);
+        }
+
+        // 若尚未取得有效延迟数据，立即异步测试一次
+        if (m_latency < 0) {
+            testLatency(ip);
+        }
+        return;
+    }
+
+    // 若当前卡片正在连接中，不被其他断开事件重置
+    if (m_isBusy) {
+        return;
     }
 
     // 未连接该设备时，统一严格展示为未连接状态，通讯延迟显示 "--"，绝不误显为已连接
-    m_latency = -1;
-    m_confidence = -1.0;
-    m_battery = -1;
-    m_statusText = "未连接";
-    setOnlineUI(false);
-    updateCardDisplay();
+    disconnectDevice();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -803,7 +869,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
 DeviceManagerDialog::DeviceManagerDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle("移动机器人管理平台");
+    setWindowTitle(AppConstants::AppTitle);
     setModal(true);
     setStyleSheet(kDlgStyle);
 
@@ -823,6 +889,7 @@ DeviceManagerDialog::DeviceManagerDialog(QWidget *parent)
     connect(&MqttService::instance(), &MqttService::connected, this, [this]() {
         int curIdx = AppConfig::instance().currentDeviceIndex();
         if (curIdx >= 0 && curIdx < m_cards.size() && m_cards[curIdx]) {
+            m_cards[curIdx]->setBusy(false);
             m_cards[curIdx]->probeDeviceStatus(AppConfig::instance().serverIp());
             setStatus(QString("设备 [%1] 已成功连接").arg(AppConfig::instance().serverIp()), "#22c55e");
         }
@@ -926,7 +993,13 @@ void DeviceManagerDialog::setupTopBar(QWidget *topBar)
 
     connect(refreshAllBtn, &QPushButton::clicked, this, &DeviceManagerDialog::onRefreshAll);
     connect(addDevBtn,     &QPushButton::clicked, this, &DeviceManagerDialog::onAddDevice);
-    connect(enterHomeBtn,  &QPushButton::clicked, this, &DeviceManagerDialog::accept);
+    connect(enterHomeBtn,  &QPushButton::clicked, this, [this]() {
+        if (AppConfig::instance().currentDeviceIndex() < 0) {
+            Toast::warning(this, "请先选择并点击「连接」设备");
+            return;
+        }
+        accept();
+    });
 }
 
 void DeviceManagerDialog::setupCardArea(QWidget *area)
@@ -1172,15 +1245,8 @@ void DeviceManagerDialog::onConnectCard(int index)
             m_cards[oldIdx]->disconnectDevice();
         }
     }
-    MqttService::instance().clearAllSubscriptions();
-    MqttService::instance().disconnectFromHost();
 
-    // 2. 将目标卡片置为连接中状态
-    if (index < m_cards.size() && m_cards[index]) {
-        m_cards[index]->setBusy(true);
-    }
-
-    // 3. 更新全局活动设备配置 (IP 是区分设备的唯一标识)
+    // 2. 更新全局活动设备配置 (IP 是区分设备的唯一标识)
     AppConfig::instance().setCurrentDeviceIndex(index);
     AppConfig::instance().setServerIp(list[index].ip);
     QString effectiveCarId = list[index].carId.trimmed().isEmpty() ? "1" : list[index].carId.trimmed();
@@ -1188,7 +1254,17 @@ void DeviceManagerDialog::onConnectCard(int index)
     RobotInfoManager::instance().resetForCar(effectiveCarId);
     RobotInfoManager::instance().init();
 
-    // 4. 发起独占 MQTT 连接
+    // 3. 立即刷新所有卡片状态：目标设备高亮并显示“断开连接”，其他设备恢复未连接
+    for (int i = 0; i < m_cards.size(); ++i) {
+        if (!m_cards[i]) continue;
+        if (i == index) {
+            m_cards[i]->probeDeviceStatus(list[index].ip);
+        } else {
+            m_cards[i]->disconnectDevice();
+        }
+    }
+
+    // 4. 发起独占 MQTT 连接 (connectToHost 内部会彻底销毁旧 client 并重启连接至新 IP，单次点击即完成无感切换)
     MqttService::instance().connectToHost(list[index].ip, 1883);
 
     QList<DeviceProfile> curList = AppConfig::instance().deviceList();
@@ -1199,18 +1275,8 @@ void DeviceManagerDialog::onConnectCard(int index)
     }
 
     QString devName = list[index].name.isEmpty() ? list[index].ip : list[index].name;
-    setStatus(QString("正在连接设备 [%1] (%2)...").arg(devName, list[index].ip), "#38bdf8");
-
-    // 5. 5秒连接超时检测
-    QTimer::singleShot(5000, this, [this, index, devName]() {
-        if (AppConfig::instance().currentDeviceIndex() == index && !MqttService::instance().isConnected()) {
-            if (index < m_cards.size() && m_cards[index]) {
-                m_cards[index]->setBusy(false);
-            }
-            setStatus(QString("连接设备 [%1] 超时，请检查网络与端口").arg(devName), "#e05555");
-            Toast::warning(this, QString("连接设备 [%1] 超时").arg(devName));
-        }
-    });
+    setStatus(QString("已连接设备 [%1] (%2)").arg(devName, list[index].ip), "#22c55e");
+    Toast::success(this, QString("已连接设备 [%1]").arg(devName));
 }
 
 void DeviceManagerDialog::onDisconnectCard(int index)
@@ -1220,15 +1286,15 @@ void DeviceManagerDialog::onDisconnectCard(int index)
 
     QString devName = list[index].name.isEmpty() ? list[index].ip : list[index].name;
 
-    // 1. 断开该卡片的 MQTT 监视和状态，隐藏断开连接按钮
-    if (index < m_cards.size() && m_cards[index]) {
-        m_cards[index]->disconnectDevice();
-    }
+    // 1. 重置当前活动设备索引为 -1，断开全局连接服务
+    AppConfig::instance().setCurrentDeviceIndex(-1);
+    MqttService::instance().disconnectFromHost();
 
-    // 2. 如果该设备是当前全局连接的设备，断开全局连接服务并重置当前设备索引
-    if (AppConfig::instance().currentDeviceIndex() == index) {
-        MqttService::instance().disconnectFromHost();
-        AppConfig::instance().setCurrentDeviceIndex(-1);
+    // 2. 刷新所有卡片，全部恢复未连接状态并显示“连接”
+    for (auto *c : m_cards) {
+        if (c) {
+            c->disconnectDevice();
+        }
     }
 
     // 3. 更新设备 linkStatus 状态并保存

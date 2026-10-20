@@ -118,5 +118,6 @@ private:
 
     mutable QReadWriteLock m_lock;
     mutable QSettings      m_settings;
+    int                    m_currentDeviceIndex = -1;
 };
 

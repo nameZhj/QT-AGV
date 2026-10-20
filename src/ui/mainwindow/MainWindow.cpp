@@ -28,6 +28,7 @@
 #include <QTimer>
 #include <QTcpSocket>
 #include <QElapsedTimer>
+#include <QDateTime>
 #include <QFrame>
 #include <QMessageBox>
 #include <QSplitter>
@@ -190,7 +191,7 @@ void MainWindow::setupStatusBar()
 
     m_sbDevice = new QLabel(QString("设备: %1").arg(dev.name.isEmpty() ? "未连接" : dev.name));
     m_sbCarId  = new QLabel(QString("CarID: %1").arg(dev.carId.isEmpty() ? "--" : dev.carId));
-    m_sbConn   = new QLabel("● MQTT: 连接中...");
+    m_sbConn   = new QLabel("○ MQTT: 未连接");
     m_sbConn->setCursor(Qt::PointingHandCursor);
     m_sbConn->setToolTip("点击重新连接 MQTT");
     m_sbConn->installEventFilter(this);
@@ -235,9 +236,13 @@ void MainWindow::setupStatusBar()
 
 void MainWindow::connectServices()
 {
-    // 单车独占：连接新车前主动断开旧的所有连接，清空旧订阅与旧车数据缓存
-    MqttService::instance().clearAllSubscriptions();
-    MqttService::instance().disconnectFromHost();
+    // 单车独占：仅当已由用户选定有效已连接设备时发起连接；未连接设备时绝不自动发起连接
+    int curIdx = AppConfig::instance().currentDeviceIndex();
+    if (curIdx < 0) {
+        MqttService::instance().clearAllSubscriptions();
+        MqttService::instance().disconnectFromHost();
+        return;
+    }
 
     QString curCarId = AppConfig::instance().agvId().trimmed();
     if (curCarId.isEmpty()) curCarId = AppConfig::instance().currentDevice().carId.trimmed();
@@ -425,7 +430,7 @@ void MainWindow::onChangeDevice()
 void MainWindow::onAbout()
 {
     QMessageBox::about(this, "关于",
-        "<b>QT-AGV 移动机器人管理平台</b><br>"
+        "<b>RT-AGV 移动机器人管理平台</b><br>"
         "版本: v1.0<br><br>"
         "基于 Qt6 开发的 AGV 设备管理系统");
 }
@@ -525,13 +530,33 @@ void MainWindow::testNetworkLatency()
     QString ip = AppConfig::instance().serverIp();
     if (ip.isEmpty()) return;
 
+    static qint64 s_lastProbeMs = 0;
+    static bool s_probing = false;
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (s_probing || (m_networkLatency >= 0 && (now - s_lastProbeMs < 3000))) {
+        return;
+    }
+    s_lastProbeMs = now;
+    s_probing = true;
+
     auto *socket = new QTcpSocket(this);
     auto *timer = new QElapsedTimer;
     timer->start();
 
+    // 设定连接超时定时器 (1500ms)，防止挂起
+    QTimer::singleShot(1500, socket, [socket, timer]() {
+        if (socket && socket->state() != QAbstractSocket::ConnectedState) {
+            s_probing = false;
+            socket->abort();
+            socket->deleteLater();
+            delete timer;
+        }
+    });
+
     connect(socket, &QTcpSocket::connected, this, [this, socket, timer]() {
         int elapsed = static_cast<int>(timer->elapsed());
         m_networkLatency = qMax(1, elapsed);
+        s_probing = false;
         if (m_sbLatency) {
             QString col = (m_networkLatency < 60) ? "#22c55e" : ((m_networkLatency < 150) ? "#eab308" : "#ef4444");
             m_sbLatency->setText(QString("网络延迟: <span style='color:%1;'>%2 ms</span>").arg(col).arg(m_networkLatency));
@@ -542,6 +567,7 @@ void MainWindow::testNetworkLatency()
     });
 
     connect(socket, &QTcpSocket::errorOccurred, this, [socket, timer](QAbstractSocket::SocketError) {
+        s_probing = false;
         socket->deleteLater();
         delete timer;
     });

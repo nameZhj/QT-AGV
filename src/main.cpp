@@ -95,7 +95,7 @@ int main(int argc, char *argv[])
     qInstallMessageHandler(messageHandler);
 
     QApplication app(argc, argv);
-    app.setApplicationName("QT-AGV");
+    app.setApplicationName(AppConstants::AppName);
     app.setOrganizationName("AGV");
 
     // 禁用系统代理。本应用连接局域网 AGV 服务器，QTcpSocket/QWebSocket/
@@ -136,7 +136,10 @@ int main(int argc, char *argv[])
         }
     }
 
-    qInfo() << "QT-AGV starting";
+    qInfo() << AppConstants::AppName << "starting";
+
+    // 启动时确保不自动连接任何设备，必须由用户主动点击「连接」后才建立连接
+    AppConfig::instance().setCurrentDeviceIndex(-1);
 
     // Startup: show device manager dialog
     DeviceManagerDialog dlg;

@@ -1487,9 +1487,7 @@ void TaskWidget::initMqtt()
 
 void TaskWidget::disconnectMqtt()
 {
-    auto &mqtt = MqttService::instance();
-    mqtt.unsubscribeTopic(QStringLiteral("/rob/online"));
-    mqtt.unsubscribeTopic(QStringLiteral("/rob/1/info"));
+    // 全局核心话题受 MqttService 与 RobotInfoManager 托管守护，子页面无需亦不可退订
 }
 
 void TaskWidget::onMqttMessage(const QString &topic, const QByteArray &payload)
@@ -1499,8 +1497,8 @@ void TaskWidget::onMqttMessage(const QString &topic, const QByteArray &payload)
     if (err.error != QJsonParseError::NoError) return;
     QJsonObject data = doc.object();
 
-    // 仅处理设备位置信息 /rob/1/info，严防任务链话题误入
-    if (topic == QStringLiteral("/rob/1/info")) {
+    // 处理设备位置信息（兼容各类 info 别名与变体），严防任务链话题误入
+    if (MqttService::matchTopic(QStringLiteral("/rob/1/info"), topic) || topic.contains(QStringLiteral("info"))) {
         RobotInfoManager::instance().updateFromPayload(topic, payload);
 
         QString carId = jsonIdStr(data.value("carId"));

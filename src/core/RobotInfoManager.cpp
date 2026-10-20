@@ -26,38 +26,54 @@ RobotInfoManager::RobotInfoManager(QObject *parent)
 
 void RobotInfoManager::init()
 {
-    if (m_initialized) return;
-    m_initialized = true;
-
     auto &mqtt = MqttService::instance();
-    connect(&mqtt, &MqttService::connected, this, &RobotInfoManager::onMqttConnected);
+    connect(&mqtt, &MqttService::connected, this, &RobotInfoManager::onMqttConnected, Qt::UniqueConnection);
     connect(&mqtt, &MqttService::disconnected, this, [this]() {
         QWriteLocker locker(&m_lock);
         for (auto &r : m_robots) {
             r.receivedData = false;
             r.latency = -1;
         }
-    });
+    }, Qt::UniqueConnection);
 
-    if (mqtt.isConnected()) {
-        onMqttConnected();
-    }
+    m_initialized = true;
+
+    // 无论当前 MQTT 是否已连接完成，立刻全局注册核心订阅
+    subscribeGlobalTopics();
 }
 
-void RobotInfoManager::onMqttConnected()
+void RobotInfoManager::subscribeGlobalTopics()
 {
     auto &mqtt = MqttService::instance();
     auto handlePayload = [this](const QString &topic, const QByteArray &payload) {
         updateFromPayload(topic, payload);
     };
 
-    // 唯一定位与数据监视话题：/rob/1/info
-    mqtt.subscribeTopic(QStringLiteral("/rob/1/info"), 0, handlePayload);
+    const QString curCarId = AppConfig::instance().agvId().trimmed().isEmpty()
+                             ? QStringLiteral("1")
+                             : AppConfig::instance().agvId().trimmed();
+
+    mqtt.setTopicSubscription(QStringLiteral("/rob/1/info"), 0, handlePayload);
+    if (curCarId != QStringLiteral("1")) {
+        mqtt.setTopicSubscription(QStringLiteral("/rob/%1/info").arg(curCarId), 0, handlePayload);
+    }
+    mqtt.setTopicSubscription(QStringLiteral("/rob/+/info"), 0, handlePayload);
+    mqtt.setTopicSubscription(QStringLiteral("/rob/info"), 0, handlePayload);
+    mqtt.setTopicSubscription(QStringLiteral("/info"), 0, handlePayload);
+    mqtt.setTopicSubscription(QStringLiteral("info"), 0, handlePayload);
 
     // 订阅车辆状态MQTT消息：/rob/navigate/status
-    mqtt.subscribeTopic(QStringLiteral("/rob/navigate/status"), 0, [this](const QString &, const QByteArray &payload) {
+    mqtt.setTopicSubscription(QStringLiteral("/rob/navigate/status"), 0, [this](const QString &, const QByteArray &payload) {
         updateNavigateStatus(payload);
     });
+    mqtt.setTopicSubscription(QStringLiteral("/rob/+/navigate/status"), 0, [this](const QString &, const QByteArray &payload) {
+        updateNavigateStatus(payload);
+    });
+}
+
+void RobotInfoManager::onMqttConnected()
+{
+    subscribeGlobalTopics();
 }
 
 void RobotInfoManager::resetForCar(const QString &newCarId)
@@ -72,21 +88,14 @@ void RobotInfoManager::resetForCar(const QString &newCarId)
         def.receivedData = false;
         def.latency = -1;
         m_robots[QStringLiteral("1")] = def;
+        if (!newCarId.isEmpty() && newCarId != QStringLiteral("1")) {
+            def.carIdStr = newCarId;
+            def.car_id = newCarId.toInt();
+            m_robots[newCarId] = def;
+        }
     }
 
-    auto &mqtt = MqttService::instance();
-    if (mqtt.isConnected()) {
-        auto handlePayload = [this](const QString &topic, const QByteArray &payload) {
-            updateFromPayload(topic, payload);
-        };
-        // 唯一定位与数据监视话题：/rob/1/info
-        mqtt.subscribeTopic(QStringLiteral("/rob/1/info"), 0, handlePayload);
-
-        // 订阅车辆状态MQTT消息：/rob/navigate/status
-        mqtt.subscribeTopic(QStringLiteral("/rob/navigate/status"), 0, [this](const QString &, const QByteArray &payload) {
-            updateNavigateStatus(payload);
-        });
-    }
+    subscribeGlobalTopics();
 }
 
 RobotInfo RobotInfoManager::currentInfo() const

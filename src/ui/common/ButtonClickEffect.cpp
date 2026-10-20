@@ -36,6 +36,20 @@ bool ButtonClickEffect::eventFilter(QObject *obj, QEvent *event)
         auto *btn = qobject_cast<QAbstractButton*>(obj);
         auto *me  = static_cast<QMouseEvent*>(event);
         if (btn && btn->isEnabled() && me->button() == Qt::LeftButton) {
+            // 显式免除动画的按钮
+            if (btn->property("noClickEffect").toBool()) {
+                return QObject::eventFilter(obj, event);
+            }
+
+            // 检查祖先控件：若父控件已有 QGraphicsEffect (如卡片投影)，严禁挂载 OpacityEffect，防止 Qt 离屏渲染双重合成导致按钮不可见
+            QWidget *ancestor = btn->parentWidget();
+            while (ancestor) {
+                if (ancestor->graphicsEffect() != nullptr) {
+                    return QObject::eventFilter(obj, event);
+                }
+                ancestor = ancestor->parentWidget();
+            }
+
             // 确保不破坏按钮已有的非透明度特效（如自定义阴影 QGraphicsDropShadowEffect）
             auto *effect = qobject_cast<QGraphicsOpacityEffect*>(btn->graphicsEffect());
             if (!effect) {

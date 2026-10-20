@@ -63,15 +63,19 @@ void MqttService::connectToHost(const QString &host, int port)
     }
     m_currentBackoffMs = kMinBackoffMs;
 
-    // 若当前已成功连接至同一主机IP，避免重复破坏握手
-    if (m_client && m_client->state() == QMqttClient::Connected
+    // 若当前已成功连接或正在连接至同一主机IP，避免重复破坏握手
+    if (m_client && (m_client->state() == QMqttClient::Connected || m_client->state() == QMqttClient::Connecting)
         && m_client->hostname() == trimmedHost
         && m_client->port() == static_cast<quint16>(port)) {
+        if (m_client->state() == QMqttClient::Connected) {
+            resubscribeAll();
+        }
         return;
     }
 
-    // IP 是区分设备的唯一标识，切换设备时彻底关闭旧连接、销毁旧 client 并重启
+    // IP 是区分设备的唯一标识，切换设备时彻底关闭旧连接、断开信号、销毁旧 client 并重启
     if (m_client) {
+        m_client->disconnect(this);
         m_client->disconnectFromHost();
         m_client->deleteLater();
         m_client = nullptr;
@@ -85,7 +89,7 @@ void MqttService::connectToHost(const QString &host, int port)
     m_client->setPort(static_cast<quint16>(port));
     m_client->setUsername(QStringLiteral("admin"));
     m_client->setPassword(QStringLiteral("vsislab"));
-    m_client->setClientId(QStringLiteral("qt-agv-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+    m_client->setClientId(QStringLiteral("rt-agv-%1").arg(QDateTime::currentMSecsSinceEpoch()));
     m_client->setKeepAlive(60);
 
     qInfo().noquote() << QStringLiteral("[MQTT Service] 正在连接设备 MQTT: %1:%2").arg(trimmedHost).arg(port);
@@ -99,11 +103,13 @@ void MqttService::disconnectFromHost()
         m_reconnectTimer->stop();
     }
     if (m_client) {
+        m_client->disconnect(this);
         m_client->disconnectFromHost();
         m_client->deleteLater();
         m_client = nullptr;
         setupClient();
     }
+    emit disconnected();
 }
 
 bool MqttService::isConnected() const
@@ -121,7 +127,9 @@ void MqttService::subscribeTopic(const QString &topic, int qos, MessageCallback 
     if (!m_topics.contains(topic)) {
         m_topics[topic] = {qos, {}};
     }
-    m_topics[topic].callbacks.append(callback);
+    if (callback) {
+        m_topics[topic].callbacks.append(callback);
+    }
 
     if (isConnected()) {
         const QStringList variants = getTopicVariants(topic);
@@ -129,6 +137,28 @@ void MqttService::subscribeTopic(const QString &topic, int qos, MessageCallback 
             m_client->subscribe(varTopic, static_cast<quint8>(qos));
         }
     }
+}
+
+void MqttService::setTopicSubscription(const QString &topic, int qos, MessageCallback callback)
+{
+    m_topics[topic] = {qos, callback ? QList<MessageCallback>{callback} : QList<MessageCallback>{}};
+
+    if (isConnected()) {
+        const QStringList variants = getTopicVariants(topic);
+        for (const QString &varTopic : variants) {
+            m_client->subscribe(varTopic, static_cast<quint8>(qos));
+        }
+    }
+}
+
+bool MqttService::isGlobalTopic(const QString &topic)
+{
+    const QString t = topic.trimmed().toLower();
+    if (t.contains(QStringLiteral("info"))) return true;
+    if (t.contains(QStringLiteral("status"))) return true;
+    if (t.contains(QStringLiteral("online"))) return true;
+    if (t.contains(QStringLiteral("taskchain"))) return true;
+    return false;
 }
 
 void MqttService::subscribeJsonTopic(const QString &topic, int qos, JsonMessageCallback callback)
@@ -147,6 +177,11 @@ void MqttService::subscribeJsonTopic(const QString &topic, int qos, JsonMessageC
 
 void MqttService::unsubscribeTopic(const QString &topic)
 {
+    if (isGlobalTopic(topic)) {
+        // 全局核心常驻话题（如 /rob/1/info, /rob/online, /rob/navigate/status, /taskchain/#）严禁被子页面退订破坏
+        return;
+    }
+
     if (m_topics.contains(topic)) {
         m_topics.remove(topic);
     }
@@ -160,15 +195,22 @@ void MqttService::unsubscribeTopic(const QString &topic)
 
 void MqttService::clearAllSubscriptions()
 {
-    if (isConnected() && m_client) {
-        for (auto it = m_topics.cbegin(); it != m_topics.cend(); ++it) {
-            const QStringList variants = getTopicVariants(it.key());
-            for (const QString &varTopic : variants) {
-                m_client->unsubscribe(varTopic);
+    // 仅清理非全局业务话题，全局基础话题永久保留
+    QList<QString> keysToRemove;
+    for (auto it = m_topics.cbegin(); it != m_topics.cend(); ++it) {
+        if (!isGlobalTopic(it.key())) {
+            keysToRemove.append(it.key());
+            if (isConnected() && m_client) {
+                const QStringList variants = getTopicVariants(it.key());
+                for (const QString &varTopic : variants) {
+                    m_client->unsubscribe(varTopic);
+                }
             }
         }
     }
-    m_topics.clear();
+    for (const QString &k : keysToRemove) {
+        m_topics.remove(k);
+    }
 }
 
 void MqttService::publish(const QString &topic, const QByteArray &payload, int qos)
@@ -277,10 +319,33 @@ bool MqttService::matchTopic(const QString &filter, const QString &topic)
         return true;
     }
 
-    // 不存在 "/rob/info" 和 "/info"，只有 "/rob/1/info"
-    // 若有遗留接口传入 "/info"、"info" 或 "/rob/info" 订阅过滤器，严格仅匹配真实唯一的 "/rob/1/info" 话题
-    if (cleanFilter == QStringLiteral("/info") || cleanFilter == QStringLiteral("info") || cleanFilter == QStringLiteral("/rob/info")) {
-        return cleanTopic == QStringLiteral("/rob/1/info");
+    // 全局 info 话题别名兼容：
+    // 若过滤器是 info 相关话题（/info, info, /rob/info, /rob/+/info, /rob/{id}/info 等），
+    // 且接收到的话题也是 info 相关话题（以 info 结尾或包含 /info）：
+    const bool filterIsInfo = (cleanFilter == QStringLiteral("/info") || cleanFilter == QStringLiteral("info")
+                            || cleanFilter == QStringLiteral("/rob/info") || cleanFilter == QStringLiteral("/rob/+/info")
+                            || cleanFilter.endsWith(QStringLiteral("/info")));
+    const bool topicIsInfo  = (cleanTopic == QStringLiteral("/info") || cleanTopic == QStringLiteral("info")
+                            || cleanTopic == QStringLiteral("/rob/info") || cleanTopic.endsWith(QStringLiteral("/info")));
+
+    if (filterIsInfo && topicIsInfo) {
+        // 若过滤器指定了具体车号如 /rob/2/info，且接收到也是指定车号如 /rob/1/info，按车号过滤防串扰
+        QString filterCar;
+        QString topicCar;
+        const QStringList fParts = cleanFilter.split('/', Qt::SkipEmptyParts);
+        const QStringList tParts = cleanTopic.split('/', Qt::SkipEmptyParts);
+        if (fParts.size() >= 3 && fParts[0] == QStringLiteral("rob")) {
+            filterCar = fParts[1];
+        }
+        if (tParts.size() >= 3 && tParts[0] == QStringLiteral("rob")) {
+            topicCar = tParts[1];
+        }
+        if (!filterCar.isEmpty() && filterCar != QStringLiteral("+") && !topicCar.isEmpty()) {
+            if (filterCar != topicCar) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // MQTT 标准分层通配符匹配 ('+' 匹配单级, '#' 匹配多级)
@@ -368,7 +433,16 @@ QStringList MqttService::getTopicVariants(const QString &topic)
         variants.append(QStringLiteral(":/") + trimmed);
     }
 
-    // 保持单车专用订阅，绝不自动扩充多车通配符 /rob/+/info，彻底避免多台车数据窜扰
+    // 若订阅 info 相关话题，扩展订阅标准常见变体，确保从 broker 捕获到报文
+    if (trimmed.endsWith(QStringLiteral("info"))) {
+        variants.append(QStringLiteral("/rob/1/info"));
+        variants.append(QStringLiteral("rob/1/info"));
+        variants.append(QStringLiteral("/rob/+/info"));
+        variants.append(QStringLiteral("/info"));
+        variants.append(QStringLiteral("info"));
+        variants.append(QStringLiteral("/rob/info"));
+    }
+
     variants.removeDuplicates();
     return variants;
 }

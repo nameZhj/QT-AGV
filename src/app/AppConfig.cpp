@@ -13,7 +13,9 @@ AppConfig &AppConfig::instance()
 AppConfig::AppConfig(QObject *parent)
     : QObject(parent)
     , m_settings("AGV", "QT-AGV")
+    , m_currentDeviceIndex(-1)
 {
+    m_settings.remove("currentDeviceIndex");
 }
 
 QString AppConfig::cleanHostIp(const QString &rawIp)
@@ -225,15 +227,11 @@ void AppConfig::removeDevice(int index)
             saveDeviceListInternal(list);
             removed = true;
 
-            if (list.isEmpty()) {
-                m_settings.setValue("currentDeviceIndex", -1);
-            } else {
-                int cur = m_settings.value("currentDeviceIndex", 0).toInt();
-                if (cur >= list.size()) {
-                    m_settings.setValue("currentDeviceIndex", qMax(0, list.size() - 1));
-                }
+            if (list.isEmpty() || m_currentDeviceIndex == index) {
+                m_currentDeviceIndex = -1;
+            } else if (m_currentDeviceIndex > index) {
+                m_currentDeviceIndex--;
             }
-            m_settings.sync();
         }
     }
 
@@ -247,6 +245,7 @@ void AppConfig::clearDevices()
     {
         QWriteLocker locker(&m_lock);
         saveDeviceListInternal({});
+        m_currentDeviceIndex = -1;
         m_settings.remove("currentDeviceIndex");
         m_settings.sync();
     }
@@ -258,7 +257,7 @@ void AppConfig::clearDevices()
 int AppConfig::currentDeviceIndex() const
 {
     QReadLocker locker(&m_lock);
-    return m_settings.value("currentDeviceIndex", -1).toInt();
+    return m_currentDeviceIndex;
 }
 
 void AppConfig::setCurrentDeviceIndex(int idx)
@@ -267,10 +266,8 @@ void AppConfig::setCurrentDeviceIndex(int idx)
     DeviceProfile activeDev;
     {
         QWriteLocker locker(&m_lock);
-        const int oldIdx = m_settings.value("currentDeviceIndex", -1).toInt();
-        if (oldIdx != idx) {
-            m_settings.setValue("currentDeviceIndex", idx);
-            m_settings.sync();
+        if (m_currentDeviceIndex != idx) {
+            m_currentDeviceIndex = idx;
             changed = true;
         }
     }
@@ -295,7 +292,7 @@ DeviceProfile AppConfig::currentDevice() const
 
     DeviceProfile dev;
     dev.carId = "1";
-    dev.ip = serverIp();
+    dev.ip = "";
     return dev;
 }
 

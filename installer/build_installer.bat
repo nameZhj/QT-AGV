@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 chcp 65001 >nul
-title QT-AGV Installer Builder
+title RT-AGV Installer Builder
 
 set "ROOT_DIR=%~dp0.."
 set "QT_DIR=F:\Qt\6.11.0\mingw_64"
@@ -15,7 +15,7 @@ set "APP_VERSION=1.0.0"
 set "PATH=%QT_DIR%\bin;%MINGW_DIR%\bin;%PATH%"
 
 echo ============================================
-echo   QT-AGV Installer Builder
+echo   RT-AGV Installer Builder
 echo ============================================
 echo.
 
@@ -26,8 +26,9 @@ if errorlevel 1 goto :fail
 
 echo.
 echo [2/5] Building Release...
+if exist "%BUILD_DIR%\RT-AGV_autogen\timestamp" del /f /q "%BUILD_DIR%\RT-AGV_autogen\timestamp"
 if exist "%BUILD_DIR%\QT-AGV_autogen\timestamp" del /f /q "%BUILD_DIR%\QT-AGV_autogen\timestamp"
-"%MINGW_DIR%\bin\mingw32-make.exe" -C "%BUILD_DIR%" QT-AGV_autogen 2>nul
+"%MINGW_DIR%\bin\mingw32-make.exe" -C "%BUILD_DIR%" RT-AGV_autogen 2>nul
 "%MINGW_DIR%\bin\mingw32-make.exe" -C "%BUILD_DIR%" -j4
 if errorlevel 1 goto :fail
 
@@ -35,8 +36,8 @@ echo.
 echo [3/5] Collecting Qt runtime deps (windeployqt)...
 if exist "%DIST_DIR%" rmdir /s /q "%DIST_DIR%"
 mkdir "%DIST_DIR%"
-copy /y "%BUILD_DIR%\QT-AGV.exe" "%DIST_DIR%\" >nul
-"%QT_DIR%\bin\windeployqt6.exe" --no-translations "%DIST_DIR%\QT-AGV.exe"
+copy /y "%BUILD_DIR%\RT-AGV.exe" "%DIST_DIR%\" >nul
+"%QT_DIR%\bin\windeployqt6.exe" --no-translations "%DIST_DIR%\RT-AGV.exe"
 if errorlevel 1 goto :fail
 
 echo.

@@ -36,6 +36,7 @@ public:
     ~DeviceCard() override;
     void setIndex(int idx) { m_index = idx; }
     void setBusy(bool busy);
+    bool isBusy() const { return m_isBusy; }
     // 异步更新链接状态 UI（true=已链接，false=未链接）
     void setLinkStatus(bool linked);
     // 主动断开设备连接与 MQTT
@@ -56,6 +57,7 @@ protected:
 
 private:
     void setOnlineUI(bool online);
+    void testLatency(const QString &ip);
 
     int m_index = 0;
     DeviceProfile m_profile;
@@ -77,8 +79,8 @@ private:
     QLabel       *m_verLabel    = nullptr;   // 版本: v2.1.1
     QLabel       *m_fwVerLabel  = nullptr;   // 固件版本: v2.1.1
     QLabel       *m_baseIcon    = nullptr;   // 底部基站/WiFi 图标
-    QPushButton  *m_syncBtn     = nullptr;   // 底部左侧 已同步 按钮
-    QPushButton  *m_connectBtn  = nullptr;   // 底部右侧 连接 / 断开连接 按钮
+    QPushButton  *m_syncBtn       = nullptr; // 底部左侧 已同步 按钮
+    QPushButton  *m_connectBtn    = nullptr; // 底部右侧 操作按钮 (未连接显示"连接"，已连接显示"断开连接"，互斥常驻显示)
     QGraphicsDropShadowEffect *m_shadow = nullptr; // 整卡立体投影效果
 
     double       m_confidence   = -1.0;
@@ -89,6 +91,9 @@ private:
     QString      m_remark;
     QString      m_statusText;
     QTimer      *m_latencyTimer = nullptr;
+    bool         m_isProbingLatency = false;
+    qint64       m_lastLatencyProbeMs = 0;
+    bool         m_isBusy = false;
 };
 
 // ── Main device-manager dialog ────────────────────────────────────────────────

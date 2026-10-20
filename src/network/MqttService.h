@@ -43,6 +43,8 @@ public:
 
     // 原始字节消息订阅
     void subscribeTopic(const QString &topic, int qos, MessageCallback callback);
+    // 独占式设置/更新特定话题的回调 (覆盖已有回调列表，防止重复注册累加)
+    void setTopicSubscription(const QString &topic, int qos, MessageCallback callback);
 
     // 便捷 JSON 消息订阅 (自动解析并在格式合法时派发)
     void subscribeJsonTopic(const QString &topic, int qos, JsonMessageCallback callback);
@@ -57,6 +59,9 @@ public:
 
     // MQTT 主题匹配工具函数 (支持 + / # 通配符及前缀容错)
     static bool matchTopic(const QString &filter, const QString &topic);
+
+    // 全局核心常驻话题判断 (严禁任意子页面退订破坏)
+    static bool isGlobalTopic(const QString &topic);
 
 signals:
     void connected();

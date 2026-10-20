@@ -176,8 +176,10 @@ public:
 
     // 初始化常驻 MQTT 订阅与信号绑定
     void init();
-    // 切换并重置单车连接 (清理旧车数据并精确订阅新车)
+    // 切换并重置单车连接 (清理旧车数据并根据 IP/CarID 同步修改全局订阅)
     void resetForCar(const QString &newCarId);
+    // 全局常驻核心 MQTT 订阅生效与同步
+    void subscribeGlobalTopics();
 
     // 数据查询 (线程安全)
     RobotInfo currentInfo() const;

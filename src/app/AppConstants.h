@@ -9,10 +9,10 @@
 namespace AppConstants {
 
 // ── 软件基础信息 ──
-inline constexpr auto AppName       = "QT-AGV";
-inline constexpr auto AppTitle     = "QT-AGV  移动机器人管理平台";
+inline constexpr auto AppName       = "RT-AGV";
+inline constexpr auto AppTitle     = "RT-AGV  移动机器人管理平台";
 inline constexpr auto AppVersion   = "1.0.0";
-inline constexpr auto LogFileName  = "qt-agv.log";
+inline constexpr auto LogFileName  = "rt-agv.log";
 
 // ── 窗口尺寸规范 ──
 namespace Window {
