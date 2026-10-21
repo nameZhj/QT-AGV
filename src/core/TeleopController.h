@@ -1,3 +1,11 @@
+/**
+ * @file    TeleopController.h
+ * @module  AGVModel
+ * @brief   Real-time teleoperation speed calculator with ramp acceleration and safety brake protection.
+ * @deps    QObject, QTimer, ApiService
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QObject>
@@ -24,12 +32,16 @@ public:
     static TeleopController &instance();
 
     // ── 物理运动参数常量 (单位: 国际标准单位) ──
-    static constexpr int    kDefaultTickIntervalMs = 100;  ///< 控制器发送周期 (100ms / 10Hz)
-    static constexpr int    kBoostMaxTicks         = 10;   ///< Ctrl 键 1秒内线性达最大倍率 (10*100ms)
-    static constexpr double kDefaultBaseLinear     = 0.50; ///< 默认基础线速度 (0.50 m/s)
-    static constexpr double kDefaultBaseAngular    = 0.30; ///< 默认基础角速度 (0.30 rad/s)
-    static constexpr double kDefaultMaxMultiplier  = 2.00; ///< Ctrl 键最大加速倍率 (2.0x)
+    static constexpr int    kDefaultTickIntervalMs  = 100;     ///< 控制器发送周期 (100ms / 10Hz)
+    static constexpr int    kBoostMaxTicks          = 10;      ///< Ctrl 键 1秒内线性达最大倍率 (10*100ms)
+    static constexpr double kDefaultBaseLinear      = 0.50;    ///< 默认基础线速度 (0.50 m/s)
+    static constexpr double kDefaultBaseAngular     = 0.30;    ///< 默认基础角速度 (0.30 rad/s)
+    static constexpr double kDefaultMaxMultiplier   = 2.00;    ///< Ctrl 键最大加速倍率 (2.0x)
+    static constexpr double kSpeedRoundFactor       = 1000.0;  ///< 速度去重精度倍数 (三位小数)
+    static constexpr double kMinSpeedLimit          = 0.01;    ///< 最低受控基础速度限制 (m/s, rad/s)
+    static constexpr double kDefaultAngularSpeedDeg = 45.0;    ///< 默认角速度配置值 (45°/s)
 
+    // === [Section: Public Operations & State] ===
     bool isActive() const { return m_active; }
     void setActive(bool on);
 
@@ -51,6 +63,7 @@ public:
     void stopAllMotion();
 
 signals:
+    // === [Section: Signals] ===
     void activeChanged(bool active);
     void userPreemptedChanged(bool preempted);
     void motionChanged(double linear, double angular);
@@ -59,19 +72,17 @@ signals:
     void keyStateChanged(int key, bool pressed); ///< WASD/Space 状态变化 (用于 UI 联动)
 
 protected:
+    // === [Section: Event Filtering] ===
     bool eventFilter(QObject *obj, QEvent *event) override;
 
 private:
+    // === [Section: Constructors & Destructor] ===
     explicit TeleopController(QObject *parent = nullptr);
     ~TeleopController() override;
     TeleopController(const TeleopController &) = delete;
     TeleopController &operator=(const TeleopController &) = delete;
 
-    bool handleKeyEvent(QKeyEvent *event, bool pressed);
-    bool isTeleopKey(int key) const;
-    bool isMovementKey(int key) const;
-    bool focusIsTextInput() const;
-
+    // === [Section: Motion & Telemetry Loops] ===
     void onTick();
     void updateMotion();
     void resetKeyStates();
@@ -79,7 +90,10 @@ private:
     void publishHoistStatus(const QString &status);
     void emergencyStop();
 
+    friend class TeleopInputHandler;
+
 private:
+    // === [Section: Member State Variables] ===
     QTimer *m_timer = nullptr;
     bool    m_active = false;
     bool    m_userPreempted = false;
@@ -107,3 +121,4 @@ private:
     bool   m_hasPublishedLinear   = false;
     bool   m_hasPublishedAngular  = false;
 };
+

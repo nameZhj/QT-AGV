@@ -1,0 +1,57 @@
+/* =============================================================================
+   QT-AGV Task Stylesheet (task.qss)
+   任务管理、任务链编排、动作编辑与任务执行日志面板样式
+   ============================================================================= */
+
+/* ── 任务主容器 ── */
+QWidget#taskWidget {
+    background-color: #1a1d23;
+}
+QWidget#taskLeftPanel {
+    background-color: #12151a;
+    border-right: 1px solid #2d3340;
+}
+QWidget#taskRightPanel {
+    background-color: #1a1d23;
+    border-left: 1px solid #2d3340;
+}
+QWidget#taskNavBar {
+    background-color: #12151a;
+    border-bottom: 1px solid #2d3340;
+}
+QWidget#taskHeaderWidget {
+    background-color: #1e2d3d;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+QLabel#taskHeaderTitle {
+    color: #6a9cbf;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+QLabel#taskInfoLabel {
+    color: #8898a8;
+    font-size: 11px;
+}
+
+/* ── 任务编辑属性栏 ── */
+QWidget#taskEditRightPanel {
+    background-color: #16202e;
+}
+QGroupBox#taskGroupBox {
+    border: 1px solid #2d3340;
+    border-radius: 5px;
+    margin-top: 10px;
+    font-weight: 600;
+    color: #8898a8;
+    background-color: #1a2433;
+}
+
+/* ── 任务日志列表 ── */
+QTreeWidget#taskLogTree {
+    background-color: #0d1117;
+    border: 1px solid #2d3340;
+    color: #c8d0d8;
+    font-family: "Consolas", monospace;
+    font-size: 12px;
+}

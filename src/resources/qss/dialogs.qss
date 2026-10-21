@@ -1,0 +1,83 @@
+/* =============================================================================
+   QT-AGV Dialogs Stylesheet (dialogs.qss)
+   所有弹窗对话框、LoadingDialog 以及 Toast 悬浮提示框样式
+   ============================================================================= */
+
+/* ── Base Dialog ── */
+QDialog {
+    background-color: #1a1d23;
+}
+QDialogButtonBox QPushButton { min-width: 80px; }
+
+/* ── Toast 消息浮层 ── */
+QWidget#toastCard {
+    background-color: rgba(30, 41, 59, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 8px;
+}
+QWidget#toastCard[toastType="success"] { border-left: 4px solid #10b981; }
+QWidget#toastCard[toastType="error"]   { border-left: 4px solid #ef4444; }
+QWidget#toastCard[toastType="warning"] { border-left: 4px solid #f59e0b; }
+QWidget#toastCard[toastType="info"]    { border-left: 4px solid #0284c7; }
+
+QLabel#toastIcon {
+    font-size: 14px;
+    font-weight: bold;
+    border-radius: 12px;
+}
+QLabel#toastIcon[toastType="success"] {
+    background-color: rgba(16, 185, 129, 0.18);
+    color: #10b981;
+}
+QLabel#toastIcon[toastType="error"] {
+    background-color: rgba(239, 68, 68, 0.18);
+    color: #ef4444;
+}
+QLabel#toastIcon[toastType="warning"] {
+    background-color: rgba(245, 158, 11, 0.18);
+    color: #f59e0b;
+}
+QLabel#toastIcon[toastType="info"] {
+    background-color: rgba(2, 132, 199, 0.18);
+    color: #0284c7;
+}
+
+QLabel#toastMsg {
+    color: #f1f5f9;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+/* ── LoadingDialog 加载框 ── */
+QDialog#LoadingDialog {
+    background-color: rgba(26, 29, 35, 0.95);
+    border: 1px solid #2d3340;
+    border-radius: 8px;
+}
+QLabel#loadingText {
+    color: #c8d0d8;
+    font-size: 13px;
+}
+
+/* ── DeviceManagerDialog ── */
+QDialog#DeviceManagerDialog {
+    background-color: #1a1d23;
+}
+QWidget#deviceCard {
+    background-color: #22262e;
+    border: 1px solid #2d3340;
+    border-radius: 6px;
+    padding: 8px;
+}
+QWidget#deviceCard:hover {
+    border-color: #4a9eff;
+    background-color: #252a35;
+}
+QLabel#deviceStatusDot[online="true"] {
+    background-color: #10b981;
+    border-radius: 5px;
+}
+QLabel#deviceStatusDot[online="false"] {
+    background-color: #ef4444;
+    border-radius: 5px;
+}

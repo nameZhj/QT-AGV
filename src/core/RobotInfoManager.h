@@ -75,6 +75,7 @@ struct RobotInfo {
     // 刚开机默认初始化为 "0" (就绪)
     QString status  = "0";
     int     task_id = -1;            ///< 小车正在执行的任务id，若无则为 -1
+    bool    receivedData = false;    ///< 是否从 MQTT 接收到过真实有效报文
 
     // 电池电量 (0.0 ~ 1.0 或百分比，例如 0.98 表示 98%)
     double battery = -1.0;
@@ -109,14 +110,15 @@ struct RobotInfo {
     }
 
     bool isOnline() const {
-        return !status.isEmpty();
+        return receivedData && !status.isEmpty();
     }
 
     bool isNavigating() const {
-        return status == "1" || status == "2" || status == "3" || status == "5";
+        return isOnline() && (status == "1" || status == "2" || status == "3" || status == "5");
     }
 
     QString statusText() const {
+        if (!isOnline()) return "未连接";
         if (status == "0") return "就绪";
         if (status == "1") return "导航中";
         if (status == "2") return "暂停导航";
@@ -174,8 +176,10 @@ public:
 
     // 初始化常驻 MQTT 订阅与信号绑定
     void init();
-    // 切换并重置单车连接 (清理旧车数据并精确订阅新车)
+    // 切换并重置单车连接 (清理旧车数据并根据 IP/CarID 同步修改全局订阅)
     void resetForCar(const QString &newCarId);
+    // 全局常驻核心 MQTT 订阅生效与同步
+    void subscribeGlobalTopics();
 
     // 数据查询 (线程安全)
     RobotInfo currentInfo() const;
@@ -202,6 +206,7 @@ signals:
 
 private slots:
     void onMqttConnected();
+    void onMqttDisconnected();
 
 private:
     explicit RobotInfoManager(QObject *parent = nullptr);

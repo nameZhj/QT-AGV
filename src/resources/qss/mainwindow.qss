@@ -1,0 +1,76 @@
+/* =============================================================================
+   QT-AGV Main Window Stylesheet (mainwindow.qss)
+   主窗口导航栏、顶部工具栏、状态栏及菜单栏样式
+   ============================================================================= */
+
+/* ── Header toolbar ── */
+QToolBar#headerToolBar {
+    background-color: #12151a;
+    border-bottom: 2px solid #2d3340;
+    spacing: 0px;
+    padding: 0px 8px;
+}
+QToolBar#headerToolBar::separator { width: 0px; }
+
+/* ── Section toolbar (top navigation tabs) ── */
+QToolBar#sectionBar {
+    background-color: #12151a;
+    border-bottom: 1px solid #2d3340;
+    spacing: 0px;
+    padding: 0px;
+}
+QToolBar#sectionBar QToolButton {
+    background-color: transparent;
+    color: #8898a8;
+    border: none;
+    border-bottom: 3px solid transparent;
+    padding: 9px 22px;
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 80px;
+    margin: 0px;
+}
+QToolBar#sectionBar QToolButton:hover {
+    color: #c8d0d8;
+    background-color: #1e2228;
+}
+QToolBar#sectionBar QToolButton:checked {
+    color: #4a9eff;
+    border-bottom: 3px solid #4a9eff;
+    background-color: #1e2228;
+}
+
+/* ── Menu ── */
+QMenuBar {
+    background-color: #12151a;
+    color: #8898a8;
+    border-bottom: 1px solid #2d3340;
+    padding: 1px 0;
+}
+QMenuBar::item { padding: 5px 12px; border-radius: 3px; }
+QMenuBar::item:selected { background-color: #1e4080; color: white; }
+QMenu {
+    background-color: #22262e;
+    border: 1px solid #2d3340;
+    color: #c8d0d8;
+    padding: 4px 0;
+}
+QMenu::item { padding: 6px 24px 6px 16px; }
+QMenu::item:selected { background-color: #1e4080; color: white; }
+QMenu::separator { height: 1px; background-color: #2d3340; margin: 4px 0; }
+
+/* ── StatusBar ── */
+QStatusBar {
+    background-color: #0d1117;
+    color: #8898a8;
+    border-top: 1px solid #2d3340;
+    font-size: 12px;
+}
+QStatusBar::item { border: none; }
+QStatusBar QLabel {
+    color: #8898a8;
+    padding: 2px 10px;
+    border-right: 1px solid #2d3340;
+    font-size: 12px;
+    background: transparent;
+}
