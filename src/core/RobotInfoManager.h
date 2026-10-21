@@ -206,6 +206,7 @@ signals:
 
 private slots:
     void onMqttConnected();
+    void onMqttDisconnected();
 
 private:
     explicit RobotInfoManager(QObject *parent = nullptr);

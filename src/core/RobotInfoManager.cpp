@@ -28,13 +28,7 @@ void RobotInfoManager::init()
 {
     auto &mqtt = MqttService::instance();
     connect(&mqtt, &MqttService::connected, this, &RobotInfoManager::onMqttConnected, Qt::UniqueConnection);
-    connect(&mqtt, &MqttService::disconnected, this, [this]() {
-        QWriteLocker locker(&m_lock);
-        for (auto &r : m_robots) {
-            r.receivedData = false;
-            r.latency = -1;
-        }
-    }, Qt::UniqueConnection);
+    connect(&mqtt, &MqttService::disconnected, this, &RobotInfoManager::onMqttDisconnected, Qt::UniqueConnection);
 
     m_initialized = true;
 
@@ -74,6 +68,15 @@ void RobotInfoManager::subscribeGlobalTopics()
 void RobotInfoManager::onMqttConnected()
 {
     subscribeGlobalTopics();
+}
+
+void RobotInfoManager::onMqttDisconnected()
+{
+    QWriteLocker locker(&m_lock);
+    for (auto &r : m_robots) {
+        r.receivedData = false;
+        r.latency = -1;
+    }
 }
 
 void RobotInfoManager::resetForCar(const QString &newCarId)

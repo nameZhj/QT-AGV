@@ -750,35 +750,32 @@ void DeviceCard::testLatency(const QString &ip)
     m_isProbingLatency = true;
 
     auto *socket = new QTcpSocket(this);
-    auto *timer = new QElapsedTimer;
-    timer->start();
+    const qint64 startTime = now;
+    QPointer<DeviceCard> self(this);
 
     // 设定连接超时定时器 (1500ms)，防止挂起
-    QTimer::singleShot(1500, socket, [this, socket, timer]() {
+    QTimer::singleShot(1500, socket, [socket, self]() {
         if (socket && socket->state() != QAbstractSocket::ConnectedState) {
-            m_isProbingLatency = false;
+            if (self) self->m_isProbingLatency = false;
             socket->abort();
             socket->deleteLater();
-            delete timer;
         }
     });
 
-    connect(socket, &QTcpSocket::connected, this, [this, timer, socket]() {
-        int elapsed = static_cast<int>(timer->elapsed());
-        if (m_isOnline && (AppConfig::instance().currentDeviceIndex() == m_index)) {
-            m_latency = qMax(1, elapsed);
-            updateCardDisplay();
+    connect(socket, &QTcpSocket::connected, this, [self, socket, startTime]() {
+        const int elapsed = static_cast<int>(QDateTime::currentMSecsSinceEpoch() - startTime);
+        if (self && self->m_isOnline && (AppConfig::instance().currentDeviceIndex() == self->m_index)) {
+            self->m_latency = qMax(1, elapsed);
+            self->updateCardDisplay();
         }
-        m_isProbingLatency = false;
+        if (self) self->m_isProbingLatency = false;
         socket->disconnectFromHost();
         socket->deleteLater();
-        delete timer;
     });
 
-    connect(socket, &QTcpSocket::errorOccurred, this, [this, socket, timer](QAbstractSocket::SocketError) {
-        m_isProbingLatency = false;
+    connect(socket, &QTcpSocket::errorOccurred, this, [self, socket](QAbstractSocket::SocketError) {
+        if (self) self->m_isProbingLatency = false;
         socket->deleteLater();
-        delete timer;
     });
 
     socket->connectToHost(ip, 8048);
@@ -1165,8 +1162,10 @@ void DeviceManagerDialog::refreshCards()
         m_cards.append(card);
     }
 
-    fetchGlobalMapList([this]() {
-        for (auto *c : m_cards) {
+    QPointer<DeviceManagerDialog> self(this);
+    fetchGlobalMapList([self]() {
+        if (!self) return;
+        for (auto *c : self->m_cards) {
             if (c) c->updateCardDisplay();
         }
     });

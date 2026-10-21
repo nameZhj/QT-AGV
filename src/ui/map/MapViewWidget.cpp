@@ -2409,6 +2409,7 @@ void MapViewWidget::loadMapById(const QString &mapId, const QString &mapName)
     if (m_loadingMapId == mapId) {
         return;
     }
+    clearRouteData();
     m_loadingMapId = mapId;
     m_mapId = mapId;
     if (!mapName.isEmpty()) {
@@ -2590,6 +2591,21 @@ void MapViewWidget::clearRouteItems()
     m_routeTopLevelItems.clear();
 }
 
+void MapViewWidget::clearRouteData()
+{
+    m_points = QJsonArray();
+    m_lines  = QJsonArray();
+    m_curves = QJsonArray();
+    m_charges = QJsonArray();
+    m_highPrecisionPoints = QJsonArray();
+    m_highLevelAreas = QJsonArray();
+    m_routeLoaded = false;
+    clearRouteItems();
+    if (m_mapCountAreaVal) m_mapCountAreaVal->setText("0");
+    refreshElementList();
+    updateMapPropsView();
+}
+
 void MapViewWidget::clearGridItems()
 {
     for (auto *item : m_gridItems) {
@@ -2632,72 +2648,103 @@ void MapViewWidget::installMapPixmap(const QPixmap &pix)
 void MapViewWidget::loadRoute()
 {
     if (m_mapId.isEmpty()) return;
-    ApiService::instance().loadEditedMap([this](int code, const QJsonObject &data) {
-        m_routeLoaded = (code == 200);
-        if (!m_routeLoaded) return;
 
-        m_points = QJsonArray();
-        m_lines  = QJsonArray();
-        m_curves = QJsonArray();
-        m_charges = QJsonArray();
-        m_highPrecisionPoints = QJsonArray();
-        m_highLevelAreas = QJsonArray();
-
-        QString jsonStr = data.value("json").toString();
-        if (!jsonStr.isEmpty()) {
-            QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + m_mapName + "_" + m_mapId;
-            QDir().mkpath(localDir);
-            QFile rf(localDir + "/route.json");
-            if (rf.open(QIODevice::WriteOnly)) {
-                rf.write(jsonStr.toUtf8());
+    auto readLocalCache = [this]() -> QString {
+        const QStringList paths = {
+            QCoreApplication::applicationDirPath() + "/maps/" + m_mapName + "_" + m_mapId + "/route.json",
+            QCoreApplication::applicationDirPath() + "/maps/" + m_mapId + "/route.json"
+        };
+        for (const auto &p : paths) {
+            QFile rf(p);
+            if (rf.exists() && rf.open(QIODevice::ReadOnly)) {
+                QString s = QString::fromUtf8(rf.readAll());
                 rf.close();
+                if (!s.trimmed().isEmpty()) return s;
+            }
+        }
+        return QString();
+    };
+
+    ApiService::instance().loadEditedMap([this, readLocalCache](int code, const QJsonObject &data) {
+        QString jsonStr;
+        if (code == 200) {
+            jsonStr = data.value("json").toString();
+            if (!jsonStr.isEmpty()) {
+                QString localDir = QCoreApplication::applicationDirPath() + "/maps/" + m_mapName + "_" + m_mapId;
+                QDir().mkpath(localDir);
+                QFile rf(localDir + "/route.json");
+                if (rf.open(QIODevice::WriteOnly)) {
+                    rf.write(jsonStr.toUtf8());
+                    rf.close();
+                }
+            }
+        }
+        if (jsonStr.trimmed().isEmpty()) {
+            jsonStr = readLocalCache();
+        }
+
+        if (jsonStr.trimmed().isEmpty()) {
+            clearRouteData();
+            if (m_mapReady) renderRoute();
+            return;
+        }
+
+        m_routeLoaded = true;
+        clearRouteData();
+
+        QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
+        if (doc.isObject()) {
+            QJsonObject root = doc.object();
+            auto parseAreasFromVal = [&](const QJsonValue &v) {
+                if (v.isArray()) {
+                    m_highLevelAreas = v.toArray();
+                } else if (v.isObject() && !v.toObject().isEmpty()) {
+                    m_highLevelAreas.append(v.toObject());
+                }
+            };
+
+            if (root.contains("highLevelArea")) {
+                parseAreasFromVal(root.value("highLevelArea"));
+            } else if (root.contains("highLevel Area")) {
+                parseAreasFromVal(root.value("highLevel Area"));
+            } else if (root.contains("highLevelAreas")) {
+                parseAreasFromVal(root.value("highLevelAreas"));
             }
 
-            QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
-            if (doc.isObject()) {
-                QJsonObject root = doc.object();
-                auto parseAreasFromVal = [&](const QJsonValue &v) {
-                    if (v.isArray()) {
-                        m_highLevelAreas = v.toArray();
-                    } else if (v.isObject() && !v.toObject().isEmpty()) {
-                        m_highLevelAreas.append(v.toObject());
-                    }
-                };
-
-                if (root.contains("highLevelArea")) {
-                    parseAreasFromVal(root.value("highLevelArea"));
-                } else if (root.contains("highLevel Area")) {
-                    parseAreasFromVal(root.value("highLevel Area"));
-                } else if (root.contains("highLevelAreas")) {
-                    parseAreasFromVal(root.value("highLevelAreas"));
+            for (int i = 0; i < m_highLevelAreas.size(); ++i) {
+                QJsonObject a = m_highLevelAreas[i].toObject();
+                if (a.value("id").toString().isEmpty()) {
+                    a["id"] = QString("highLevelArea_%1").arg(i + 1);
+                }
+                if (a.value("name").toString().isEmpty()) {
+                    a["name"] = QString("AdvancedArea %1").arg(i + 1);
                 }
 
-                for (int i = 0; i < m_highLevelAreas.size(); ++i) {
-                    QJsonObject a = m_highLevelAreas[i].toObject();
-                    if (a.value("id").toString().isEmpty()) {
-                        a["id"] = QString("highLevelArea_%1").arg(i + 1);
-                    }
-                    if (a.value("name").toString().isEmpty()) {
-                        a["name"] = QString("AdvancedArea %1").arg(i + 1);
-                    }
+                double minX = 0, maxX = 0, minY = 0, maxY = 0;
+                extractAreaBounds(a, minX, maxX, minY, maxY);
 
-                    double minX = 0, maxX = 0, minY = 0, maxY = 0;
-                    extractAreaBounds(a, minX, maxX, minY, maxY);
+                QJsonArray coords;
+                QJsonArray pTL, pBR;
+                pTL.append(minX); pTL.append(maxY);
+                pBR.append(maxX); pBR.append(minY);
+                coords.append(pTL); coords.append(pBR);
+                a["coordinates"] = coords;
 
-                    QJsonArray coords;
-                    QJsonArray pTL, pBR;
-                    pTL.append(minX); pTL.append(maxY);
-                    pBR.append(maxX); pBR.append(minY);
-                    coords.append(pTL); coords.append(pBR);
-                    a["coordinates"] = coords;
+                a.remove("minX");
+                a.remove("maxX");
+                a.remove("minY");
+                a.remove("maxY");
 
-                    a.remove("minX");
-                    a.remove("maxX");
-                    a.remove("minY");
-                    a.remove("maxY");
+                m_highLevelAreas[i] = a;
+            }
 
-                    m_highLevelAreas[i] = a;
-                }
+            if (!root.contains("features") && (root.contains("points") || root.contains("lines") || root.contains("curves"))) {
+                m_points              = root.value("points").toArray();
+                m_lines               = root.value("lines").toArray();
+                m_curves              = root.value("curves").toArray();
+                m_charges             = root.value("charges").toArray();
+                m_highPrecisionPoints = root.value("highPrecisionPoints").toArray();
+            } else {
                 QJsonArray features = root.value("features").toArray();
                 for (const auto &fv : features) {
                     QJsonObject f = fv.toObject();
@@ -2710,8 +2757,10 @@ void MapViewWidget::loadRoute()
                     if (gtype == "Point") {
                         QJsonObject pt = props;
                         pt["id"]   = id;
-                        pt["x"]    = coords[0].toDouble();
-                        pt["y"]    = coords[1].toDouble();
+                        if (coords.size() >= 2) {
+                            pt["x"]    = coords[0].toDouble();
+                            pt["y"]    = coords[1].toDouble();
+                        }
                         if (pt.value("name").toString().isEmpty()) {
                             pt["name"] = props.value("name").toString();
                         }
@@ -2722,7 +2771,6 @@ void MapViewWidget::loadRoute()
                         else
                             m_points.append(pt);
                     } else if (gtype == "LineString") {
-                        // 路网线段: id 以 l_ 开头
                         QJsonObject ln;
                         ln["id"]   = id;
                         if (coords.size() >= 2) {
@@ -2731,12 +2779,10 @@ void MapViewWidget::loadRoute()
                             ln["x1"] = c0[0].toDouble(); ln["y1"] = c0[1].toDouble();
                             ln["x2"] = c1[0].toDouble(); ln["y2"] = c1[1].toDouble();
                         }
-                        // 保留全部属性(name/startid/endid/direct/maxspeed 等)以便属性面板完整展示
                         for (auto it = props.begin(); it != props.end(); ++it)
                             ln[it.key()] = it.value();
                         m_lines.append(ln);
                     } else if (gtype == "MultiPoint") {
-                        // 多阶贝塞尔曲线(>=3 个点): id 以 b_ 开头
                         QJsonObject cv;
                         cv["id"]   = id;
                         cv["name"] = props.value("name").toString();
@@ -2757,7 +2803,6 @@ void MapViewWidget::loadRoute()
                             QJsonArray a1 = coords[1].toArray();
                             cv["cx"] = a1[0].toDouble(); cv["cy"] = a1[1].toDouble();
                         }
-                        // 保留全部属性(startid/endid/direct/maxspeed 等)
                         for (auto it = props.begin(); it != props.end(); ++it)
                             cv[it.key()] = it.value();
                         m_curves.append(cv);
@@ -2766,6 +2811,8 @@ void MapViewWidget::loadRoute()
             }
         }
         if (m_mapReady) renderRoute();
+        refreshElementList();
+        updateMapPropsView();
     });
 }
 
@@ -3916,12 +3963,7 @@ void MapViewWidget::onRefreshMap()
         }
 
         // 刷新重置要素缓存，重新加载/下载地图与路网
-        m_points = QJsonArray();
-        m_lines  = QJsonArray();
-        m_curves = QJsonArray();
-        m_charges = QJsonArray();
-        m_highPrecisionPoints = QJsonArray();
-        m_routeLoaded = false;
+        clearRouteData();
         m_robot.posValid = false;
 
         loadMapById(mapId);
@@ -3981,12 +4023,7 @@ void MapViewWidget::forceRefreshAfterMapping()
         }
 
         // 清理路网与位姿缓存
-        m_points = QJsonArray();
-        m_lines  = QJsonArray();
-        m_curves = QJsonArray();
-        m_charges = QJsonArray();
-        m_highPrecisionPoints = QJsonArray();
-        m_routeLoaded = false;
+        clearRouteData();
         m_robot.posValid = false;
 
         loadMapById(mapId);
@@ -4430,13 +4467,8 @@ void MapViewWidget::onSwitchMap()
 
     if (dlg.exec() == QDialog::Accepted && !selectedMapId.isEmpty()) {
         exitRelocMode();
-        // 成功切换地图后，清理旧的路径和点位，刷新加载新地图
-        m_points = QJsonArray();
-        m_lines  = QJsonArray();
-        m_curves = QJsonArray();
-        m_charges = QJsonArray();
-        m_highPrecisionPoints = QJsonArray();
-        m_routeLoaded = false;
+        // 成功切换地图后，清理旧的路径、高级区域和点位，刷新加载新地图
+        clearRouteData();
         m_robot.posValid = false;
         loadMapById(selectedMapId, selectedMapName);
         Toast::success(this, switchSuccessMsg.isEmpty() ? "地图切换成功" : switchSuccessMsg);

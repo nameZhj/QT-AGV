@@ -27,7 +27,7 @@
 #include <QLabel>
 #include <QTimer>
 #include <QTcpSocket>
-#include <QElapsedTimer>
+#include <QPointer>
 #include <QDateTime>
 #include <QFrame>
 #include <QMessageBox>
@@ -540,36 +540,35 @@ void MainWindow::testNetworkLatency()
     s_probing = true;
 
     auto *socket = new QTcpSocket(this);
-    auto *timer = new QElapsedTimer;
-    timer->start();
+    const qint64 startTime = now;
+    QPointer<MainWindow> self(this);
 
     // 设定连接超时定时器 (1500ms)，防止挂起
-    QTimer::singleShot(1500, socket, [socket, timer]() {
+    QTimer::singleShot(1500, socket, [socket]() {
         if (socket && socket->state() != QAbstractSocket::ConnectedState) {
             s_probing = false;
             socket->abort();
             socket->deleteLater();
-            delete timer;
         }
     });
 
-    connect(socket, &QTcpSocket::connected, this, [this, socket, timer]() {
-        int elapsed = static_cast<int>(timer->elapsed());
-        m_networkLatency = qMax(1, elapsed);
+    connect(socket, &QTcpSocket::connected, this, [self, socket, startTime]() {
+        const int elapsed = static_cast<int>(QDateTime::currentMSecsSinceEpoch() - startTime);
         s_probing = false;
-        if (m_sbLatency) {
-            QString col = (m_networkLatency < 60) ? "#22c55e" : ((m_networkLatency < 150) ? "#eab308" : "#ef4444");
-            m_sbLatency->setText(QString("网络延迟: <span style='color:%1;'>%2 ms</span>").arg(col).arg(m_networkLatency));
+        if (self) {
+            self->m_networkLatency = qMax(1, elapsed);
+            if (self->m_sbLatency) {
+                QString col = (self->m_networkLatency < 60) ? "#22c55e" : ((self->m_networkLatency < 150) ? "#eab308" : "#ef4444");
+                self->m_sbLatency->setText(QString("网络延迟: <span style='color:%1;'>%2 ms</span>").arg(col).arg(self->m_networkLatency));
+            }
         }
         socket->disconnectFromHost();
         socket->deleteLater();
-        delete timer;
     });
 
-    connect(socket, &QTcpSocket::errorOccurred, this, [socket, timer](QAbstractSocket::SocketError) {
+    connect(socket, &QTcpSocket::errorOccurred, this, [socket](QAbstractSocket::SocketError) {
         s_probing = false;
         socket->deleteLater();
-        delete timer;
     });
 
     socket->connectToHost(ip, 8048);

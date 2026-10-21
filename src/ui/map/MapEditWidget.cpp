@@ -2056,10 +2056,12 @@ void MapEditWidget::loadMapData(std::function<void()> onDone)
 
 void MapEditWidget::loadRouteData()
 {
+    m_highLevelAreas = QJsonArray();
     ApiService::instance().loadEditedMap([this](int code, const QJsonObject &data) {
         if (code != 200) return;
         QString jsonStr = data.value("json").toString();
         if (jsonStr.isEmpty()) {
+            m_highLevelAreas = QJsonArray();
             renderMap();
             QTimer::singleShot(0, this, [this]{ fitView(); });
             return;

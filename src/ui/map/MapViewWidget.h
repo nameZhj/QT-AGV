@@ -125,6 +125,7 @@ private:
 
     void clearScene();
     void clearRouteItems();
+    void clearRouteData();
     void clearGridItems();
 
     void renderAll();
