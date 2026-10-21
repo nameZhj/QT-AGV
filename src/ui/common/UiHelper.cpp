@@ -1,3 +1,11 @@
+/**
+ * @file    UiHelper.cpp
+ * @module  GUILayer
+ * @brief   Implementation of standardized widget factory helpers.
+ * @deps    UiHelper.h, QPushButton, QDoubleSpinBox
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "UiHelper.h"
 #include "SpinBoxWheelFilter.h"
 #include <QSpinBox>
@@ -10,6 +18,7 @@
 #include <QLabel>
 #include <QIcon>
 
+// === [Section: SpinBox Factory Methods] ===
 QSpinBox* UiHelper::createSpinBox(int min, int max, int step, int value, QWidget *parent) {
     auto *sb = new QSpinBox(parent);
     sb->setRange(min, max);
@@ -31,6 +40,7 @@ QDoubleSpinBox* UiHelper::createDoubleSpinBox(double min, double max, double ste
     return sb;
 }
 
+// === [Section: Button Factory Methods] ===
 QPushButton* UiHelper::createPushButton(const QString &text, const QString &iconPath, const QString &objectName, QWidget *parent) {
     auto *btn = new QPushButton(text, parent);
     if (!iconPath.isEmpty()) {
@@ -56,6 +66,7 @@ QToolButton* UiHelper::createToolButton(const QString &text, const QString &icon
     return btn;
 }
 
+// === [Section: Table Setup & Layout Helpers] ===
 void UiHelper::setupStandardTable(QTableWidget *table, const QStringList &headers, bool alternatingRowColors) {
     if (!table) return;
     table->setColumnCount(headers.size());
@@ -67,6 +78,34 @@ void UiHelper::setupStandardTable(QTableWidget *table, const QStringList &header
     table->setSelectionMode(QAbstractItemView::SingleSelection);
     table->setAlternatingRowColors(alternatingRowColors);
     table->setShowGrid(true);
+}
+
+void UiHelper::setupTableColumns(QTableWidget *table, const QList<TableColumnSpec> &columns) {
+    if (!table) return;
+    table->setColumnCount(columns.size());
+    QStringList headers;
+    headers.reserve(columns.size());
+    for (const auto &col : columns) {
+        headers << col.title;
+    }
+    table->setHorizontalHeaderLabels(headers);
+    for (int i = 0; i < columns.size(); ++i) {
+        table->horizontalHeader()->setSectionResizeMode(i, columns[i].resizeMode);
+        if (columns[i].resizeMode == QHeaderView::Fixed && columns[i].fixedWidth > 0) {
+            table->setColumnWidth(i, columns[i].fixedWidth);
+        }
+    }
+}
+
+void UiHelper::initStandardTable(QTableWidget *table, const QList<TableColumnSpec> &columns, bool alternatingRowColors) {
+    if (!table) return;
+    setupTableColumns(table, columns);
+    table->horizontalHeader()->setHighlightSections(false);
+    table->verticalHeader()->setVisible(false);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setAlternatingRowColors(alternatingRowColors);
 }
 
 QHBoxLayout* UiHelper::createFormRow(const QString &labelText, QWidget *fieldWidget, int labelWidth) {
@@ -84,3 +123,4 @@ QHBoxLayout* UiHelper::createFormRow(const QString &labelText, QWidget *fieldWid
     }
     return layout;
 }
+

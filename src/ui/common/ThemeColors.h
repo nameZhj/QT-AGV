@@ -1,3 +1,11 @@
+/**
+ * @file    ThemeColors.h
+ * @module  GUILayer
+ * @brief   Unified theme palette and color constants for custom painted widgets.
+ * @deps    QColor
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QColor>

@@ -1,10 +1,17 @@
+/**
+ * @file    ToggleSwitch.h
+ * @module  GUILayer
+ * @brief   Modern iOS-style animated toggle switch widget.
+ * @deps    QAbstractButton, QPainter, QPropertyAnimation
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QAbstractButton>
 #include <QColor>
 
 class QPropertyAnimation;
-class QMouseEvent;
 
 /**
  * @brief 现代胶囊风格平滑滑动开关控件 (Toggle Switch)
@@ -22,10 +29,11 @@ class ToggleSwitch final : public QAbstractButton
     Q_PROPERTY(qreal offset READ offset WRITE setOffset)
 
 public:
+    // === [Section: Constructors & Destructor] ===
     explicit ToggleSwitch(QWidget *parent = nullptr);
     ~ToggleSwitch() override = default;
 
-    // ── 默认样式与动画常量 ──
+    // === [Section: Constants & Dimensions] ===
     static constexpr int    kDefaultWidth       = 40;   ///< 默认推荐宽度
     static constexpr int    kDefaultHeight      = 22;   ///< 默认推荐高度
     static constexpr int    kAnimDurationMs     = 180;  ///< 滑动动画时长 (ms)
@@ -34,6 +42,7 @@ public:
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
+    // === [Section: Properties & Accessors] ===
     qreal offset() const;
     void setOffset(qreal value);
 
@@ -47,13 +56,17 @@ public:
     void setKnobColor(const QColor &color);
 
 protected:
+    // === [Section: Event Handlers] ===
     void paintEvent(QPaintEvent *event) override;
     void checkStateSet() override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
 
 private:
+    // === [Section: Private Helpers & State] ===
     void animateToChecked(bool checked);
+    void paintTrack(class QPainter &p, const QRectF &track, qreal radius) const;
+    void paintKnob(class QPainter &p, const QRectF &track, qreal knobD) const;
 
     qreal m_offset = 0.0; // 0.0: Off, 1.0: On
     QPropertyAnimation *m_anim = nullptr;

@@ -1,4 +1,13 @@
+/**
+ * @file    TeleopController.cpp
+ * @layer   AGVModel
+ * @brief   Implementation of teleoperation speed calculator with ramp acceleration.
+ * @deps    TeleopController.h, TeleopInputHandler.h, ApiService.h, MqttService.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "TeleopController.h"
+#include "TeleopInputHandler.h"
 #include "app/AppConfig.h"
 #include "network/ApiService.h"
 #include "network/MqttService.h"
@@ -8,10 +17,6 @@
 #include <QTimer>
 #include <QKeyEvent>
 #include <QEvent>
-#include <QLineEdit>
-#include <QTextEdit>
-#include <QPlainTextEdit>
-#include <QComboBox>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSettings>
@@ -24,35 +29,32 @@ TeleopController &TeleopController::instance()
 }
 
 TeleopController::TeleopController(QObject *parent)
-    : QObject(parent)
-    , m_timer(new QTimer(this))
+    : QObject(parent), m_timer(new QTimer(this))
 {
     m_timer->setInterval(kDefaultTickIntervalMs);
     connect(m_timer, &QTimer::timeout, this, &TeleopController::onTick);
 
-    // 读取持久化速度设置，并受全局最大速度约束
     QSettings s;
-    double maxLin = MotionConfigManager::instance().maxSpeed();
-    double maxAng = MotionConfigManager::instance().maxAngularSpeedRad();
-    double savedLin = s.value(QStringLiteral("teleop/baseLinearSpeed"), kDefaultBaseLinear).toDouble();
-    double savedAng = s.value(QStringLiteral("teleop/baseAngularSpeed"), 45.0 * 3.14159265358979323846 / 180.0).toDouble();
-    m_baseLinearSpeed  = qBound(0.01, savedLin, maxLin);
-    m_baseAngularSpeed = qBound(0.01, savedAng, maxAng);
+    const double maxLin = MotionConfigManager::instance().maxSpeed();
+    const double maxAng = MotionConfigManager::instance().maxAngularSpeedRad();
+    const double defaultAngRad = kDefaultAngularSpeedDeg * MotionConfigManager::kDegToRad;
+    const double savedLin = s.value(QStringLiteral("teleop/baseLinearSpeed"), kDefaultBaseLinear).toDouble();
+    const double savedAng = s.value(QStringLiteral("teleop/baseAngularSpeed"), defaultAngRad).toDouble();
+    m_baseLinearSpeed  = qBound(kMinSpeedLimit, savedLin, maxLin);
+    m_baseAngularSpeed = qBound(kMinSpeedLimit, savedAng, maxAng);
 }
 
 TeleopController::~TeleopController()
 {
-    if (m_active) {
-        setActive(false);
-    }
+    if (m_active) setActive(false);
 }
 
 void TeleopController::setBaseSpeeds(double linear, double angular)
 {
-    double maxLin = MotionConfigManager::instance().maxSpeed();
-    double maxAng = MotionConfigManager::instance().maxAngularSpeedRad();
-    m_baseLinearSpeed  = qBound(0.01, linear, maxLin);
-    m_baseAngularSpeed = qBound(0.01, angular, maxAng);
+    const double maxLin = MotionConfigManager::instance().maxSpeed();
+    const double maxAng = MotionConfigManager::instance().maxAngularSpeedRad();
+    m_baseLinearSpeed  = qBound(kMinSpeedLimit, linear, maxLin);
+    m_baseAngularSpeed = qBound(kMinSpeedLimit, angular, maxAng);
 
     QSettings s;
     s.setValue(QStringLiteral("teleop/baseLinearSpeed"), m_baseLinearSpeed);
@@ -79,41 +81,29 @@ void TeleopController::setActive(bool on)
     setUserPreempted(on);
 
     if (on) {
-        // 启用：安装全局事件过滤器拦截遥控键、启动定时器、发布启用状态
-        if (qApp) {
-            qApp->installEventFilter(this);
-        }
+        if (qApp) qApp->installEventFilter(this);
         resetKeyStates();
         m_timer->start();
         publishTeleopEnable(true);
 
-        // 抢占控制权：统一使用 PUT /robot/navigation/control?command=pause navigation
         ApiService::instance().controlNavigation(QStringLiteral("pause navigation"), [](int code, const QJsonObject &resp) {
             qDebug() << "[TeleopController] 抢占控制权 pause navigation code:" << code << resp;
-            if (code != 200) {
-                qWarning("抢占控制权暂停导航失败 (HTTP %d)", code);
-            }
+            if (code != 200) qWarning("抢占控制权暂停导航失败 (HTTP %d)", code);
         });
     } else {
-        // 停用：安全停止定时器、复位按键、下发零速急停指令、移除事件过滤器
         m_timer->stop();
         resetKeyStates();
         emergencyStop();
 
-        if (qApp) {
-            qApp->removeEventFilter(this);
-        }
+        if (qApp) qApp->removeEventFilter(this);
         publishTeleopEnable(false);
         emit motionChanged(0.0, 0.0);
         emit brakeChanged(false);
         emit hoistChanged(0);
 
-        // 释放控制权恢复导航：统一使用 PUT /robot/navigation/control?command=continue navigation
         ApiService::instance().controlNavigation(QStringLiteral("continue navigation"), [](int code, const QJsonObject &resp) {
             qDebug() << "[TeleopController] 恢复导航 continue navigation code:" << code << resp;
-            if (code != 200) {
-                qWarning("恢复导航失败 (HTTP %d)", code);
-            }
+            if (code != 200) qWarning("恢复导航失败 (HTTP %d)", code);
         });
     }
 
@@ -137,225 +127,38 @@ void TeleopController::emergencyStop()
 bool TeleopController::eventFilter(QObject *obj, QEvent *event)
 {
     if (!m_active) return QObject::eventFilter(obj, event);
+    const QEvent::Type evType = event->type();
 
-    // 工业级安全看门狗：窗口失焦或系统切换 (Alt+Tab/切屏) 时，自动复位按键并下发急停，杜绝按键粘连
-    if (event->type() == QEvent::WindowDeactivate || event->type() == QEvent::ApplicationDeactivate) {
-        if (m_keyForward || m_keyBack || m_keyLeft || m_keyRight || m_keyHoistUp || m_keyHoistDown) {
-            qWarning().noquote() << QStringLiteral("[TeleopController Safety] 窗口失焦，触发安全急停与按键复位");
-            resetKeyStates();
-            emergencyStop();
-            emit motionChanged(0.0, 0.0);
-            emit hoistChanged(0);
-        }
+    if (evType == QEvent::WindowDeactivate || evType == QEvent::ApplicationDeactivate) {
+        TeleopInputHandler::handleWindowDeactivation(this);
+        return QObject::eventFilter(obj, event);
     }
 
-    // 遥控启用时，拦截 WASD/空格的 ShortcutOverride，防止组件通过快捷键系统消费
-    if (event->type() == QEvent::ShortcutOverride) {
+    if (evType == QEvent::ShortcutOverride) {
         auto *ke = static_cast<QKeyEvent *>(event);
-        if (isMovementKey(ke->key())) {
+        if (TeleopInputHandler::isMovementKey(ke->key())) {
             ke->accept();
             return true;
         }
     }
 
-    // 拦截键盘事件
-    if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
-        auto *ke = static_cast<QKeyEvent *>(event);
-        const int key = ke->key();
-        const bool pressed = (event->type() == QEvent::KeyPress);
-
-        // 显式追踪 Ctrl 键状态（不拦截，仅记录）
-        if (key == Qt::Key_Control) {
-            m_ctrlHeld = pressed;
-            return QObject::eventFilter(obj, event);
-        }
-
-        // 上下左右/空格：遥控启用时始终拦截，无论焦点在哪
-        if (isMovementKey(key)) {
-            if (ke->isAutoRepeat()) {
-                return true;   // 拦截自动重复事件，不往下传递给其它组件
-            }
-            handleKeyEvent(ke, pressed);
+    if (evType == QEvent::KeyPress || evType == QEvent::KeyRelease) {
+        if (TeleopInputHandler::handleFilteredKeyEvent(this, static_cast<QKeyEvent *>(event))) {
             return true;
-        }
-
-        // P/L 升降键：文本输入时放行，允许正常输入英文字母
-        if (isTeleopKey(key) && !focusIsTextInput()) {
-            if (ke->isAutoRepeat()) {
-                return true;
-            }
-            if (handleKeyEvent(ke, pressed)) {
-                return true;
-            }
         }
     }
 
     return QObject::eventFilter(obj, event);
 }
 
-bool TeleopController::isMovementKey(int key) const
-{
-    switch (key) {
-    case Qt::Key_W:
-    case Qt::Key_S:
-    case Qt::Key_A:
-    case Qt::Key_D:
-    case Qt::Key_Space:
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool TeleopController::isTeleopKey(int key) const
-{
-    switch (key) {
-    case Qt::Key_W:
-    case Qt::Key_S:
-    case Qt::Key_A:
-    case Qt::Key_D:
-    case Qt::Key_Space:
-    case Qt::Key_P:
-    case Qt::Key_L:
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool TeleopController::focusIsTextInput() const
-{
-    QWidget *w = qApp ? qApp->focusWidget() : nullptr;
-    if (!w) return false;
-    if (qobject_cast<QLineEdit *>(w))       return true;
-    if (qobject_cast<QTextEdit *>(w))       return true;
-    if (qobject_cast<QPlainTextEdit *>(w))  return true;
-    if (auto *cb = qobject_cast<QComboBox *>(w)) {
-        if (cb->isEditable()) return true;
-    }
-    return false;
-}
-
-bool TeleopController::handleKeyEvent(QKeyEvent *event, bool pressed)
-{
-    const int key = event->key();
-    switch (key) {
-    case Qt::Key_W:
-        if (m_keyForward != pressed) {
-            m_keyForward = pressed;
-            emit keyStateChanged(Qt::Key_W, pressed);
-        }
-        break;
-    case Qt::Key_S:
-        if (m_keyBack != pressed) {
-            m_keyBack = pressed;
-            emit keyStateChanged(Qt::Key_S, pressed);
-        }
-        break;
-    case Qt::Key_A:
-        if (m_keyLeft != pressed) {
-            m_keyLeft = pressed;
-            emit keyStateChanged(Qt::Key_A, pressed);
-        }
-        break;
-    case Qt::Key_D:
-        if (m_keyRight != pressed) {
-            m_keyRight = pressed;
-            emit keyStateChanged(Qt::Key_D, pressed);
-        }
-        break;
-    case Qt::Key_Space:
-        if (m_keyBrake != pressed) {
-            m_keyBrake = pressed;
-            emit keyStateChanged(Qt::Key_Space, pressed);
-        }
-        break;
-    case Qt::Key_P:     m_keyHoistUp   = pressed; break;
-    case Qt::Key_L:     m_keyHoistDown = pressed; break;
-    default: return false;
-    }
-
-    if (key == Qt::Key_Space) {
-        emit brakeChanged(m_keyBrake);
-    }
-    if (key == Qt::Key_P || key == Qt::Key_L) {
-        int dir = 0;
-        if (m_keyHoistUp)   dir = +1;
-        else if (m_keyHoistDown) dir = -1;
-        emit hoistChanged(dir);
-
-        m_wasHoisting = (m_keyHoistUp || m_keyHoistDown);
-    }
-
-    updateMotion();
-    return true;
-}
-
 void TeleopController::setVirtualKey(int key, bool pressed)
 {
-    // 未抢占控制权时忽略方向/转向虚拟键: 控制权必须由用户显式抢占 (点击"抢占控制权"/
-    // "启用遥控")，禁止任何按键操作被动接管车辆控制权。
-    // 例外: 刹车(空格 / 方向键盘中心方块)是安全动作，任何时候都可用，无需抢占控制权
-    if (!m_active && key != Qt::Key_Space) return;
-
-    switch (key) {
-    case Qt::Key_W:
-        if (m_keyForward != pressed) {
-            m_keyForward = pressed;
-            emit keyStateChanged(Qt::Key_W, pressed);
-        }
-        break;
-    case Qt::Key_S:
-        if (m_keyBack != pressed) {
-            m_keyBack = pressed;
-            emit keyStateChanged(Qt::Key_S, pressed);
-        }
-        break;
-    case Qt::Key_A:
-        if (m_keyLeft != pressed) {
-            m_keyLeft = pressed;
-            emit keyStateChanged(Qt::Key_A, pressed);
-        }
-        break;
-    case Qt::Key_D:
-        if (m_keyRight != pressed) {
-            m_keyRight = pressed;
-            emit keyStateChanged(Qt::Key_D, pressed);
-        }
-        break;
-    case Qt::Key_Space:
-        if (m_keyBrake != pressed) {
-            m_keyBrake = pressed;
-            emit keyStateChanged(Qt::Key_Space, pressed);
-            emit brakeChanged(m_keyBrake);
-
-            // 未抢占控制权时主定时器未运行，按住刹车期间临时启动它，
-            // 使其与"空格刹车"一致: 按住期间持续下发零速，松开即恢复
-            if (!m_active) {
-                if (pressed) m_timer->start();
-                else         m_timer->stop();
-            }
-        }
-        break;
-    default:
-        return;
-    }
-
-    updateMotion();
+    TeleopInputHandler::setVirtualKey(this, key, pressed);
 }
 
 bool TeleopController::isKeyPressed(int key) const
 {
-    switch (key) {
-    case Qt::Key_W:     return m_keyForward;
-    case Qt::Key_S:     return m_keyBack;
-    case Qt::Key_A:     return m_keyLeft;
-    case Qt::Key_D:     return m_keyRight;
-    case Qt::Key_Space: return m_keyBrake;
-    case Qt::Key_P:     return m_keyHoistUp;
-    case Qt::Key_L:     return m_keyHoistDown;
-    default: return false;
-    }
+    return TeleopInputHandler::isKeyPressed(this, key);
 }
 
 void TeleopController::stopAllMotion()
@@ -367,7 +170,6 @@ void TeleopController::stopAllMotion()
 
 void TeleopController::onTick()
 {
-    // Ctrl 线性加速渐增：每 tick 递增一步，松开立即恢复 1.0 倍率
     if (m_ctrlHeld) {
         m_ctrlHeldTicks = qMin(m_ctrlHeldTicks + 1, kBoostMaxTicks);
     } else {
@@ -376,7 +178,6 @@ void TeleopController::onTick()
 
     updateMotion();
 
-    // 升降：按住期间持续发送状态
     if (m_keyHoistUp) {
         publishHoistStatus(QStringLiteral("1"));
     } else if (m_keyHoistDown) {
@@ -390,7 +191,6 @@ void TeleopController::updateMotion()
     if (agvId.isEmpty() || !MqttService::instance().isConnected()) return;
 
     if (m_keyBrake) {
-        // 刹车状态：每 tick 强制发送零速
         const QByteArray zeroJson = QJsonDocument(QJsonObject{{"velocity", 0.0}}).toJson(QJsonDocument::Compact);
         MqttService::instance().publish(QStringLiteral("/rob/%1/linear_speed").arg(agvId), zeroJson);
         MqttService::instance().publish(QStringLiteral("/rob/%1/angular_speed").arg(agvId), zeroJson);
@@ -403,7 +203,6 @@ void TeleopController::updateMotion()
         return;
     }
 
-    // 计算加速倍率与当前目标速度 (严格受全局最大速度限制不可超速)
     const double mult = 1.0 + (static_cast<double>(m_ctrlHeldTicks) / kBoostMaxTicks) * (m_maxBoostMultiplier - 1.0);
     const double maxLin = MotionConfigManager::instance().maxSpeed();
     const double maxAng = MotionConfigManager::instance().maxAngularSpeedRad();
@@ -415,10 +214,9 @@ void TeleopController::updateMotion()
     if (m_keyLeft)     angular =  qMin(m_baseAngularSpeed * mult, maxAng);
     if (m_keyRight)    angular = -qMin(m_baseAngularSpeed * mult, maxAng);
 
-    const double linRounded = qRound(linear * 1000.0) / 1000.0;
-    const double angRounded = qRound(angular * 1000.0) / 1000.0;
+    const double linRounded = qRound(linear * kSpeedRoundFactor) / kSpeedRoundFactor;
+    const double angRounded = qRound(angular * kSpeedRoundFactor) / kSpeedRoundFactor;
 
-    // 速度值变化去重下发
     if (!m_hasPublishedLinear || linRounded != m_lastPublishedLinear) {
         MqttService::instance().publish(
             QStringLiteral("/rob/%1/linear_speed").arg(agvId),
@@ -471,16 +269,12 @@ void TeleopController::publishTeleopEnable(bool on)
 {
     const QString agvId = AppConfig::instance().agvId();
     if (agvId.isEmpty() || !MqttService::instance().isConnected()) return;
-    MqttService::instance().publish(
-        QStringLiteral("/rob/%1/teleop_enable").arg(agvId),
-        on ? "1" : "0");
+    MqttService::instance().publish(QStringLiteral("/rob/%1/teleop_enable").arg(agvId), on ? "1" : "0");
 }
 
 void TeleopController::publishHoistStatus(const QString &status)
 {
     const QString agvId = AppConfig::instance().agvId();
     if (agvId.isEmpty() || !MqttService::instance().isConnected()) return;
-    MqttService::instance().publish(
-        QStringLiteral("/rob/%1/hoisting_status").arg(agvId),
-        status.toUtf8());
+    MqttService::instance().publish(QStringLiteral("/rob/%1/hoisting_status").arg(agvId), status.toUtf8());
 }

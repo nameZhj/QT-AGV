@@ -1,3 +1,11 @@
+/**
+ * @file    StyleLoader.h
+ * @module  GUILayer
+ * @brief   Modular QSS stylesheet aggregator and dynamic runtime loader.
+ * @deps    QApplication, QFile, QDir
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QString>

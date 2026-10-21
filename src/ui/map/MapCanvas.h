@@ -1,44 +1,38 @@
+/**
+ * @file    MapCanvas.h
+ * @layer   GUI
+ * @brief   Underlying interactive QGraphicsView canvas handling panning, zooming, and coordinates.
+ * @deps    QGraphicsView, QGraphicsScene, MapCanvasRobotTracker.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsItem>
 #include <QJsonObject>
-#include <QMap>
-#include <QPixmap>
-
-// Info for rendering robots via MQTT
-struct CanvasRobotMarker {
-    QString carId;
-    QString carName;
-    double x = 0;
-    double y = 0;
-    double angle = 0;
-    QGraphicsItem *marker = nullptr;
-    QGraphicsTextItem *nameLabel = nullptr;
-};
+#include "MapCanvasRobotTracker.h"
 
 class MapCanvas : public QGraphicsView
 {
     Q_OBJECT
 public:
     explicit MapCanvas(QGraphicsScene *scene, QWidget *parent = nullptr);
-    ~MapCanvas() override;
+    ~MapCanvas() override = default;
 
     void setPanWithLeftButton(bool enabled);
     void resetPanState();
-    
-    // Coordinate transformation setup
+
     void setWorldInfo(double left, double bottom, double right, double top, double width, double height);
-    
-    void setCarId(const QString &carId); // Single tracking
+    void setCarId(const QString &carId);
 
     // ── 地图缩放与视图控制常量 ──
-    static constexpr double kMinScale      = 0.05;  ///< 最小缩放比例 (5%)
-    static constexpr double kMaxScale      = 20.0;  ///< 最大缩放比例 (2000%)
-    static constexpr double kZoomFactorIn  = 1.15;  ///< 单步放大比例系数
-    static constexpr double kZoomFactorOut = 1.0 / 1.15; ///< 单步缩小比例系数
-    
+    static constexpr double kMinScale      = 0.05;
+    static constexpr double kMaxScale      = 20.0;
+    static constexpr double kZoomFactorIn  = 1.15;
+    static constexpr double kZoomFactorOut = 1.0 / 1.15;
+
 signals:
     void transformChanged();
     void sceneClicked(const QPointF &scenePos, Qt::MouseButton btn);
@@ -57,43 +51,26 @@ protected:
     void leaveEvent(QEvent *e) override;
     void focusOutEvent(QFocusEvent *e) override;
     bool viewportEvent(QEvent *event) override;
-    bool event(QEvent *e) override;   // 处理 QNativeGestureEvent (捏合缩放/旋转)
-
-private slots:
-    void onMqttMessage(const QString &topic, const QByteArray &payload);
+    bool event(QEvent *e) override;
 
 private:
-    void drawRobot(const QString &carId);
-    QPointF worldToScene(double wx, double wy) const;
-    void initMqtt();
-    void disconnectMqtt();
     void pinchTriggered(class QPinchGesture *gesture);
-    void handleNativeGesture(class QNativeGestureEvent *e);   // 原生手势分发
+    void handleNativeGesture(class QNativeGestureEvent *e);
 
-private:
-    bool   m_panning = false;
+    MapCanvasRobotTracker *m_robotTracker = nullptr;
+
+    bool   m_panning           = false;
     bool   m_panWithLeftButton = true;
     QPoint m_lastMousePos;
 
     // Center-based rotation state
-    bool   m_rotating       = false;
-    double m_rotAngle       = 0.0;
-    double m_startViewAngle = 0.0;
-    QPointF m_rotStartMousePos;  // 按下时鼠标位置(用于计算相对中心的极角)
-    
-    // World coordinates mapping
-    double m_worldL = 0, m_worldB = 0, m_worldR = 0, m_worldT = 0;
-    double m_imgW   = 0, m_imgH   = 0;
-    bool m_worldInfoSet = false;
-
-    // Robot Tracking
-    QString m_trackedCarId = "1";
-    QMap<QString, CanvasRobotMarker> m_carInfos;
-    QPixmap m_robotPixmap;
+    bool    m_rotating         = false;
+    double  m_rotAngle         = 0.0;
+    double  m_startViewAngle   = 0.0;
+    QPointF m_rotStartMousePos;
 
     // Trackpad gestures state
-    bool m_justPinched = false;
-    bool m_gestureZoomActive = false;   // 原生捏合缩放手势进行中
-    bool m_gestureRotateActive = false; // 原生旋转手势进行中
+    bool m_justPinched         = false;
+    bool m_gestureZoomActive   = false;
+    bool m_gestureRotateActive = false;
 };
-

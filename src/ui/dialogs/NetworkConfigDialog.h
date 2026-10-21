@@ -1,12 +1,23 @@
+/**
+ * @file    NetworkConfigDialog.h
+ * @layer   GUILayer
+ * @brief   Network connection parameter setup dialog for REST and MQTT endpoints.
+ * @deps    QDialog
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>
-#include <QLineEdit>
-#include <QComboBox>
-#include <QPushButton>
-#include <QTextEdit>
-#include <QLabel>
-#include <QProcess>
+
+class QLineEdit;
+class QComboBox;
+class QPushButton;
+class QTextEdit;
+class QLabel;
+
+class NetworkConfigReader;
+class NetworkConfigApplier;
 
 /**
  * @brief AGV 机器人远程网络配置对话框
@@ -16,6 +27,9 @@
 class NetworkConfigDialog : public QDialog
 {
     Q_OBJECT
+    friend class NetworkConfigReader;
+    friend class NetworkConfigApplier;
+
 public:
     explicit NetworkConfigDialog(const QString &defaultIp,
                                  const QString &carName = "",
@@ -31,6 +45,8 @@ public:
     QString sshPwd() const { return m_appliedPwd.isEmpty() ? m_sshPwd : m_appliedPwd; }
     int sshPort() const { return m_appliedPort > 0 ? m_appliedPort : m_sshPort; }
 
+    void appendLog(const QString &text, const QString &color = "#cbd5e1");
+
 signals:
     void networkUpdated(const QString &oldIp, const QString &newIp);
     void sshCredentialsUpdated(const QString &user, const QString &pwd, int port);
@@ -42,11 +58,6 @@ private slots:
 
 private:
     void setupUI();
-    void appendLog(const QString &text, const QString &color = "#cbd5e1");
-    bool validateIPv4(const QString &ip, const QString &fieldName);
-    bool checkIpConnectivity(const QString &ip, int port, int timeoutMs = 1500);
-    bool runSshCommand(const QString &host, int port, const QString &user, const QString &pwd,
-                       const QString &command, QString &stdOut, QString &stdErr, int timeoutMs = 15000);
 
     QString m_originalIp;
     QString m_carName;
@@ -81,4 +92,3 @@ private:
 
     bool m_isBusy = false;
 };
-

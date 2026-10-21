@@ -1,3 +1,11 @@
+/**
+ * @file    MotionDialog.h
+ * @layer   GUILayer
+ * @brief   Quick modal dialog for editing AGV motion limits, speeds, and acceleration profiles.
+ * @deps    QDialog, QPoint, QTimer
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>
@@ -9,19 +17,20 @@ class QDoubleSpinBox;
 class QRadioButton;
 class QLabel;
 class QPushButton;
+struct RobotInfo;
+
+class MotionDialogTabs;
+class MotionDialogController;
 
 /**
  * @brief 平动转动控制弹窗 (对标参考界面)
- * 
- * 功能:
- * 1. 平动 Tab: 设置移动距离 (m)、vx 速度 (m/s)、vy 速度 (m/s)、模式 (里程模式 / 定位模式)
- * 2. 转动 Tab: 设置旋转角度 (°)、角速度 (°/s)
- * 3. 状态管理: 初始未运行 -> 运行中... -> 导航已完成 (或 取消导航 / 已暂停)
- * 4. 底部按钮: [取消导航] [暂无 / 暂停导航 / 继续导航] [发送]
+ * 包含平动参数、转动参数、状态跟踪、看门狗以及取消/暂停/继续导航控制。
  */
 class MotionDialog : public QDialog
 {
     Q_OBJECT
+    friend class MotionDialogTabs;
+    friend class MotionDialogController;
 
 public:
     explicit MotionDialog(QWidget *parent = nullptr);
@@ -47,18 +56,16 @@ private slots:
     void onSendClicked();
     void onCancelNavClicked();
     void onPauseNavClicked();
-    void onCurrentRobotInfoUpdated(const struct RobotInfo &info);
+    void onCurrentRobotInfoUpdated(const RobotInfo &info);
     void onMotionTimeout();
 
 private:
     void setupUi();
-    QWidget* createTranslationTab();
-    QWidget* createRotationTab();
-    void updateParamToolTips();
     void setRunningState(bool running, bool paused = false);
     void setCompletedState();
     void setCanceledState();
 
+private:
     // 窗口拖拽
     bool   m_dragging = false;
     QPoint m_dragPosition;

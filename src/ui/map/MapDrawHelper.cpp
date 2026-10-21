@@ -1,3 +1,11 @@
+/**
+ * @file    MapDrawHelper.cpp
+ * @module  GUILayer
+ * @brief   Implementation of coordinate transformation and geometric map primitives helper.
+ * @deps    MapDrawHelper.h, ThemeColors.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "MapDrawHelper.h"
 #include <QPainter>
 #include <QPainterPath>

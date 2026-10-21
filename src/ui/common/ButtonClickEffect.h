@@ -1,3 +1,11 @@
+/**
+ * @file    ButtonClickEffect.h
+ * @module  GUILayer
+ * @brief   Event filter providing rebound visual click animations for push buttons.
+ * @deps    QObject, QEvent, QPushButton
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QObject>
@@ -17,29 +25,28 @@ class ButtonClickEffect final : public QObject
     Q_OBJECT
 
 public:
+    // === [Section: Constructors & Destructor] ===
     explicit ButtonClickEffect(QObject *parent = nullptr);
     ~ButtonClickEffect() override = default;
 
-    // ── 动效参数常量 (消除硬编码魔数) ──
+    // === [Section: Constants] ===
     static constexpr int    kFadeOutDurationMs = 70;   ///< 按下淡化时长 (ms)
     static constexpr int    kFadeInDurationMs  = 140;  ///< 弹起恢复时长 (ms)
     static constexpr double kNormalOpacity     = 1.0;   ///< 默认不透明度
     static constexpr double kPressedOpacity    = 0.55;  ///< 按下状态不透明度
 
-    /**
-     * @brief 获取当前动效是否全局启用
-     */
+    // === [Section: Control & Status] ===
     bool isEnabled() const;
-
-    /**
-     * @brief 全局启用或停用按钮点击动效
-     */
     void setEnabled(bool enabled);
 
 protected:
+    // === [Section: Event Filtering] ===
     bool eventFilter(QObject *obj, QEvent *event) override;
 
 private:
+    // === [Section: Private Animation Helpers] ===
+    void triggerClickAnimation(class QAbstractButton *btn);
+
     bool m_enabled = true;
 };
 

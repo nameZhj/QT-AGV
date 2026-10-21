@@ -1,3 +1,11 @@
+/**
+ * @file    ZipUtil.h
+ * @module  CoreTopology
+ * @brief   Zip archive extractor utility for map packages.
+ * @deps    QDir, QFile, QByteArray
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QString>
@@ -46,4 +54,3 @@ public:
                             QString *errorMessage = nullptr,
                             int timeoutMs = 30000);
 };
-

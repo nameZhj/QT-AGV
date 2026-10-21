@@ -1,3 +1,11 @@
+/**
+ * @file    AudioManagerDialog.h
+ * @layer   GUILayer
+ * @brief   Audio file manager and sound notification settings dialog.
+ * @deps    none
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>
@@ -46,9 +54,7 @@ private:
     void playLocal(const QString &name, const QString &filePath);
     void stopPlayback();
 
-    /** 音频缓存目录 (exe 同级 mediaFile)，不存在时自动创建 */
     static QString mediaDir();
-    /** 本地缓存文件路径 */
     static QString cachedPath(const QString &name);
     QString currentAudioName() const;
 
@@ -62,7 +68,8 @@ private:
 
     QMediaPlayer *m_player    = nullptr;
     QAudioOutput *m_audioOut  = nullptr;
-    QString       m_playingName;            ///< 当前正在播放的音频名
+    QString       m_playingName;
     PlayState     m_playState = PlayState::Stopped;
-};
 
+    friend class AudioManagerController;
+};

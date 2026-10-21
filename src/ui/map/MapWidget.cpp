@@ -1,7 +1,18 @@
+/**
+ * @file    MapWidget.cpp
+ * @module  GUILayer
+ * @brief   Implementation of map tabbed view container.
+ * @deps    MapWidget.h, MapViewWidget.h, MapEditWidget.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "MapWidget.h"
+#include "MapWidgetDialogs.h"
 #include "network/ApiService.h"
 #include "app/AppConfig.h"
 #include <QPushButton>
+#include <QLabel>
+#include <QListWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QListWidgetItem>
@@ -19,6 +30,7 @@
 #include <QHttpMultiPart>
 #include <QFile>
 #include <QDesktopServices>
+#include <QPointer>
 
 MapWidget::MapWidget(QWidget *parent)
     : QWidget(parent)
@@ -98,14 +110,15 @@ void MapWidget::getList()
     query["pageNum"] = m_pageNum;
     query["pageSize"] = m_pageSize;
 
-    ApiService::instance().listMap(query, [this](int code, const QJsonObject &data) {
-        if (code != 200) return;
-        m_mapList = data.value("rows").toArray();
-        m_total = data.value("total").toInt();
+    QPointer<MapWidget> self = this;
+    ApiService::instance().listMap(query, [self](int code, const QJsonObject &data) {
+        if (!self || code != 200) return;
+        self->m_mapList = data.value("rows").toArray();
+        self->m_total = data.value("total").toInt();
 
-        m_listWidget->clear();
-        for (int i = 0; i < m_mapList.size(); ++i) {
-            QJsonObject map = m_mapList[i].toObject();
+        self->m_listWidget->clear();
+        for (int i = 0; i < self->m_mapList.size(); ++i) {
+            QJsonObject map = self->m_mapList[i].toObject();
             QString name = map.value("mapName").toString();
             QString remark = map.value("remark").toString();
             QString delFlag = map.value("delFlag").toString();
@@ -127,17 +140,17 @@ void MapWidget::getList()
                 QString mapHost = AppConfig::instance().mapHost();
                 QString imageUrl = QString("%1%2_%3/%4/thumbnail.png")
                     .arg(mapHost, name, mapId, tilemapPath);
-                ApiService::instance().downloadFile(imageUrl, [item](bool ok, const QByteArray &imgData) {
-                    if (ok) {
-                        QPixmap pixmap;
-                        if (pixmap.loadFromData(imgData)) {
-                            item->setIcon(pixmap.scaled(200, 200, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                        }
+                ApiService::instance().downloadFile(imageUrl, [self, item](bool ok, const QByteArray &imgData) {
+                    if (!ok || !self || !self->m_listWidget) return;
+                    if (self->m_listWidget->row(item) < 0) return;
+                    QPixmap pixmap;
+                    if (pixmap.loadFromData(imgData)) {
+                        item->setIcon(pixmap.scaled(200, 200, Qt::KeepAspectRatio, Qt::SmoothTransformation));
                     }
                 });
             }
 
-            m_listWidget->addItem(item);
+            self->m_listWidget->addItem(item);
         }
     });
 }
@@ -154,126 +167,16 @@ void MapWidget::onRefresh()
 
 void MapWidget::showAddDialog()
 {
-    QDialog dlg(this);
-    dlg.setWindowTitle("添加地图");
-    QFormLayout *form = new QFormLayout(&dlg);
-
-    QLineEdit *nameEdit = new QLineEdit;
-    QTextEdit *remarkEdit = new QTextEdit;
-    remarkEdit->setMaximumHeight(60);
-
-    // 文件选择
-    QLineEdit *pgmPath = new QLineEdit;
-    QPushButton *pgmBtn = new QPushButton("选择");
-    QLineEdit *yamlPath = new QLineEdit;
-    QPushButton *yamlBtn = new QPushButton("选择");
-    QLineEdit *pbStreamPath = new QLineEdit;
-    QPushButton *pbStreamBtn = new QPushButton("选择");
-    QLineEdit *reflectorBinPath = new QLineEdit;
-    QPushButton *reflectorBinBtn = new QPushButton("选择");
-    QLineEdit *reflectorJsonPath = new QLineEdit;
-    QPushButton *reflectorJsonBtn = new QPushButton("选择");
-
-    pgmPath->setReadOnly(true);
-    yamlPath->setReadOnly(true);
-    pbStreamPath->setReadOnly(true);
-    reflectorBinPath->setReadOnly(true);
-    reflectorJsonPath->setReadOnly(true);
-
-    connect(pgmBtn, &QPushButton::clicked, [pgmPath]() {
-        QString f = QFileDialog::getOpenFileName(nullptr, "选择PGM文件", "", "PGM Files (*.pgm)");
-        if (!f.isEmpty()) pgmPath->setText(f);
+    MapWidgetDialogs::showAddDialog(this, [this]() {
+        getList();
     });
-    connect(yamlBtn, &QPushButton::clicked, [yamlPath]() {
-        QString f = QFileDialog::getOpenFileName(nullptr, "选择YAML文件", "", "YAML Files (*.yaml)");
-        if (!f.isEmpty()) yamlPath->setText(f);
-    });
-    connect(pbStreamBtn, &QPushButton::clicked, [pbStreamPath]() {
-        QString f = QFileDialog::getOpenFileName(nullptr, "选择PBStream文件", "", "PBStream Files (*.pbstream)");
-        if (!f.isEmpty()) pbStreamPath->setText(f);
-    });
-    connect(reflectorBinBtn, &QPushButton::clicked, [reflectorBinPath]() {
-        QString f = QFileDialog::getOpenFileName(nullptr, "选择反光柱bin文件", "", "BIN Files (*.bin)");
-        if (!f.isEmpty()) reflectorBinPath->setText(f);
-    });
-    connect(reflectorJsonBtn, &QPushButton::clicked, [reflectorJsonPath]() {
-        QString f = QFileDialog::getOpenFileName(nullptr, "选择反光柱json文件", "", "JSON Files (*.json)");
-        if (!f.isEmpty()) reflectorJsonPath->setText(f);
-    });
-
-    form->addRow("地图名称:", nameEdit);
-    form->addRow("描述:", remarkEdit);
-    form->addRow("PGM文件:", pgmPath);
-    form->addRow("", pgmBtn);
-    form->addRow("YAML文件:", yamlPath);
-    form->addRow("", yamlBtn);
-    form->addRow("PBStream文件:", pbStreamPath);
-    form->addRow("", pbStreamBtn);
-    form->addRow("反光柱bin文件:", reflectorBinPath);
-    form->addRow("", reflectorBinBtn);
-    form->addRow("反光柱json文件:", reflectorJsonPath);
-    form->addRow("", reflectorJsonBtn);
-
-    QDialogButtonBox *btns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    btns->button(QDialogButtonBox::Ok)->setText("确定");
-    btns->button(QDialogButtonBox::Cancel)->setText("取消");
-    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    form->addRow(btns);
-
-    if (dlg.exec() == QDialog::Accepted) {
-        if (nameEdit->text().isEmpty()) {
-            QMessageBox::warning(this, "提示", "地图名称不能为空");
-            return;
-        }
-
-        // 使用 addAgvMap API
-        QJsonObject data;
-        data["mapName"] = nameEdit->text();
-        data["remark"] = remarkEdit->toPlainText();
-
-        ApiService::instance().addAgvMap(data, [this](int code, const QJsonObject &) {
-            if (code == 200) {
-                QMessageBox::information(this, "成功", "添加成功");
-                getList();
-            }
-        });
-    }
 }
 
 void MapWidget::showRenameDialog(const QJsonObject &mapData)
 {
-    QDialog dlg(this);
-    dlg.setWindowTitle("修改地图信息");
-    QFormLayout *form = new QFormLayout(&dlg);
-
-    QLineEdit *nameEdit = new QLineEdit(mapData.value("mapName").toString());
-    QTextEdit *remarkEdit = new QTextEdit(mapData.value("remark").toString());
-    remarkEdit->setMaximumHeight(60);
-
-    form->addRow("地图名称:", nameEdit);
-    form->addRow("描述:", remarkEdit);
-
-    QDialogButtonBox *btns2 = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    btns2->button(QDialogButtonBox::Ok)->setText("确定");
-    btns2->button(QDialogButtonBox::Cancel)->setText("取消");
-    connect(btns2, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(btns2, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    form->addRow(btns2);
-
-    if (dlg.exec() == QDialog::Accepted) {
-        QJsonObject data;
-        data["mapId"] = mapData.value("mapId");
-        data["mapName"] = nameEdit->text();
-        data["remark"] = remarkEdit->toPlainText();
-
-        ApiService::instance().updateMap(data, [this](int code, const QJsonObject &) {
-            if (code == 200) {
-                QMessageBox::information(this, "成功", "修改成功");
-                getList();
-            }
-        });
-    }
+    MapWidgetDialogs::showRenameDialog(this, mapData, [this]() {
+        getList();
+    });
 }
 
 void MapWidget::deleteMap(const QJsonObject &mapData)

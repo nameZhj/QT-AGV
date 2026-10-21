@@ -1,3 +1,11 @@
+/**
+ * @file    LoadingDialog.h
+ * @module  GUILayer
+ * @brief   Modal spinner loading dialog for blocking asynchronous network operations.
+ * @deps    QDialog, QLabel, QMovie
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>
@@ -21,12 +29,20 @@ class LoadingDialog : public QDialog
     Q_OBJECT
 
 public:
+    // === [Section: Constants & Dimensions] ===
+    static constexpr int    kDefaultWidth   = 320;
+    static constexpr int    kDefaultHeight  = 116;
+    static constexpr int    kDefaultTimeout = 45000;
+    static constexpr double kCardRadius     = 10.0;
+
+    // === [Section: Constructors & Destructor] ===
     explicit LoadingDialog(const QString &message,
                           QWidget *parent = nullptr,
                           Qt::WindowModality modality = Qt::WindowModal,
-                          int timeoutMs = 45000);
+                          int timeoutMs = kDefaultTimeout);
     ~LoadingDialog() override;
 
+    // === [Section: Public Operations] ===
     /// 动态修改提示文本
     void setMessage(const QString &msg);
 
@@ -37,16 +53,18 @@ public:
     void setTimeout(int timeoutMs);
 
 protected:
+    // === [Section: Event Handlers] ===
     void paintEvent(QPaintEvent *event) override;
     void showEvent(QShowEvent *event) override;
 
 private:
+    // === [Section: Private Helpers & UI Setup] ===
     void setupUI(const QString &message);
     void centerOnParentOrScreen();
 
-private:
     QLabel       *m_label        = nullptr;
     QProgressBar *m_progressBar  = nullptr;
     QTimer       *m_timeoutTimer = nullptr;
     bool          m_finished     = false;
 };
+

@@ -1,9 +1,19 @@
+/**
+ * @file    TaskLogWidget.h
+ * @module  GUILayer
+ * @brief   Real-time execution log tree widget with status icons and filtering.
+ * @deps    QWidget, QTreeWidget
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QWidget>
-#include <QTreeWidget>
 #include <QJsonArray>
 #include <QJsonObject>
+
+class QTreeWidget;
+class QTreeWidgetItem;
 
 class TaskLogWidget : public QWidget
 {
@@ -25,4 +35,3 @@ private:
 
     QTreeWidget *m_tree = nullptr;
 };
-

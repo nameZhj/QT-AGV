@@ -55,46 +55,59 @@
 
 ## 软件架构与目录结构
 
-系统严格遵循单向依赖架构规范：`ui -> core -> network -> app / utils`。详细架构指南与 AI 编程助手准则见 [AGENT.md](AGENT.md)。
+系统严格遵循单向依赖与四层模块化规范：`ui/widgets -> core -> network -> app/utils`。详细开发者指南见 [docs/dev/development_guide.md](docs/dev/development_guide.md) 与 [AGENT.md](AGENT.md)。
 
 ```
 QT-AGV/
-├── CMakeLists.txt              # CMake 构建配置
-├── main.cpp                    # 程序主入口与样式加载
+├── CMakeLists.txt              # CMake 模块化构建配置 (按 CORE/WIDGET/NETWORK/UTIL/RESOURCE 分组)
+├── IntelligentAGVSchedulingSystem.pro # Qt Creator 工程配置文件 (多层结构同步)
 ├── AGENT.md                    # AI 编程助手与开发者架构规范
-├── docs/                       # 业务与接口规范文档
-│   └── device_flow_apis.md     # 机器人硬件/服务端接口规范
+├── docs/                       # 规范化文档根目录
+│   ├── api/                    # 业务与硬件接口协议规范
+│   │   ├── device_flow_apis.md         # AGV 设备管理全流程 HTTP API 接口规格
+│   │   └── RouteNetworkApiDoc.md       # 工业级 AGV/AMR 路网拓扑与 API 规范
+│   └── dev/                    # 架构与开发规范文档
+│       └── development_guide.md        # 开发者开发与架构指南
 ├── src/
-│   ├── app/                    # 全局应用配置与常量
+│   ├── main.cpp                # 程序主入口与样式加载
+│   ├── app/                    # 全局应用配置与常量 (UTIL_SOURCES)
 │   │   ├── AppConfig.h/.cpp            # 设置持久化与网络参数配置
 │   │   └── AppConstants.h              # 窗口尺寸、定时器轮询间隔常量
-│   ├── network/                # 网络通信层 (REST API 与 MQTT)
+│   ├── network/                # 网络通信层 (REST API 与 MQTT, NETWORK_SOURCES)
 │   │   ├── ApiService.h/.cpp           # REST API 核心服务单例
 │   │   ├── MqttService.h/.cpp          # Qt MQTT 客户端服务
 │   │   ├── RouteNetworkApi.h/.cpp      # 路网 GeoJSON 通信接口
 │   │   └── NetworkConstants.h          # 集中收拢所有 HTTP/MQTT 常量与 JSON 键名
-│   ├── core/                   # 核心数据管理与控制算法 (零 UI 依赖)
+│   ├── core/                   # 核心业务调度与状态池 (零 UI 依赖, CORE_SOURCES)
 │   │   ├── MotionConfigManager.h/.cpp  # 运动控制参数管理与持久化
 │   │   ├── AlignConfigManager.h/.cpp   # 二次对位与货架参数管理
 │   │   ├── RobotInfoManager.h/.cpp     # 机器人状态数据池
 │   │   ├── TaskChainManager.h/.cpp     # 任务链与调度业务流
+│   │   ├── RouteNetworkValidator.h/.cpp# 拓扑路网有效性与逻辑规则校验器
+│   │   ├── RouteFeatureSelect.h/.cpp   # 拓扑元素特征筛选枚举与模型
 │   │   └── TeleopController.h/.cpp     # 键盘遥控与安全刹车保护
-│   ├── utils/                  # 独立基础工具库
+│   ├── utils/                  # 独立基础工具库 (UTIL_SOURCES)
 │   │   ├── JsonUtil.h/.cpp             # JSON 读写与安全字段提取
 │   │   ├── MapPgmUtil.h/.cpp           # PGM / YAML 地图文件二进制解析
 │   │   └── ZipUtil.h/.cpp              # 资源包解压工具
-│   ├── ui/                     # 用户交互与界面展示层
+│   ├── ui/                     # 界面视图与交互层 (WIDGET_SOURCES)
 │   │   ├── mainwindow/                 # 顶层主窗口框架
 │   │   ├── common/                     # 通用组件与工厂 (UiHelper, StyleLoader, BaseDialog, ThemeColors)
 │   │   ├── dialogs/                    # 业务对话框 (BaseDialog 派生)
 │   │   ├── map/                        # 地图监控与拓扑编辑 (MapDrawHelper 坐标运算)
 │   │   ├── task/                       # 任务链编排与执行日志
 │   │   └── control/                    # 仪表盘、十字摇杆与参数配置树 (ConfigMetadataHelper)
-│   └── resources/              # 资源与模块化 QSS 样式表
+│   ├── widgets/                # 独立/扩展 UI 控件库 (CMake 自动合并入 WIDGET_SOURCES)
+│   └── resources/              # 资源与模块化 QSS 样式表 (RESOURCE_FILES)
 │       ├── resources.qrc               # 资源清单
+│       ├── app.rc.in                   # Windows 应用程序图标清单模板
 │       ├── qss/                        # 模块化 QSS (base, mainwindow, dialogs, map, task, control)
 │       └── icons/                      # 统一矢量图标库 (.svg / .ico)
-└── installer/                  # Inno Setup 自动化打包目录
+└── installer/                  # Inno Setup 自动化安装包打包目录
+    ├── build_installer.bat             # 一键自动编译与打包脚本 (windeployqt + Inno Setup)
+    ├── installer.iss                   # Inno Setup 脚本配置
+    ├── Languages/                      # 多语言配置 (ChineseSimplified.isl)
+    └── output/                         # 安装包编译产物输出目录
 ```
 
 ---

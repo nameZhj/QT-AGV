@@ -1,3 +1,11 @@
+/**
+ * @file    NetworkConstants.h
+ * @module  DataComm
+ * @brief   Centralized definitions of REST endpoints, MQTT topics, and JSON payload keys.
+ * @deps    None (Header-only constants)
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QString>

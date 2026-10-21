@@ -1,3 +1,11 @@
+/**
+ * @file    MapPaintCanvas.h
+ * @module  GUILayer
+ * @brief   Freehand drawing canvas for occupancy grid obstacle erasure and painting.
+ * @deps    QWidget, QPainter, QImage
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QWidget>
@@ -74,4 +82,3 @@ private:
     static constexpr int kMaxStack = 30;
     static constexpr double kMaxScale = 8.0;
 };
-

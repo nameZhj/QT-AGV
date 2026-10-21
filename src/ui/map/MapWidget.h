@@ -1,11 +1,20 @@
+/**
+ * @file    MapWidget.h
+ * @module  GUILayer
+ * @brief   Tabbed container hosting map monitoring and map editing view modes.
+ * @deps    QWidget, MapViewWidget, MapEditWidget
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QWidget>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QListWidget>
-#include <QLabel>
-#include <QPushButton>
+
+class QListWidget;
+class QLabel;
+class QPushButton;
 
 // 对应 map/index.vue - 地图管理
 // 包含地图卡片列表、新增/重命名/删除/下载/下发地图、导航、编辑路网
@@ -45,4 +54,3 @@ private:
     int m_pageSize = 12;
     int m_total = 0;
 };
-

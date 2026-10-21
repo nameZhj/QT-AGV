@@ -1,3 +1,11 @@
+/**
+ * @file    ApiService.h
+ * @module  DataComm
+ * @brief   Centralized HTTP RESTful client for device communication, telemetry polling, and dispatch APIs.
+ * @deps    QNetworkAccessManager, QJsonObject, AppConfig
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QObject>
@@ -216,4 +224,3 @@ private:
 
     QNetworkAccessManager *m_manager = nullptr;
 };
-

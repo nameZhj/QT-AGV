@@ -1,3 +1,11 @@
+/**
+ * @file    Toast.h
+ * @module  GUILayer
+ * @brief   Non-intrusive floating toast notification component with auto-dismiss timer.
+ * @deps    QWidget, QTimer, QGraphicsOpacityEffect
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QWidget>
@@ -19,6 +27,7 @@ class Toast final : public QWidget
     Q_OBJECT
 
 public:
+    // === [Section: Enums & Types] ===
     enum Type {
         Success,
         Error,
@@ -27,15 +36,18 @@ public:
     };
     Q_ENUM(Type)
 
+    // === [Section: Public Static Factory API] ===
     static void show(QWidget *parent, const QString &message, Type type = Success, int durationMs = 2200);
     static void success(QWidget *parent, const QString &message, int durationMs = 2200) { show(parent, message, Success, durationMs); }
     static void error(QWidget *parent, const QString &message, int durationMs = 2200)   { show(parent, message, Error, durationMs); }
     static void info(QWidget *parent, const QString &message, int durationMs = 2200)    { show(parent, message, Info, durationMs); }
     static void warning(QWidget *parent, const QString &message, int durationMs = 2200) { show(parent, message, Warning, durationMs); }
 
+    // === [Section: Constructors & Destructor] ===
     ~Toast() override;
 
 protected:
+    // === [Section: Event Handlers] ===
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     void enterEvent(QEnterEvent *event) override;
 #else
@@ -45,6 +57,7 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    // === [Section: Private Helpers & Animation] ===
     explicit Toast(QWidget *topLevel, const QString &message, Type type, int durationMs);
 
     void startFadeIn();
@@ -54,6 +67,7 @@ private:
     static void repositionAll();
     static void cleanExpired();
 
+    // === [Section: State & Timers] ===
     int m_durationMs = 2200;
     int m_remainingMs = 2200;
     qint64 m_lastTickTime = 0;

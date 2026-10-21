@@ -1,8 +1,17 @@
+/**
+ * @file    MapUploadDialog.h
+ * @layer   GUILayer
+ * @brief   Map package archive import and synchronization upload dialog.
+ * @deps    MapUploadStyle.h, MapUploadHandler.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>
-#include <QLineEdit>
-#include <QPushButton>
+
+class QLineEdit;
+class QPushButton;
 
 class MapUploadDialog : public QDialog
 {
@@ -24,7 +33,6 @@ private slots:
 
 private:
     void setupUI();
-    void autoDetectSiblings(const QString &chosenPath);
 
     QLineEdit *m_nameEdit = nullptr;
     QLineEdit *m_pgmEdit = nullptr;
@@ -35,5 +43,6 @@ private:
 
     QPushButton *m_uploadBtn = nullptr;
     QPushButton *m_cancelBtn = nullptr;
-};
 
+    friend class MapUploadHandler;
+};

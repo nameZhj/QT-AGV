@@ -1,3 +1,11 @@
+/**
+ * @file    EditConfigWidget.h
+ * @layer   GUILayer
+ * @brief   Hierarchical tree widget for editing and synchronizing robot motion and system configs.
+ * @deps    QWidget, ConfigMetadataHelper, ApiService
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QWidget>
@@ -11,6 +19,11 @@ class QTreeWidgetItem;
 class QTableWidget;
 class QLineEdit;
 
+class EditConfigDataLoader;
+class EditConfigRouteSync;
+class EditConfigTableBuilder;
+class EditConfigParamEditor;
+
 /**
  * @brief 机器人及硬件各模块配置参数树形编辑器视图 (对应 Vue 端 edit-config)
  * 包含加载/保存/下载/上传配置文件，参数分组显示和可视化编辑。
@@ -18,6 +31,11 @@ class QLineEdit;
 class EditConfigWidget : public QWidget
 {
     Q_OBJECT
+    friend class EditConfigDataLoader;
+    friend class EditConfigRouteSync;
+    friend class EditConfigTableBuilder;
+    friend class EditConfigParamEditor;
+
 public:
     explicit EditConfigWidget(QWidget *parent = nullptr);
 

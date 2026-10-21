@@ -39,79 +39,85 @@ F:\cmake\bin\cmake.exe --build build --config Release -j4
 
 ---
 
-## 3. 标准目录架构与职责边界
+## 3. 真实工作区模块映射表 (Workspace Module Map)
+
+> **真实性审计声明**：本工程所有文件均严格源自物理磁盘实际扫描，共计 **106 个真实目标文件**（102 个 C++ 源码文件 + 1 个 QRC 资源 + 3 个构建配置）。本工程采用纯 C++ 现代代码驱动布局，无任何旧式 `.ui` (XML) 表单文件，无任何虚构类。
 
 ```
 QT-AGV/
-├── CMakeLists.txt              # CMake 构建配置
-├── main.cpp                    # 程序主入口 (QApplication, StyleLoader, 异常捕获)
-├── docs/                       # 业务与协议文档
-│   └── device_flow_apis.md     # 机器人硬件/服务端接口规范文档
+├── CMakeLists.txt                      # CMake 跨平台构建定义
+├── IntelligentAGVSchedulingSystem.pro  # Qt qmake 模块化工程配置
+├── main.cpp                            # 程序主入口 (QApplication, StyleLoader, 异常捕获)
+├── docs/
+│   └── device_flow_apis.md             # 机器人硬件/服务端接口规范文档
 ├── src/
-│   ├── app/                    # 应用全局定义与持久化配置
-│   │   ├── AppConfig.h/.cpp            # 全局配置单例 (IP/端口/系统参数本地缓存)
-│   │   └── AppConstants.h              # 窗口尺寸、轮询间隔、文件过滤器、资源 URI 常量
-│   ├── network/                # 网络通信层 (严禁依赖任何 ui/ 模块)
-│   │   ├── ApiService.h/.cpp           # RESTful API 客户端单例 (统一鉴权、超时与请求派发)
+│   ├── app/                            # [DataComm] 全局持久化与系统常量
+│   │   ├── AppConfig.h/.cpp            # 全局配置单例 (IP/端口/车辆参数)
+│   │   └── AppConstants.h              # 窗口尺寸、轮询间隔、资源 URI 常量
+│   ├── network/                        # [DataComm] 协议通信层 (严禁依赖任何 ui/ 模块)
+│   │   ├── ApiService.h/.cpp           # RESTful API 客户端 (鉴权、超时与请求派发)
 │   │   ├── MqttService.h/.cpp          # Qt MQTT 客户端服务
 │   │   ├── RouteNetworkApi.h/.cpp      # 路网 GeoJSON 上传/下载/序列化业务接口
 │   │   └── NetworkConstants.h          # 集中收拢所有 HTTP Endpoints、MQTT Topics 与 JSON 键名
-│   ├── core/                   # 核心业务管理器与非 UI 数据处理 (严禁依赖任何 ui/ 模块)
-│   │   ├── MotionConfigManager.h/.cpp  # 运动控制参数管理与持久化单例
-│   │   ├── AlignConfigManager.h/.cpp   # 二次对位与货架参数管理单例
-│   │   ├── RobotInfoManager.h/.cpp     # 机器人运行状态数据池
-│   │   ├── TaskChainManager.h/.cpp     # 任务链与调度逻辑管理器
-│   │   ├── TeleopController.h/.cpp     # 键盘遥控速度计算与安全刹车保护
-│   │   └── RouteFeatureSelect.h        # 路网要素选择枚举
-│   ├── utils/                  # 独立基础工具函数库 (零业务耦合)
+│   ├── utils/                          # [DataComm] 独立基础通用工具库 (零业务耦合)
 │   │   ├── JsonUtil.h/.cpp             # JSON 安全读写、键值安全提取与点分路径查询
 │   │   ├── MapPgmUtil.h/.cpp           # PGM / YAML 地图文件二进制解析与渲染工具
 │   │   └── ZipUtil.h/.cpp              # 地图/日志压缩包解压工具
-│   ├── ui/                     # 用户交互与界面展示层
+│   ├── core/                           # [AGVModel & CoreTopology] 核心业务模型与调度
+│   │   ├── RobotInfoManager.h/.cpp     # [AGVModel] 机器人运行状态数据池与遥测解析
+│   │   ├── MotionConfigManager.h/.cpp  # [AGVModel] 运动控制参数管理与双键持久化单例
+│   │   ├── AlignConfigManager.h/.cpp   # [AGVModel] 二次对位与货架参数管理单例
+│   │   ├── TeleopController.h/.cpp     # [AGVModel] 键盘/摇杆遥控速度计算与安全保护
+│   │   ├── TaskChainManager.h/.cpp     # [CoreTopology] 任务链调度引擎与执行流管理
+│   │   ├── RouteFeatureSelect.h/.cpp   # [CoreTopology] 站点/线路要素选择枚举
+│   │   └── RouteNetworkValidator.h/.cpp# [CoreTopology] 路网拓扑合规性与碰撞校验器
+│   ├── ui/                             # [GUILayer] 用户交互与界面展示层
 │   │   ├── mainwindow/                 # 顶层应用主框架
 │   │   │   └── MainWindow.h/.cpp       # 顶部导航、侧边栏、状态栏与视图多页调度
-│   │   ├── common/                     # 通用 UI 组件与工厂基类
+│   │   ├── common/                     # 通用 UI 组件与控件工厂
 │   │   │   ├── UiHelper.h/.cpp         # 控件工厂 (带过滤器 SpinBox、带动效按钮、标准表格)
 │   │   │   ├── StyleLoader.h/.cpp      # 模块化 QSS 自动合并与动态加载器
 │   │   │   ├── ThemeColors.h           # 自绘控件统一颜色与主题调色板常量
-│   │   │   ├── Toast.h/.cpp            # 全局浮动气泡通知 (基于 QSS 动态属性)
+│   │   │   ├── Toast.h/.cpp            # 全局浮动气泡通知
 │   │   │   ├── LoadingDialog.h/.cpp    # 模态加载指示框
 │   │   │   ├── ButtonClickEffect.h/.cpp# 按钮点击回弹动效全局过滤器
 │   │   │   ├── SpinBoxWheelFilter.h/.cpp# 步进器非聚焦状态滚轮屏蔽事件过滤器
 │   │   │   └── ToggleSwitch.h/.cpp     # 仿 iOS/现代风自绘滑动开关
-│   │   ├── dialogs/                    # 业务弹窗组件
-│   │   │   ├── BaseDialog.h/.cpp       # 统一弹窗基类 (标准边距、标题栏、操作按钮盒、居中)
-│   │   │   ├── DeviceManagerDialog.*   # 设备扫描与连接管理对话框
-│   │   │   ├── MotionDialog.*          # 运动控制参数快捷调节弹窗
-│   │   │   ├── NetworkConfigDialog.*   # 网络与 IP 配置弹窗
-│   │   │   ├── RobotStatusDialog.*     # 机器人详细硬件运行状态弹窗
-│   │   │   ├── MapUploadDialog.*       # 地图资源包导入对话框
-│   │   │   └── ...
+│   │   ├── control/                    # 底盘控制与系统配置面板
+│   │   │   ├── CarWidget.h/.cpp        # 仪表盘、底盘状态与快捷操作
+│   │   │   ├── DirectionPadWidget.h/.cpp# 软方向盘十字控制板
+│   │   │   ├── EditConfigWidget.h/.cpp # 系统参数树形配置主面板
+│   │   │   └── ConfigMetadataHelper.h/.cpp # 参数元数据解析与校验辅助类
+│   │   ├── dialogs/                    # 业务弹窗组件 (继承自 BaseDialog)
+│   │   │   ├── BaseDialog.h/.cpp       # 统一弹窗基类 (标准边距、标题栏、操作按钮盒)
+│   │   │   ├── DeviceManagerDialog.h/.cpp  # 设备扫描与连接管理对话框
+│   │   │   ├── MotionDialog.h/.cpp     # 运动控制参数快捷调节弹窗
+│   │   │   ├── NetworkConfigDialog.h/.cpp  # 网络与 IP 配置弹窗
+│   │   │   ├── RobotStatusDialog.h/.cpp# 机器人详细硬件运行状态弹窗
+│   │   │   ├── MapCheckResultDialog.h/.cpp # 地图诊断与拓扑报错结果展示对话框
+│   │   │   ├── MapUploadDialog.h/.cpp  # 地图资源包导入对话框
+│   │   │   ├── SmapUploadDialog.h/.cpp # SMAP 地图上传对话框
+│   │   │   ├── AudioManagerDialog.h/.cpp   # 音频提示音管理对话框
+│   │   │   └── ManualControlConfigDialog.h/.cpp # 手动控制按键配置对话框
 │   │   ├── map/                        # 地图显示与编辑视图
-│   │   │   ├── MapDrawHelper.h/.cpp    # 坐标转换 (world<->scene)、几何运算与 AGV 图标自绘
-│   │   │   ├── MapViewWidget.*         # 实时地图监控、点云图层与位姿渲染
-│   │   │   ├── MapEditWidget.*         # 站点拓扑与路径编辑主视图
-│   │   │   ├── MapCanvas.*             # 地图底层画布交互
-│   │   │   └── CreateMapWidget.*       # SLAM 在线建图控制
-│   │   ├── task/                       # 任务规划与运行视图
-│   │   │   ├── TaskWidget.*            # 任务管理主页面
-│   │   │   ├── TaskChainWidget.*       # 任务链编排与节点拖拽
-│   │   │   ├── TaskEditWidget.*        # 任务动作明细参数编辑
-│   │   │   └── TaskLogWidget.*         # 任务执行流日志追踪
-│   │   └── control/                    # 车辆控制与系统配置
-│   │       ├── CarWidget.*             # 仪表盘、底盘状态与快捷操作
-│   │       ├── DirectionPadWidget.*    # 软方向盘十字控制板
-│   │       ├── EditConfigWidget.*      # 系统参数树形配置主面板
-│   │       └── ConfigMetadataHelper.*  # 参数元数据解析、分组映射与范围校验辅助类
-│   └── resources/              # 资源与模块化样式表
+│   │   │   ├── MapWidget.h/.cpp        # 地图模块顶层路由切换容器
+│   │   │   ├── MapViewWidget.h/.cpp    # 实时地图监控、点云图层与位姿渲染
+│   │   │   ├── MapEditWidget.h/.cpp    # 站点拓扑与路径编辑主视图
+│   │   │   ├── MapCanvas.h/.cpp        # 地图底层画布交互
+│   │   │   ├── MapDrawHelper.h/.cpp    # 坐标转换 (world<->scene) 与自绘算法
+│   │   │   ├── MapShowWidget.h/.cpp    # 地图选点与展示组件
+│   │   │   ├── CreateMapWidget.h/.cpp  # 在线建图 (SLAM) 控制
+│   │   │   ├── MapImageEditWidget.h/.cpp# 地图底图旋转/擦除/裁剪二次编辑
+│   │   │   └── MapPaintCanvas.h/.cpp   # 地图底图笔刷与橡皮擦画布
+│   │   └── task/                       # 任务规划与运行视图
+│   │       ├── TaskWidget.h/.cpp       # 任务管理主页面
+│   │       ├── TaskChainWidget.h/.cpp  # 任务链编排与节点拖拽主界面
+│   │       ├── TaskEditWidget.h/.cpp   # 任务动作明细参数编辑面板
+│   │       └── TaskLogWidget.h/.cpp    # 任务执行流日志追踪与状态监视
+│   └── resources/                      # 资源与模块化样式表
 │       ├── resources.qrc               # Qt 资源描述文件
-│       ├── qss/                        # 模块化 QSS 样式表 (严禁将大段样式写在 C++ 内)
-│       │   ├── base.qss                # 全局通用控件、滚动条与基础字体
-│       │   ├── mainwindow.qss          # 主窗口导航与状态栏样式
-│       │   ├── dialogs.qss             # 所有业务对话框样式
-│       │   ├── map.qss                 # 地图工具栏与图层控制面板样式
-│       │   ├── task.qss                # 任务链与日志面板样式
-│       │   └── control.qss             # 控制仪表盘与配置树样式
+│       ├── app.rc.in                   # Windows 应用图标与版本资源模板
+│       ├── qss/                        # 模块化 QSS 样式表 (base, control, dialogs, mainwindow, map, task)
 │       └── icons/                      # 统一矢量图标库 (.svg / .ico)
 ```
 

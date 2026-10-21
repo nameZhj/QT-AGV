@@ -1,3 +1,11 @@
+/**
+ * @file    ConfigMetadataHelper.h
+ * @module  GUILayer
+ * @brief   Metadata parser, group mapper, and validation helper for system config properties.
+ * @deps    QJsonObject, QTreeWidget
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QString>
@@ -13,11 +21,13 @@ class ConfigMetadataHelper
 public:
     ConfigMetadataHelper() = delete;
 
+    // === [Section: Metadata & Field Dictionaries] ===
     /**
      * @brief 获取参数字段对应的中文名称与备注单位
      */
     static QPair<QString, QString> fieldMetaFor(const QString &key);
 
+    // === [Section: Profiles & Categorization] ===
     /**
      * @brief 根据配置文件的 name / file_path 计算归属的业务分组 ProfileKey
      */
@@ -38,6 +48,7 @@ public:
      */
     static QString basename(const QString &path);
 
+    // === [Section: Metadata Matching & Parsing] ===
     /**
      * @brief 从元数据列表中查找指定配置文件的元数据条目
      */
@@ -56,6 +67,7 @@ public:
                                double &outMin, double &outMax,
                                bool &hasMin, bool &hasMax);
 
+    // === [Section: Default Param Completion Helpers] ===
     /**
      * @brief 补全运动控制、二次对位及避障扩展区间默认参数条目
      */
@@ -63,3 +75,4 @@ public:
     static void ensureAlignConfig(QJsonArray &configs);
     static void ensureObstacleConfig(QJsonArray &configs);
 };
+

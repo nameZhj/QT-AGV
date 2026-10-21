@@ -1,3 +1,11 @@
+/**
+ * @file    ManualControlConfigDialog.h
+ * @module  GUILayer
+ * @brief   Manual teleoperation sensitivity and keyboard shortcut configuration dialog.
+ * @deps    BaseDialog, TeleopController
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>

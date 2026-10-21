@@ -1,4 +1,13 @@
+/**
+ * @file    DirectionPadWidget.cpp
+ * @module  GUILayer
+ * @brief   Implementation of virtual D-pad omnidirectional motion control pad.
+ * @deps    DirectionPadWidget.h, TeleopController.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "DirectionPadWidget.h"
+#include "DirectionPadGeometry.h"
 #include "ManualControlConfigDialog.h"
 #include "core/TeleopController.h"
 #include "ui/common/Toast.h"
@@ -37,94 +46,7 @@ DirectionPadWidget::DirectionPadWidget(QWidget *parent)
 
 void DirectionPadWidget::updatePaths()
 {
-    // 1. 上正三角 (前进 W)
-    static const QPointF pts_up[] = {
-        QPointF(50.0, 32.5), QPointF(51.4, 33.8), QPointF(79.3, 33.8), QPointF(80.6, 31.9),
-        QPointF(75.4, 24.1), QPointF(74.1, 20.8), QPointF(72.8, 20.1), QPointF(72.8, 18.9),
-        QPointF(67.0, 10.4), QPointF(65.7, 9.8),  QPointF(63.0, 10.4), QPointF(59.8, 16.2),
-        QPointF(57.9, 18.2), QPointF(57.2, 20.1), QPointF(50.7, 29.2)
-    };
-    m_upPath.clear();
-    QPolygonF poly_up;
-    for (const auto &p : pts_up) poly_up << p;
-    m_upPath.addPolygon(poly_up);
-    m_upPath.closeSubpath();
-
-    // 2. 下倒三角 (后退 S)
-    static const QPointF pts_down[] = {
-        QPointF(49.4, 98.8), QPointF(57.2, 110.5), QPointF(58.5, 113.8), QPointF(63.7, 120.9),
-        QPointF(66.3, 120.9), QPointF(74.1, 109.8), QPointF(75.4, 106.6), QPointF(76.7, 106.0),
-        QPointF(80.6, 98.8),  QPointF(80.0, 97.5),  QPointF(50.7, 97.5)
-    };
-    m_downPath.clear();
-    QPolygonF poly_down;
-    for (const auto &p : pts_down) poly_down << p;
-    m_downPath.addPolygon(poly_down);
-    m_downPath.closeSubpath();
-
-    // 3. 中心圆角方块 (刹车/急停 Space)
-    static const QPointF pts_center[] = {
-        QPointF(53.3, 54.6), QPointF(53.3, 71.5), QPointF(52.6, 72.2), QPointF(53.3, 72.8),
-        QPointF(53.3, 75.4), QPointF(55.9, 76.7), QPointF(73.5, 76.7), QPointF(74.8, 76.0),
-        QPointF(76.7, 72.8), QPointF(76.7, 56.5), QPointF(75.4, 55.2), QPointF(75.4, 54.0),
-        QPointF(74.1, 54.0), QPointF(73.5, 53.3), QPointF(55.2, 53.3)
-    };
-    m_centerPath.clear();
-    QPolygonF poly_center;
-    for (const auto &p : pts_center) poly_center << p;
-    m_centerPath.addPolygon(poly_center);
-    m_centerPath.closeSubpath();
-
-    // 4. 左转弧弯箭头 (左转 A)
-    static const QPointF pts_left[] = {
-        QPointF(5.2, 65.0),  QPointF(5.2, 65.7),  QPointF(11.7, 72.2), QPointF(12.3, 72.2),
-        QPointF(18.2, 77.3), QPointF(19.5, 76.7), QPointF(19.5, 71.5), QPointF(20.8, 70.2),
-        QPointF(23.4, 70.2), QPointF(25.4, 71.5), QPointF(29.2, 71.5), QPointF(30.6, 72.8),
-        QPointF(31.9, 72.8), QPointF(34.5, 74.8), QPointF(36.4, 77.3), QPointF(37.7, 77.3),
-        QPointF(38.4, 76.7), QPointF(38.4, 74.8), QPointF(37.0, 72.8), QPointF(37.0, 70.8),
-        QPointF(34.5, 66.3), QPointF(29.9, 63.0), QPointF(28.6, 63.0), QPointF(27.3, 61.8),
-        QPointF(24.7, 61.8), QPointF(22.8, 60.5), QPointF(20.1, 60.5), QPointF(19.5, 59.8),
-        QPointF(19.5, 54.0), QPointF(18.9, 53.3), QPointF(11.1, 59.1), QPointF(11.1, 59.8)
-    };
-    m_leftPath.clear();
-    QPolygonF poly_left;
-    for (const auto &p : pts_left) poly_left << p;
-    m_leftPath.addPolygon(poly_left);
-    m_leftPath.closeSubpath();
-
-    // 5. 右转弧弯箭头 (右转 D)
-    static const QPointF pts_right[] = {
-        QPointF(125.5, 65.0), QPointF(124.2, 64.3), QPointF(117.7, 57.9), QPointF(111.2, 53.3),
-        QPointF(110.5, 54.0), QPointF(110.5, 59.8), QPointF(109.8, 60.5), QPointF(107.2, 60.5),
-        QPointF(105.3, 61.8), QPointF(102.7, 61.8), QPointF(101.4, 63.0), QPointF(100.1, 63.0),
-        QPointF(98.2, 64.3),  QPointF(95.5, 67.0),  QPointF(93.0, 70.8),  QPointF(93.0, 77.3),
-        QPointF(93.6, 77.3),  QPointF(94.9, 75.4),  QPointF(97.5, 73.5),  QPointF(101.4, 71.5),
-        QPointF(104.7, 71.5), QPointF(106.6, 70.2), QPointF(109.8, 70.2), QPointF(110.5, 70.8),
-        QPointF(110.5, 76.7), QPointF(111.8, 77.3), QPointF(117.0, 72.8), QPointF(117.7, 72.8),
-        QPointF(122.8, 67.6), QPointF(123.5, 67.6)
-    };
-    m_rightPath.clear();
-    QPolygonF poly_right;
-    for (const auto &p : pts_right) poly_right << p;
-    m_rightPath.addPolygon(poly_right);
-    m_rightPath.closeSubpath();
-
-    // 6. 设置齿轮 (右下角 ⚙ 线框轮廓)
-    m_settingsPath.clear();
-    const double gx = 109.5;
-    const double gy = 109.2;
-    QPolygonF gearPoly;
-    const int numSteps = 72;
-    for (int i = 0; i < numSteps; ++i) {
-        double angle = i * 2.0 * M_PI / numSteps;
-        double r = 11.7 + 1.8 * std::cos(6.0 * angle);
-        gearPoly << QPointF(gx + r * std::cos(angle), gy + r * std::sin(angle));
-    }
-    m_settingsPath.addPolygon(gearPoly);
-    m_settingsPath.closeSubpath();
-
-    // 齿轮中心内圆
-    m_settingsPath.addEllipse(QPointF(gx, gy), 3.8, 3.8);
+    DirectionPadGeometry::buildPaths(m_upPath, m_downPath, m_leftPath, m_rightPath, m_centerPath, m_settingsPath);
 }
 
 DirectionPadWidget::PadKey DirectionPadWidget::hitTest(const QPoint &pos) const
@@ -183,102 +105,84 @@ void DirectionPadWidget::paintEvent(QPaintEvent *)
     painter.drawPath(m_settingsPath);
 }
 
+int DirectionPadWidget::padKeyToQtKey(PadKey key)
+{
+    switch (key) {
+    case PadKey::Up:     return Qt::Key_W;
+    case PadKey::Down:   return Qt::Key_S;
+    case PadKey::Left:   return Qt::Key_A;
+    case PadKey::Right:  return Qt::Key_D;
+    case PadKey::Center: return Qt::Key_Space;
+    default:             return 0;
+    }
+}
+
+void DirectionPadWidget::dispatchPadKey(PadKey key, bool pressed)
+{
+    const int qtKey = padKeyToQtKey(key);
+    if (qtKey != 0) {
+        TeleopController::instance().setVirtualKey(qtKey, pressed);
+    }
+}
+
+// === [Section: Event Handlers] ===
 void DirectionPadWidget::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton) {
-        PadKey key = hitTest(event->pos());
-
-        // 中间方块为刹车(安全动作)，任何时候都可直接按下，不需要先抢占控制权；
-        // 方向键属于驱动车辆，必须由用户显式点击"抢占控制权"后才会生效，
-        // 避免误触方向键盘直接驱动车辆
-        if (key != PadKey::Center && !TeleopController::instance().isActive()) {
-            Toast::info(this, QStringLiteral("未抢占控制权，请先点击“抢占控制权”再遥控"));
-            QWidget::mousePressEvent(event);
-            return;
-        }
-
-        m_mouseActiveKey = key;
-
-        if (key != PadKey::None) {
-            m_pressedKeys.insert(key);
-            update();
-
-            switch (key) {
-            case PadKey::Up:
-                TeleopController::instance().setVirtualKey(Qt::Key_W, true);
-                break;
-            case PadKey::Down:
-                TeleopController::instance().setVirtualKey(Qt::Key_S, true);
-                break;
-            case PadKey::Left:
-                TeleopController::instance().setVirtualKey(Qt::Key_A, true);
-                break;
-            case PadKey::Right:
-                TeleopController::instance().setVirtualKey(Qt::Key_D, true);
-                break;
-            case PadKey::Center:
-                TeleopController::instance().setVirtualKey(Qt::Key_Space, true);
-                break;
-            case PadKey::Settings:
-                break;
-            default:
-                break;
-            }
-        }
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
+        return;
     }
+
+    const PadKey key = hitTest(event->pos());
+
+    // 中间方块为刹车(安全动作)，任何时候都可直接按下，不需要先抢占控制权；
+    // 方向键属于驱动车辆，必须由用户显式点击"抢占控制权"后才会生效
+    if (key != PadKey::Center && !TeleopController::instance().isActive()) {
+        Toast::info(this, QStringLiteral("未抢占控制权，请先点击“抢占控制权”再遥控"));
+        QWidget::mousePressEvent(event);
+        return;
+    }
+
+    m_mouseActiveKey = key;
+
+    if (key != PadKey::None) {
+        m_pressedKeys.insert(key);
+        update();
+        dispatchPadKey(key, true);
+    }
+
     QWidget::mousePressEvent(event);
 }
 
 void DirectionPadWidget::mouseReleaseEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton) {
-        if (m_mouseActiveKey != PadKey::None) {
-            PadKey prevKey = m_mouseActiveKey;
-            m_mouseActiveKey = PadKey::None;
-
-            // 鼠标抬起必须释放虚拟按键(点一下只按一瞬，按住才持续运动，抬起立即停止)。
-            // 注意: 不能再用 isKeyPressed() 作为判断条件，因为它与虚拟键共用同一状态标志，
-            // 会导致刚按下虚拟键就永远判断为"物理键已按住"而无法释放。
-            switch (prevKey) {
-            case PadKey::Up:
-                TeleopController::instance().setVirtualKey(Qt::Key_W, false);
-                break;
-            case PadKey::Down:
-                TeleopController::instance().setVirtualKey(Qt::Key_S, false);
-                break;
-            case PadKey::Left:
-                TeleopController::instance().setVirtualKey(Qt::Key_A, false);
-                break;
-            case PadKey::Right:
-                TeleopController::instance().setVirtualKey(Qt::Key_D, false);
-                break;
-            case PadKey::Center:
-                TeleopController::instance().setVirtualKey(Qt::Key_Space, false);
-                break;
-            case PadKey::Settings:
-                if (hitTest(event->pos()) == PadKey::Settings) {
-                    m_pressedKeys.remove(PadKey::Settings);
-                    update();
-                    ManualControlConfigDialog dlg(this);
-                    dlg.exec();
-                }
-                break;
-            default:
-                break;
-            }
-
-            if (prevKey != PadKey::Settings) {
-                m_pressedKeys.remove(prevKey);
-                update();
-            }
-        }
+    if (event->button() != Qt::LeftButton || m_mouseActiveKey == PadKey::None) {
+        QWidget::mouseReleaseEvent(event);
+        return;
     }
+
+    const PadKey prevKey = m_mouseActiveKey;
+    m_mouseActiveKey = PadKey::None;
+
+    if (prevKey == PadKey::Settings) {
+        if (hitTest(event->pos()) == PadKey::Settings) {
+            m_pressedKeys.remove(PadKey::Settings);
+            update();
+            ManualControlConfigDialog dlg(this);
+            dlg.exec();
+        }
+    } else {
+        dispatchPadKey(prevKey, false);
+        m_pressedKeys.remove(prevKey);
+        update();
+    }
+
     QWidget::mouseReleaseEvent(event);
 }
 
 void DirectionPadWidget::mouseMoveEvent(QMouseEvent *event)
 {
-    PadKey hovered = hitTest(event->pos());
+    const PadKey hovered = hitTest(event->pos());
     if (hovered != m_hoveredKey) {
         m_hoveredKey = hovered;
         setCursor((hovered != PadKey::None) ? Qt::PointingHandCursor : Qt::ArrowCursor);
@@ -297,25 +201,7 @@ void DirectionPadWidget::leaveEvent(QEvent *event)
 
     // 鼠标移出边界时安全释放按住的虚拟键，防止失控移动
     if (m_mouseActiveKey != PadKey::None && m_mouseActiveKey != PadKey::Settings) {
-        switch (m_mouseActiveKey) {
-        case PadKey::Up:
-            TeleopController::instance().setVirtualKey(Qt::Key_W, false);
-            break;
-        case PadKey::Down:
-            TeleopController::instance().setVirtualKey(Qt::Key_S, false);
-            break;
-        case PadKey::Left:
-            TeleopController::instance().setVirtualKey(Qt::Key_A, false);
-            break;
-        case PadKey::Right:
-            TeleopController::instance().setVirtualKey(Qt::Key_D, false);
-            break;
-        case PadKey::Center:
-            TeleopController::instance().setVirtualKey(Qt::Key_Space, false);
-            break;
-        default:
-            break;
-        }
+        dispatchPadKey(m_mouseActiveKey, false);
         m_pressedKeys.remove(m_mouseActiveKey);
         m_mouseActiveKey = PadKey::None;
         update();
@@ -324,6 +210,7 @@ void DirectionPadWidget::leaveEvent(QEvent *event)
     QWidget::leaveEvent(event);
 }
 
+// === [Section: Teleoperation Sync Slots] ===
 void DirectionPadWidget::onTeleopKeyStateChanged(int key, bool pressed)
 {
     PadKey target = PadKey::None;
@@ -346,3 +233,4 @@ void DirectionPadWidget::onTeleopKeyStateChanged(int key, bool pressed)
     }
     update();
 }
+

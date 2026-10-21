@@ -1,4 +1,13 @@
+/**
+ * @file    MapImageEditWidget.cpp
+ * @module  GUILayer
+ * @brief   Implementation of raster map image editing tool.
+ * @deps    MapImageEditWidget.h, MapPaintCanvas.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "MapImageEditWidget.h"
+#include "MapImageEditIcons.h"
 #include "MapPaintCanvas.h"
 #include "network/ApiService.h"
 #include "app/AppConfig.h"
@@ -13,59 +22,9 @@
 #include <QSpinBox>
 #include <QButtonGroup>
 #include <QFrame>
-#include <QPainter>
-#include <QImage>
 
 namespace {
-
 static const char *kLabelStyle = "color: rgb(183, 183, 183); border: none;";
-
-QIcon drawBrushToolIcon(bool eraser)
-{
-    int sz = 22;
-    QPixmap pix(sz, sz);
-    pix.fill(Qt::transparent);
-    QPainter p(&pix);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(QPen(QColor(220, 220, 220), 1.2));
-    if (!eraser) {
-        // 画笔：实心圆点，代表涂黑(标记障碍)
-        p.setBrush(QColor(40, 40, 40));
-        p.drawEllipse(QRectF(2, 2, 18, 18));
-        p.setBrush(QColor(10, 10, 10));
-        p.drawEllipse(QRectF(6, 6, 10, 10));
-    } else {
-        // 橡皮：白色方块，代表擦除为可通行区域
-        p.setBrush(QColor(245, 245, 245));
-        p.drawRect(QRectF(3, 3, 16, 16));
-    }
-    p.end();
-    return QIcon(pix);
-}
-
-QIcon drawMoveToolIcon()
-{
-    int sz = 22;
-    QPixmap pix(sz, sz);
-    pix.fill(Qt::transparent);
-    QPainter p(&pix);
-    p.setRenderHint(QPainter::Antialiasing);
-    // 移动：四向箭头，代表取消画笔/橡皮，仅用于平移浏览
-    QColor col(220, 220, 220);
-    double c = sz * 0.5;
-    p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap));
-    p.drawLine(QPointF(c, sz*0.12), QPointF(c, sz*0.88));
-    p.drawLine(QPointF(sz*0.12, c), QPointF(sz*0.88, c));
-    p.setPen(Qt::NoPen); p.setBrush(col);
-    QPolygonF up;    up    << QPointF(c, sz*0.04) << QPointF(c-sz*0.10, sz*0.18) << QPointF(c+sz*0.10, sz*0.18);
-    QPolygonF down;  down  << QPointF(c, sz*0.96) << QPointF(c-sz*0.10, sz*0.82) << QPointF(c+sz*0.10, sz*0.82);
-    QPolygonF left;  left  << QPointF(sz*0.04, c) << QPointF(sz*0.18, c-sz*0.10) << QPointF(sz*0.18, c+sz*0.10);
-    QPolygonF right; right << QPointF(sz*0.96, c) << QPointF(sz*0.82, c-sz*0.10) << QPointF(sz*0.82, c+sz*0.10);
-    p.drawPolygon(up); p.drawPolygon(down); p.drawPolygon(left); p.drawPolygon(right);
-    p.end();
-    return QIcon(pix);
-}
-
 } // namespace
 
 MapImageEditWidget::MapImageEditWidget(const QString &mapId, QWidget *parent)
@@ -121,21 +80,21 @@ void MapImageEditWidget::setupUI()
     m_brushBtn = new QToolButton;
     m_brushBtn->setCheckable(true);
     m_brushBtn->setChecked(true);
-    m_brushBtn->setIcon(drawBrushToolIcon(false));
+    m_brushBtn->setIcon(MapImageEditIcons::drawBrushToolIcon(false));
     m_brushBtn->setIconSize(QSize(22, 22));
     m_brushBtn->setFixedSize(36, 30);
     m_brushBtn->setToolTip("画笔：涂黑（标记为障碍/墙体）");
 
     m_eraserBtn = new QToolButton;
     m_eraserBtn->setCheckable(true);
-    m_eraserBtn->setIcon(drawBrushToolIcon(true));
+    m_eraserBtn->setIcon(MapImageEditIcons::drawBrushToolIcon(true));
     m_eraserBtn->setIconSize(QSize(22, 22));
     m_eraserBtn->setFixedSize(36, 30);
     m_eraserBtn->setToolTip("橡皮：擦除（标记为可通行区域）");
 
     m_moveBtn = new QToolButton;
     m_moveBtn->setCheckable(true);
-    m_moveBtn->setIcon(drawMoveToolIcon());
+    m_moveBtn->setIcon(MapImageEditIcons::drawMoveToolIcon());
     m_moveBtn->setIconSize(QSize(22, 22));
     m_moveBtn->setFixedSize(36, 30);
     m_moveBtn->setToolTip("移动：取消画笔/橡皮，仅平移浏览地图");

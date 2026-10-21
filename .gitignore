@@ -3,6 +3,7 @@ build/
 build-*/
 build-release/
 out/
+bin/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
@@ -39,15 +40,28 @@ CMakeLists.txt.user*
 CMakeUserPresets.json
 *.autosave
 
+# Runtime Data & Map Cache
+maps/
+maps_cache/
+runtime/
+cache/
+*.pgm.tmp
+*.yaml.tmp
+
 # Installer & Packaging Outputs
 installer/Output/
 installer/output/
 installer/dist/
+dist/
+output/
 *.zip
 *.7z
 *.rar
+*.iss.tmp
 
-# Runtime Logs, Temp & OS Files
+# Scratch, Temporary & OS Files
+scratch/
+scratch_disasm/
 *.log
 *.tmp
 *.bak

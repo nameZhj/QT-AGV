@@ -1,8 +1,19 @@
+/**
+ * @file    MapCheckResultDialog.cpp
+ * @module  GUILayer
+ * @brief   Implementation of map diagnostic validation dialog.
+ * @deps    MapCheckResultDialog.h, QTableWidget
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "MapCheckResultDialog.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QTableWidget>
+#include <QLabel>
+#include <QPushButton>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>

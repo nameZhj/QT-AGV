@@ -1,3 +1,11 @@
+/**
+ * @file    ManualControlConfigDialog.cpp
+ * @module  GUILayer
+ * @brief   Implementation of manual control shortcut and sensitivity config dialog.
+ * @deps    ManualControlConfigDialog.h, TeleopController.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "ManualControlConfigDialog.h"
 #include "core/TeleopController.h"
 #include "network/ApiService.h"

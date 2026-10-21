@@ -1,3 +1,11 @@
+/**
+ * @file    ToggleSwitch.cpp
+ * @module  GUILayer
+ * @brief   Implementation of modern iOS-style animated toggle switch widget.
+ * @deps    ToggleSwitch.h, QPainter, QPropertyAnimation
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "ToggleSwitch.h"
 
 #include <QPainter>
@@ -52,12 +60,12 @@ QColor ToggleSwitch::onColor() const
     return m_onColor;
 }
 
+// === [Section: Properties & Accessors] ===
 void ToggleSwitch::setOnColor(const QColor &color)
 {
-    if (m_onColor != color) {
-        m_onColor = color;
-        update();
-    }
+    if (m_onColor == color) return;
+    m_onColor = color;
+    update();
 }
 
 QColor ToggleSwitch::offColor() const
@@ -67,10 +75,9 @@ QColor ToggleSwitch::offColor() const
 
 void ToggleSwitch::setOffColor(const QColor &color)
 {
-    if (m_offColor != color) {
-        m_offColor = color;
-        update();
-    }
+    if (m_offColor == color) return;
+    m_offColor = color;
+    update();
 }
 
 QColor ToggleSwitch::knobColor() const
@@ -80,12 +87,12 @@ QColor ToggleSwitch::knobColor() const
 
 void ToggleSwitch::setKnobColor(const QColor &color)
 {
-    if (m_knobColor != color) {
-        m_knobColor = color;
-        update();
-    }
+    if (m_knobColor == color) return;
+    m_knobColor = color;
+    update();
 }
 
+// === [Section: State & Animation Handlers] ===
 void ToggleSwitch::checkStateSet()
 {
     QAbstractButton::checkStateSet();
@@ -116,29 +123,28 @@ void ToggleSwitch::mouseReleaseEvent(QMouseEvent *event)
 void ToggleSwitch::animateToChecked(bool checked)
 {
     const qreal target = checked ? 1.0 : 0.0;
-    if (!isVisible() || !m_anim) {
+    if (!isVisible()) {
+        if (m_anim && m_anim->state() == QAbstractAnimation::Running) {
+            m_anim->stop();
+        }
         setOffset(target);
         return;
     }
 
-    if (m_anim->state() == QAbstractAnimation::Running) {
-        m_anim->stop();
+    if (!m_anim) {
+        setOffset(target);
+        return;
     }
+
+    m_anim->stop();
     m_anim->setStartValue(m_offset);
     m_anim->setEndValue(target);
     m_anim->start();
 }
 
-void ToggleSwitch::paintEvent(QPaintEvent *)
+// === [Section: Rendering & Drawing Helpers] ===
+void ToggleSwitch::paintTrack(QPainter &p, const QRectF &track, qreal radius) const
 {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-
-    // 1. 计算外层跑道尺寸
-    const QRectF track = rect().adjusted(1, 1, -1, -1);
-    const qreal radius = track.height() / 2.0;
-
-    // 2. 颜色线性插值计算 (Off -> On)
     auto interpolateColor = [](const QColor &c1, const QColor &c2, qreal factor) -> QColor {
         const int r = static_cast<int>(c1.red()   + (c2.red()   - c1.red())   * factor);
         const int g = static_cast<int>(c1.green() + (c2.green() - c1.green()) * factor);
@@ -152,22 +158,19 @@ void ToggleSwitch::paintEvent(QPaintEvent *)
         currentTrackColor.setAlpha(120);
     }
 
-    // 3. 绘制跑道背景
     p.setPen(Qt::NoPen);
     p.setBrush(currentTrackColor);
     p.drawRoundedRect(track, radius, radius);
+}
 
-    // 4. 计算滑块尺寸与位移
-    const qreal knobD = track.height() - (kKnobMargin * 2.0);
+void ToggleSwitch::paintKnob(QPainter &p, const QRectF &track, qreal knobD) const
+{
     const qreal minX = track.left() + kKnobMargin;
     const qreal maxX = track.right() - kKnobMargin - knobD;
     const qreal knobX = minX + (maxX - minX) * m_offset;
     const qreal knobY = track.top() + kKnobMargin;
-
-    // 5. 绘制滑块 (微弱柔和阴影与本体)
     const QRectF knobRect(knobX, knobY, knobD, knobD);
 
-    // 启用状态下给滑块添加微弱边框增加层级质感
     if (isEnabled()) {
         p.setPen(QColor(0, 0, 0, 20));
         p.setBrush(m_knobColor);
@@ -177,3 +180,17 @@ void ToggleSwitch::paintEvent(QPaintEvent *)
     }
     p.drawEllipse(knobRect);
 }
+
+void ToggleSwitch::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    const QRectF track = rect().adjusted(1, 1, -1, -1);
+    const qreal radius = track.height() / 2.0;
+    const qreal knobD = track.height() - (kKnobMargin * 2.0);
+
+    paintTrack(p, track, radius);
+    paintKnob(p, track, knobD);
+}
+

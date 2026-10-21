@@ -1,3 +1,11 @@
+/**
+ * @file    ZipUtil.cpp
+ * @module  CoreTopology
+ * @brief   Implementation of zip archive extractor utility.
+ * @deps    ZipUtil.h, QFile, QDir
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "ZipUtil.h"
 
 #include <QProcess>

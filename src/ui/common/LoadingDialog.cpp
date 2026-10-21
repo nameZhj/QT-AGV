@@ -1,3 +1,11 @@
+/**
+ * @file    LoadingDialog.cpp
+ * @module  GUILayer
+ * @brief   Implementation of modal spinner loading dialog.
+ * @deps    LoadingDialog.h, QLabel, QMovie
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "LoadingDialog.h"
 
 #include <QLabel>
@@ -10,6 +18,7 @@
 #include <QScreen>
 #include <QDebug>
 
+// === [Section: Constructors & Destructor] ===
 LoadingDialog::LoadingDialog(const QString &message, QWidget *parent, Qt::WindowModality modality, int timeoutMs)
     : QDialog(parent, Qt::Dialog | Qt::FramelessWindowHint)
     , m_timeoutTimer(new QTimer(this))
@@ -35,9 +44,10 @@ LoadingDialog::~LoadingDialog()
     }
 }
 
+// === [Section: Private Helpers & UI Setup] ===
 void LoadingDialog::setupUI(const QString &message)
 {
-    setFixedSize(320, 116);
+    setFixedSize(kDefaultWidth, kDefaultHeight);
 
     auto *rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(24, 22, 24, 20);
@@ -73,6 +83,7 @@ void LoadingDialog::setupUI(const QString &message)
     rootLayout->addWidget(m_progressBar);
 }
 
+// === [Section: Public Operations] ===
 void LoadingDialog::setMessage(const QString &msg)
 {
     if (m_label) {
@@ -85,11 +96,11 @@ void LoadingDialog::setTimeout(int timeoutMs)
     if (!m_timeoutTimer) return;
 
     m_timeoutTimer->stop();
-    if (timeoutMs > 0) {
-        m_timeoutTimer->setInterval(timeoutMs);
-        m_timeoutTimer->setSingleShot(true);
-        m_timeoutTimer->start();
-    }
+    if (timeoutMs <= 0) return;
+
+    m_timeoutTimer->setInterval(timeoutMs);
+    m_timeoutTimer->setSingleShot(true);
+    m_timeoutTimer->start();
 }
 
 void LoadingDialog::finish()
@@ -114,12 +125,16 @@ void LoadingDialog::centerOnParentOrScreen()
         QWidget *topW = pw->window();
         const QPoint center = topW->mapToGlobal(topW->rect().center());
         move(center.x() - width() / 2, center.y() - height() / 2);
-    } else if (QScreen *scr = QApplication::primaryScreen()) {
+        return;
+    }
+
+    if (QScreen *scr = QApplication::primaryScreen()) {
         const QRect sg = scr->availableGeometry();
         move(sg.center().x() - width() / 2, sg.center().y() - height() / 2);
     }
 }
 
+// === [Section: Event Handlers] ===
 void LoadingDialog::showEvent(QShowEvent *event)
 {
     QDialog::showEvent(event);
@@ -138,7 +153,7 @@ void LoadingDialog::paintEvent(QPaintEvent *event)
 
     const QRectF cardRect = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     QPainterPath path;
-    path.addRoundedRect(cardRect, 10.0, 10.0);
+    path.addRoundedRect(cardRect, kCardRadius, kCardRadius);
 
     // 深色卡片背景 (#161922)
     painter.fillPath(path, QColor(0x16, 0x19, 0x22));
@@ -147,3 +162,4 @@ void LoadingDialog::paintEvent(QPaintEvent *event)
     painter.setPen(QPen(QColor(0x2d, 0x33, 0x40), 1.2));
     painter.drawPath(path);
 }
+

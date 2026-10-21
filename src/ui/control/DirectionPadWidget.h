@@ -1,3 +1,11 @@
+/**
+ * @file    DirectionPadWidget.h
+ * @module  GUILayer
+ * @brief   Virtual D-pad omnidirectional motion control pad for manual teleoperation.
+ * @deps    QWidget, TeleopController
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QWidget>
@@ -36,12 +44,15 @@ public:
         Settings  ///< 设置 (齿轮)
     };
 
+    // === [Section: Constructors & Destructor] ===
     explicit DirectionPadWidget(QWidget *parent = nullptr);
     ~DirectionPadWidget() override = default;
 
+    // === [Section: Geometry & Layout] ===
     QSize sizeHint() const override { return QSize(130, 130); }
 
 protected:
+    // === [Section: Event Handlers] ===
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
@@ -49,9 +60,13 @@ protected:
     void leaveEvent(QEvent *event) override;
 
 private slots:
+    // === [Section: Teleoperation Sync Slots] ===
     void onTeleopKeyStateChanged(int key, bool pressed);
 
 private:
+    // === [Section: Private Helpers & Geometry] ===
+    static int padKeyToQtKey(PadKey key);
+    void dispatchPadKey(PadKey key, bool pressed);
     PadKey hitTest(const QPoint &pos) const;
     void updatePaths();
 
@@ -68,3 +83,4 @@ private:
     QSet<PadKey> m_pressedKeys;
     PadKey       m_mouseActiveKey = PadKey::None;
 };
+

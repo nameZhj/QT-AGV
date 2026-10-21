@@ -1,7 +1,21 @@
+/**
+ * @file    TaskChainManager.cpp
+ * @layer   CoreTopology
+ * @brief   Implementation of task chain dispatching and sequential execution state machine.
+ * @deps    TaskChainManager.h, TaskChainSerializer.h, MqttService.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "TaskChainManager.h"
-#include "MqttService.h"
+#include "TaskChainSerializer.h"
+#include "network/MqttService.h"
+
 #include <QJsonDocument>
 #include <QDebug>
+
+// ==============================================================================
+// === [Section: Lifecycle & Initialization] ===
+// ==============================================================================
 
 TaskChainManager &TaskChainManager::instance()
 {
@@ -21,23 +35,24 @@ void TaskChainManager::init()
 
     auto &mqtt = MqttService::instance();
     connect(&mqtt, &MqttService::connected, this, &TaskChainManager::onMqttConnected);
-
     if (mqtt.isConnected()) {
         onMqttConnected();
     }
 }
 
+// ==============================================================================
+// === [Section: MQTT Handlers & Topic Subscriptions] ===
+// ==============================================================================
+
 void TaskChainManager::onMqttConnected()
 {
     auto &mqtt = MqttService::instance();
 
-    // 全局订阅任务链运行状态: {"robotWorking":true,"robotPause":false}
     mqtt.subscribeTopic(QStringLiteral("/taskchain/status"), 0,
         [this](const QString &, const QByteArray &payload) {
             handleStatusPayload(payload);
         });
 
-    // 全局订阅任务链执行进度: {"currentTask":"sub_task_1","currentGroup":"group_2"}
     mqtt.subscribeTopic(QStringLiteral("/taskchain/currentTask"), 0,
         [this](const QString &, const QByteArray &payload) {
             handleCurrentTaskPayload(payload);
@@ -53,8 +68,8 @@ void TaskChainManager::handleStatusPayload(const QByteArray &payload)
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
 
     const QJsonObject data = doc.object();
-    bool working = data.value("robotWorking").toBool(false);
-    bool paused  = data.value("robotPause").toBool(false);
+    const bool working = data.value(QStringLiteral("robotWorking")).toBool(false);
+    const bool paused  = data.value(QStringLiteral("robotPause")).toBool(false);
 
     {
         QWriteLocker locker(&m_lock);
@@ -78,8 +93,8 @@ void TaskChainManager::handleCurrentTaskPayload(const QByteArray &payload)
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
 
     const QJsonObject data = doc.object();
-    QString task  = data.value("currentTask").toString();
-    QString group = data.value("currentGroup").toString();
+    const QString task  = data.value(QStringLiteral("currentTask")).toString();
+    const QString group = data.value(QStringLiteral("currentGroup")).toString();
 
     {
         QWriteLocker locker(&m_lock);
@@ -89,6 +104,10 @@ void TaskChainManager::handleCurrentTaskPayload(const QByteArray &payload)
 
     emit currentTaskChanged(task, group);
 }
+
+// ==============================================================================
+// === [Section: State Accessors & Mutators] ===
+// ==============================================================================
 
 bool TaskChainManager::isWorking() const
 {
@@ -131,9 +150,7 @@ void TaskChainManager::setLocalExecutionActive(bool active)
     {
         QWriteLocker locker(&m_lock);
         m_localExecutionActive = active;
-        if (active) {
-            m_isWorking = true;
-        }
+        if (active) m_isWorking = true;
     }
     emit chainStatusChanged(isWorking(), isPaused());
 }
@@ -150,4 +167,40 @@ void TaskChainManager::resetExecutionState()
     }
     emit chainStatusChanged(false, false);
     emit currentTaskChanged(QString(), QString());
+}
+
+// ==============================================================================
+// === [Section: Action & Protocol Conversion Delegates] ===
+// ==============================================================================
+
+QString TaskChainManager::actionTypeFromName(const QString &name)
+{
+    return TaskChainSerializer::actionTypeFromName(name);
+}
+
+QString TaskChainManager::actionDescFromType(const QString &type)
+{
+    return TaskChainSerializer::actionDescFromType(type);
+}
+
+QString TaskChainManager::normalizeActionType(const QString &type, const QString &name)
+{
+    return TaskChainSerializer::normalizeActionType(type, name);
+}
+
+// ==============================================================================
+// === [Section: Chain Serialization Delegates] ===
+// ==============================================================================
+
+QJsonObject TaskChainManager::exportChainToJson(const TaskChainData &chain,
+                                                 bool onlyChecked,
+                                                 bool forExecution,
+                                                 const QList<QPair<QString, QString>> &stations)
+{
+    return TaskChainSerializer::exportChainToJson(chain, onlyChecked, forExecution, stations);
+}
+
+TaskChainData TaskChainManager::importChainFromJson(const QJsonObject &json)
+{
+    return TaskChainSerializer::importChainFromJson(json);
 }

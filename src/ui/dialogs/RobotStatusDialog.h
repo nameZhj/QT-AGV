@@ -1,42 +1,46 @@
+/**
+ * @file    RobotStatusDialog.h
+ * @layer   GUILayer
+ * @brief   Detailed real-time hardware status, sensor diagnostic, and battery inspection dialog.
+ * @deps    QDialog, QDateTime
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>
-#include <QTabWidget>
-#include <QLabel>
-#include <QGridLayout>
-#include <QHBoxLayout>
-#include <QVBoxLayout>
-#include <QScrollArea>
-#include <QFrame>
-#include <QTimer>
 #include <QDateTime>
-#include <QJsonObject>
+
+class QTabWidget;
+class QLabel;
+class QTimer;
+struct RobotInfo;
+
+class RobotStatusUiFactory;
+class RobotStatusNetworkProbe;
+class RobotStatusTelemetrySync;
+class RobotStatusBasicInfoPanel;
 
 /**
  * @brief 运行状态弹窗：展示机器人基本信息、运动状态、运行状态、导航状态以及网络连接详情
  * 动态读取上位机真实网络、Wi-Fi 信号/网卡、当前地图以及 MQTT "/info" 话题数据。
- * 无对应版本/参数的字段严格显示为 "--"，有真实数据的字段实时展现真实值。
  */
-struct RobotInfo;
-
 class RobotStatusDialog : public QDialog
 {
     Q_OBJECT
+    friend class RobotStatusUiFactory;
+    friend class RobotStatusNetworkProbe;
+    friend class RobotStatusTelemetrySync;
+    friend class RobotStatusBasicInfoPanel;
+
 public:
     explicit RobotStatusDialog(QWidget *parent = nullptr);
     ~RobotStatusDialog() override;
 
-    // 更新当前地图上下文
     void setMapInfo(const QString &mapId, const QString &mapName);
-
-    // 从全局 RobotInfo 同步全量车辆信息
     void updateFromRobotInfo(const RobotInfo &info);
-
-    // 从 MapViewWidget 同步机器人状态
     void updateFromRobotState(const QString &carId, double x, double y, double yawRad,
                               double speed, double battery, double covScore, bool posValid);
-
-    // 接收并解析 MQTT 原始报文
     void onMqttMessage(const QString &topic, const QByteArray &payload);
 
 protected:
@@ -48,29 +52,10 @@ private slots:
 private:
     void setupUi();
     QWidget *createBasicInfoTab();
-    QWidget *createPlaceholderTab(const QString &tabName);
-
     void initMqttSubscriptions();
     void refreshNetworkAndWifiInfo();
 
-    enum class BadgeType {
-        Green,   // 绿色正常
-        Orange,  // 橙色警戒
-        Red,     // 红色告警
-        Gray     // 灰色中性/未生效/--
-    };
-
-    QLabel *createBadge(const QString &text, BadgeType type);
-    void updateBadge(QLabel *lbl, const QString &text, BadgeType type);
-
-    void addRow(QGridLayout *grid, int row, const QString &label, const QString &value,
-                QLabel **outValueLbl = nullptr, const QString &valColor = "#e2e8f0");
-    void addBadgeRow(QGridLayout *grid, int row, const QString &label, const QString &badgeText,
-                     BadgeType type, QLabel **outBadgeLbl = nullptr);
-    void addMultiBadgeRow(QGridLayout *grid, int row, const QString &label,
-                          const QList<QPair<QString, BadgeType>> &badges,
-                          QList<QLabel*> *outBadgeList = nullptr);
-
+private:
     // ── 选项卡 ──
     QTabWidget *m_tabWidget = nullptr;
 
@@ -158,4 +143,3 @@ private:
     QString    m_mapName;
     bool       m_hasMqttData      = false;
 };
-

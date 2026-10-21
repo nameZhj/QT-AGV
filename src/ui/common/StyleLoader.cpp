@@ -1,3 +1,11 @@
+/**
+ * @file    StyleLoader.cpp
+ * @module  GUILayer
+ * @brief   Implementation of modular QSS stylesheet loader and dynamic styler.
+ * @deps    StyleLoader.h, QFile, QTextStream
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "StyleLoader.h"
 
 #include <QApplication>

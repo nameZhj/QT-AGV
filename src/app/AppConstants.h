@@ -1,3 +1,11 @@
+/**
+ * @file    AppConstants.h
+ * @module  DataComm
+ * @brief   Application-wide constants including window dimensions, polling intervals, and resource paths.
+ * @deps    None (Header-only constants)
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QString>

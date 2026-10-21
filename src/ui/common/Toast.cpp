@@ -1,3 +1,11 @@
+/**
+ * @file    Toast.cpp
+ * @module  GUILayer
+ * @brief   Implementation of non-intrusive floating toast notification widget.
+ * @deps    Toast.h, QLabel, QTimer
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "Toast.h"
 
 #include <QLabel>
@@ -14,8 +22,41 @@
 #include <QCoreApplication>
 #include <algorithm>
 
+namespace {
+constexpr int kMinDurationMs     = 500;
+constexpr int kFadeInDurationMs  = 180;
+constexpr int kFadeOutDurationMs = 220;
+constexpr int kMinToastWidth     = 220;
+constexpr int kMaxToastWidth     = 460;
+constexpr int kToastShadowBlur   = 22;
+
+void resolveToastMeta(Toast::Type type, QString &outTypeStr, QString &outIconSymbol)
+{
+    switch (type) {
+    case Toast::Success:
+        outTypeStr = QStringLiteral("success");
+        outIconSymbol = QString::fromUtf8("\xE2\x9C\x93"); // ✓
+        break;
+    case Toast::Error:
+        outTypeStr = QStringLiteral("error");
+        outIconSymbol = QString::fromUtf8("\xE2\x9C\x95"); // ✕
+        break;
+    case Toast::Warning:
+        outTypeStr = QStringLiteral("warning");
+        outIconSymbol = QString::fromUtf8("\xE2\x9A\xA0"); // ⚠
+        break;
+    case Toast::Info:
+    default:
+        outTypeStr = QStringLiteral("info");
+        outIconSymbol = QString::fromUtf8("\xE2\x84\xB9"); // ℹ
+        break;
+    }
+}
+} // namespace
+
 QList<QPointer<Toast>> Toast::s_active;
 
+// === [Section: Public Static Factory API] ===
 void Toast::show(QWidget *parent, const QString &message, Type type, int durationMs)
 {
     // 线程安全守护：如果非主 GUI 线程发起调用，自动调度至主线程执行
@@ -33,19 +74,18 @@ void Toast::show(QWidget *parent, const QString &message, Type type, int duratio
     while (s_active.size() >= kMaxActiveToasts) {
         if (!s_active.isEmpty() && s_active.first()) {
             s_active.first()->startFadeOut();
-            s_active.removeFirst();
-        } else {
-            s_active.removeFirst();
         }
+        s_active.removeFirst();
     }
 
     auto *toast = new Toast(topLevel, message, type, durationMs);
     toast->QWidget::show();
 }
 
+// === [Section: Constructors & Destructor] ===
 Toast::Toast(QWidget *topLevel, const QString &message, Type type, int durationMs)
     : QWidget(topLevel, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint)
-    , m_durationMs(qMax(500, durationMs))
+    , m_durationMs(qMax(kMinDurationMs, durationMs))
     , m_remainingMs(m_durationMs)
     , m_anchorWindow(topLevel)
 {
@@ -61,26 +101,7 @@ Toast::Toast(QWidget *topLevel, const QString &message, Type type, int durationM
     // 视觉配色体系定义与动态属性映射
     QString typeStr;
     QString iconSymbol;
-
-    switch (type) {
-    case Success:
-        typeStr = QStringLiteral("success");
-        iconSymbol = QString::fromUtf8("\xE2\x9C\x93"); // ✓
-        break;
-    case Error:
-        typeStr = QStringLiteral("error");
-        iconSymbol = QString::fromUtf8("\xE2\x9C\x95"); // ✕
-        break;
-    case Warning:
-        typeStr = QStringLiteral("warning");
-        iconSymbol = QString::fromUtf8("\xE2\x9A\xA0"); // ⚠
-        break;
-    case Info:
-    default:
-        typeStr = QStringLiteral("info");
-        iconSymbol = QString::fromUtf8("\xE2\x84\xB9"); // ℹ
-        break;
-    }
+    resolveToastMeta(type, typeStr, iconSymbol);
 
     // 1. 卡片容器
     auto *card = new QWidget(this);
@@ -112,14 +133,14 @@ Toast::Toast(QWidget *topLevel, const QString &message, Type type, int durationM
     root->addWidget(card);
 
     auto *shadow = new QGraphicsDropShadowEffect(card);
-    shadow->setBlurRadius(22);
+    shadow->setBlurRadius(kToastShadowBlur);
     shadow->setOffset(0, 5);
     shadow->setColor(QColor(0, 0, 0, 140));
     card->setGraphicsEffect(shadow);
 
     // 6. 尺寸自适应排版
     adjustSize();
-    const int targetWidth = qBound(220, sizeHint().width(), 460);
+    const int targetWidth = qBound(kMinToastWidth, sizeHint().width(), kMaxToastWidth);
     setFixedWidth(targetWidth);
     adjustSize();
 
@@ -142,6 +163,7 @@ Toast::~Toast()
     repositionAll();
 }
 
+// === [Section: Event Handlers] ===
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 void Toast::enterEvent(QEnterEvent *event)
 #else
@@ -169,13 +191,12 @@ void Toast::leaveEvent(QEvent *event)
 
 bool Toast::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == m_anchorWindow.data()) {
-        if (event->type() == QEvent::Move || event->type() == QEvent::Resize) {
-            reposition();
-        }
+    if (watched == m_anchorWindow.data() && (event->type() == QEvent::Move || event->type() == QEvent::Resize)) {
+        reposition();
     }
     return QWidget::eventFilter(watched, event);
 }
+
 
 void Toast::startFadeIn()
 {

@@ -1,3 +1,11 @@
+/**
+ * @file    BaseDialog.cpp
+ * @module  GUILayer
+ * @brief   Implementation of standardized modal dialog base class.
+ * @deps    BaseDialog.h, QVBoxLayout, QHBoxLayout
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "BaseDialog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>

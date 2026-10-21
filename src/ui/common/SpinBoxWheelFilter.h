@@ -1,3 +1,11 @@
+/**
+ * @file    SpinBoxWheelFilter.h
+ * @module  GUILayer
+ * @brief   Event filter blocking accidental mouse wheel modifications on unfocused spin boxes.
+ * @deps    QObject, QEvent, QAbstractSpinBox
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QObject>
@@ -15,10 +23,12 @@ class SpinBoxWheelFilter final : public QObject
 {
     Q_OBJECT
 public:
+    // === [Section: Constructors & Destructor] ===
     explicit SpinBoxWheelFilter(QObject *parent = nullptr);
     ~SpinBoxWheelFilter() override = default;
 
 protected:
+    // === [Section: Event Filtering] ===
     bool eventFilter(QObject *watched, QEvent *event) override;
 };
 

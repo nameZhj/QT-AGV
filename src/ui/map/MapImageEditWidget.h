@@ -1,3 +1,11 @@
+/**
+ * @file    MapImageEditWidget.h
+ * @module  GUILayer
+ * @brief   Raster map image editing tool for cleaning obstacles and modifying occupancy grids.
+ * @deps    QWidget, MapPaintCanvas
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QWidget>
@@ -47,4 +55,3 @@ private:
     QString m_mapId;
     QString m_mapName;
 };
-

@@ -1,3 +1,11 @@
+/**
+ * @file    RouteNetworkApi.h
+ * @module  DataComm
+ * @brief   Route network GeoJSON topology protocol upload, download, and serialization client.
+ * @deps    ApiService, QJsonObject, QJsonArray
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QString>
@@ -7,9 +15,13 @@
 #include <QJsonArray>
 #include <functional>
 
-// ============================================================================
-//  路网数据模型 (严格兼容原有数据格式，全面补充工业级运动与调度参数)
-// ============================================================================
+// ==============================================================================
+// === [Section: Domain Types & Enums] ===
+// ==============================================================================
+
+/// 实时避障动作与图元常量
+inline constexpr int    kActionTypeObstacle = 21;  ///< 实时避障 action_type
+inline constexpr double kDefaultZCoordinate = 0.0; ///< 二维地图空间 Z 坐标标高
 
 /// 站点类型
 enum class PointType {
@@ -35,6 +47,10 @@ enum class MoveStyle {
     QRCodeNavigation   = 5, ///< 二维码导航
     RailGuided         = 6  ///< 固定轨道导航
 };
+
+// ==============================================================================
+// === [Section: Point Entity] ===
+// ==============================================================================
 
 /// 站点数据实体
 struct RoutePoint {
@@ -75,6 +91,10 @@ struct RoutePoint {
     QJsonObject toJson() const;
     static RoutePoint fromJson(const QJsonObject &obj);
 };
+
+// ==============================================================================
+// === [Section: Segment Entity] ===
+// ==============================================================================
 
 /// 线路 / 贝塞尔曲线数据实体
 struct RouteSegment {
@@ -126,6 +146,10 @@ struct RouteSegment {
     bool hasBackward() const     { return direct == 1 || isBidirectional(); }
 };
 
+// ==============================================================================
+// === [Section: Directed Graph & Network Model] ===
+// ==============================================================================
+
 /// 展开后的拓扑有向边 (供 A* / Dijkstra 寻路以及调度引擎直接使用)
 struct DirectedEdge {
     QString edgeId;             ///< 边标识 (如 "l_1_fwd", "l_1_rev")
@@ -161,9 +185,10 @@ struct RouteNetwork {
     }
 };
 
-// ============================================================================
-//  路网 API 服务类 (纯静态无状态算法工具库)
-// ============================================================================
+// ==============================================================================
+// === [Section: RouteNetworkApi Public API] ===
+// ==============================================================================
+
 class RouteNetworkApi final
 {
 public:
@@ -193,3 +218,4 @@ public:
     static void loadNetwork(const QString &mapId, LoadCallback cb);
     static void saveNetwork(const QString &mapId, const QString &mapName, const RouteNetwork &network, SaveCallback cb);
 };
+

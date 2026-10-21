@@ -1,3 +1,11 @@
+/**
+ * @file    MapPaintCanvas.cpp
+ * @module  GUILayer
+ * @brief   Implementation of freehand drawing canvas for occupancy grids.
+ * @deps    MapPaintCanvas.h, QPainter, QMouseEvent
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "MapPaintCanvas.h"
 #include "ui/common/ThemeColors.h"
 #include <QPainter>

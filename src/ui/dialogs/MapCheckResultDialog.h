@@ -1,12 +1,21 @@
+/**
+ * @file    MapCheckResultDialog.h
+ * @module  GUILayer
+ * @brief   Map diagnostic validation and topology error reporting dialog.
+ * @deps    BaseDialog, QTableWidget
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>
-#include <QTableWidget>
-#include <QLabel>
-#include <QPushButton>
 #include <QMouseEvent>
 #include <QPoint>
 #include <QList>
+
+class QTableWidget;
+class QLabel;
+class QPushButton;
 
 struct CheckResultItem {
     enum Level {

@@ -1,3 +1,11 @@
+/**
+ * @file    SmapUploadDialog.cpp
+ * @module  GUILayer
+ * @brief   Implementation of SMAP vector map upload modal dialog.
+ * @deps    SmapUploadDialog.h, ApiService.h
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #include "SmapUploadDialog.h"
 #include "network/ApiService.h"
 #include "ui/common/LoadingDialog.h"
@@ -6,6 +14,8 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
+#include <QLineEdit>
+#include <QPushButton>
 #include <QLabel>
 #include <QFileDialog>
 #include <QMessageBox>

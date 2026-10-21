@@ -1,8 +1,17 @@
+/**
+ * @file    SmapUploadDialog.h
+ * @module  GUILayer
+ * @brief   SMAP vector map format import and upload modal dialog.
+ * @deps    BaseDialog, ApiService
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>
-#include <QLineEdit>
-#include <QPushButton>
+ 
+class QLineEdit;
+class QPushButton;
 
 class SmapUploadDialog : public QDialog
 {
@@ -27,4 +36,3 @@ private:
     QPushButton *m_uploadBtn = nullptr;
     QPushButton *m_cancelBtn = nullptr;
 };
-

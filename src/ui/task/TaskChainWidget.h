@@ -1,37 +1,36 @@
+/**
+ * @file    TaskChainWidget.h
+ * @module  GUILayer
+ * @brief   Visual task chain workflow orchestrator and draggable action node sequence editor.
+ * @deps    QWidget, TaskChainManager, ApiService
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QWidget>
-#include <QPushButton>
-#include <QToolButton>
-#include <QLabel>
-#include <QLineEdit>
-#include <QTextEdit>
-#include <QListWidget>
-#include <QCheckBox>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QDialog>
-#include <QSpinBox>
-#include <QDoubleSpinBox>
-#include <QComboBox>
+#include "core/TaskChainManager.h"
+#include "TaskActionParamDialog.h"
 
+class QPushButton;
+class QToolButton;
+class QLabel;
+class QLineEdit;
+class QTextEdit;
+class QListWidget;
+class QListWidgetItem;
+class QCheckBox;
+class QDialog;
+class QSpinBox;
+class QDoubleSpinBox;
+class QComboBox;
 class QVBoxLayout;
 class QTimer;
+class TaskChainRuntimeController;
 
-// 动作标签定义: 标签名 + 类别 + 参数定义字段
-struct ActionDef {
-    QString name;       // 显示名, 如 "移动到目标点"
-    QString category;   // 类别, 用于同组去重
-    struct ParamDef {
-        QString key;
-        QString label;
-        QString type;       // "text", "double", "int", "combo"
-        QStringList options;
-        QString unit;
-        double defaultValue = 0;
-    };
-    QList<ParamDef> params;
-};
+#include "TaskChainActionDefs.h"
 
 class TaskChainWidget : public QWidget
 {
@@ -80,14 +79,12 @@ protected:
 private:
     void executeSingleAction(const QJsonObject &action);
     void setupUI();
-    void setupPanel1Chain(QVBoxLayout *layout);
-    void setupPanel2Task(QVBoxLayout *layout);
-    void setupPanel3Group(QVBoxLayout *layout);
-    void setupPanel4DragDrop(QVBoxLayout *layout);
-    void setupBottomBar(QVBoxLayout *layout);
+    void handleActionDropped(const QString &actionName, int groupIdx);
+    void showGroupContextMenu(const QPoint &pos);
     void updateBottomBar();
     void updateTaskSelectBtn();   // 全选任务/取消选中 互斥切换
     void updateGroupSelectBtn();  // 全选组/取消选中 互斥切换
+    void updateChainCardHighlight();
 
     // 组复制与粘贴 (Ctrl+C / Ctrl+V)
     void copySelectedGroup();
@@ -95,10 +92,7 @@ private:
     void updateGroupCardSelectionHighlight();
 
     // 路网站点
-    struct StationItem {
-        QString id;
-        QString name;
-    };
+    using StationItem = TaskChainStationItem;
     QList<StationItem> m_stations;
     void loadMapStations();
     QString stationName(const QString &idOrName) const;   // 路网点 id -> 显示名称
@@ -136,15 +130,18 @@ private:
     void updateStatus(const QString &text);
     void refreshChainList();
     void createChainRowWidget(QListWidgetItem *item, int chainIndex);
-    void updateChainCardHighlight();
 
     // 组相关
     void createGroupRowWidget(QListWidgetItem *item, int groupIndex, bool checked = false);
     QString openActionDefDialog(const ActionDef &def, const QJsonObject &existingParams);
 
     // 音频名称下拉 (数据来自 GET /robot/audio/list)
-    QStringList fetchAudioFiles(int timeoutMs = 2500);
-    static QString audioDisplayName(const QString &fullName);
+    QStringList fetchAudioFiles(int timeoutMs = 2500) {
+        return TaskActionParamDialog::fetchAudioFiles(timeoutMs);
+    }
+    static QString audioDisplayName(const QString &fullName) {
+        return TaskActionParamDialog::audioDisplayName(fullName);
+    }
     QStringList m_audioFiles;
 
     // 动作定义表
@@ -192,10 +189,7 @@ private:
     ChainStatus m_execStatus = NotStarted;
 
     // 数据
-    struct ChainData {
-        QString name;
-        QJsonArray tasks;       // 任务列表, 每个任务含 name/note/checked/groups
-    };
+    using ChainData = TaskChainData;
     QList<ChainData> m_chains;
     int m_currentChainIndex = -1;
     int m_currentTaskIndex = -1;    // 当前选中的任务
@@ -222,6 +216,7 @@ private:
     QWidget *m_panelsContainer   = nullptr;
     QWidget *m_lockOverlay       = nullptr;
     QLabel  *m_overlayTextLabel  = nullptr;
+    TaskChainRuntimeController *m_runtimeCtrl = nullptr;
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -234,5 +229,16 @@ protected:
     // forExecution: true=用于向后台下发执行(enable强制置为true, 过滤空组任务), false=用于本地保存(保留原本勾选状态)
     QJsonObject exportChainToJson(const ChainData &chain, bool onlyChecked = false, bool forExecution = false) const;
     ChainData   importChainFromJson(const QJsonObject &json) const;
+
+    friend class TaskChainGroupCardWidget;
+    friend class TaskChainRowHelper;
+    friend class TaskChainRuntimeController;
+    friend class TaskChainPanelsBuilder;
+    friend class TaskChainActionExecutor;
+    friend class TaskChainClipboardHelper;
+    friend class TaskChainDataSync;
+    friend class TaskChainListSync;
+    friend class TaskChainCrudHandler;
+    friend class TaskChainGroupActionHandler;
 };
 

@@ -1,3 +1,11 @@
+/**
+ * @file    BaseDialog.h
+ * @module  GUILayer
+ * @brief   Base class for all modal dialogs providing standardized title bar and button layout.
+ * @deps    QDialog, QVBoxLayout, QDialogButtonBox
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QDialog>

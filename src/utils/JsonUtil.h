@@ -1,3 +1,11 @@
+/**
+ * @file    JsonUtil.h
+ * @module  DataComm
+ * @brief   Defensive JSON file and string reader/writer with dot-path safe querying.
+ * @deps    QJsonObject, QJsonDocument, QFile
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QString>
@@ -14,6 +22,10 @@ class JsonUtil
 {
 public:
     JsonUtil() = delete;
+
+    // ==============================================================================
+    // === [Section: File & Byte Array I/O] ===
+    // ==============================================================================
 
     /**
      * @brief 从本地文件读取 QJsonObject
@@ -50,6 +62,10 @@ public:
      */
     static QByteArray toByteArray(const QJsonArray &arr, bool compact = false);
 
+    // ==============================================================================
+    // === [Section: Defensive Field Accessors] ===
+    // ==============================================================================
+
     /**
      * @brief 安全获取字符串，支持默认值
      */
@@ -80,8 +96,13 @@ public:
      */
     static QJsonArray getArray(const QJsonObject &obj, const QString &key);
 
+    // ==============================================================================
+    // === [Section: Nested Path Query] ===
+    // ==============================================================================
+
     /**
      * @brief 按点分隔路径获取嵌套值 (如 "a.b.c")
      */
     static QJsonValue getValueByPath(const QJsonObject &root, const QString &dottedPath);
 };
+

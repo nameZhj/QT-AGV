@@ -1,3 +1,11 @@
+/**
+ * @file    MapDrawHelper.h
+ * @module  GUILayer
+ * @brief   Coordinate transformation and geometric primitives drawing helper for maps.
+ * @deps    QPainter, QPointF, ThemeColors
+ * @note    Refactored for AI readability; runtime behavior & public API invariant.
+ */
+
 #pragma once
 
 #include <QPointF>
